@@ -1,0 +1,79 @@
+---
+description: MR 治理规范 v1 - 提交前风险检查与 MR 格式要求
+globs: ["**/*"]
+alwaysApply: true
+---
+
+# 提交代码前必须完成
+
+## 0. 记录 AI 证据（每次编辑后追加，不靠人工判断 AI 占比）
+
+成段生成代码后向 `.governance/ai-evidence.jsonl` 追加一行：
+
+```json
+{"ts":"2026-06-26T10:00Z","tool":"cursor","model":"<模型>","file":"src/Foo.cs","added":40,"removed":2}
+```
+
+提交时 `collect_ai_usage.py` 对照实际 diff 自动算 AI-Usage 等级。
+
+> Cursor **Tab 内联补全**混在手敲里、无法精确测行数：只写工具标记（省略 added/removed），脚本判为 `used`（程度未知）。Composer/Chat 整段生成则照实记行数。
+
+## 0.5 跑测试留痕（改了生产代码必做）
+
+改了生产代码就写/补单元测试，用记录器跑：
+
+```bash
+python governance/scripts/record_test_run.py -- dotnet test X.Flow.sln --filter Category=Unit
+```
+
+提交时 hook 自动写 `Tested:` trailer。本地自检 `python governance/scripts/check_tested.py --staged`。放行：有全绿记录且改了测试文件 / 加 `risk:untested` 注解 / 命中 config 白名单。带失败测试一律拒合。
+
+## 1. 风险扫描
+
+对照 `docs/governance/risk-types.md` 扫描 diff，命中以下任一模式必须加注解：
+
+- **auth-bypass**：字面量 ID/角色与认证字段比较
+- **magic-id**：业务代码硬编码 ObjectId / UUID / 长数字串
+- **swallowed-exception**：catch 块既不 throw 也不 log
+- **suppressed-warning**：`#pragma warning disable` / `// eslint-disable` 等
+- **skipped-test**：`[Fact(Skip=...)]` / `it.skip` 等
+- **time-bypass**：DateTime 与字面量日期比较
+- **env-hardcode**：`if (env == "production")` 等
+- **todo-no-context**：TODO/FIXME 不含 (owner, YYYY-MM-DD)
+
+## 2. 加注解格式
+
+```
+// risk:<type> reason:"<理由，≥10字，不含：临时/先这样/hack/wip/temp>" owner:@<团队> reviewed:<YYYY-MM-DD>
+<命中的代码行>
+```
+
+## 3. Commit Trailer（自动生成，勿手填）
+
+仓库装 hook 后（`bash governance/scripts/install-hooks.sh`），提交时自动追加：
+
+```
+AI-Usage: heavy
+AI-Tools: cursor
+AI-Lines: 92/127
+Tested: pass (42/42)
+```
+
+无需手填。hook 缺失时手动补算：
+`python governance/scripts/collect_ai_usage.py --staged --trailer-only`
+
+## 4. 创建 MR（自动生成，勿手填描述）
+
+提交完后用一条命令自动生成并提交 MR：
+
+```
+python governance/scripts/create_mr.py --why "<任务背景>"
+```
+
+脚本自动拼装：背景(--why) + 变更内容(从 diff) + 自测确认(从测试证据) + 风险(自动评估) + AI 元数据(从 commit trailer，折叠块)。加 `--dry-run` 预览。你只需提供 `--why`。
+
+## 5. 绝对禁止
+
+- 明文密钥 / token / 私钥
+- 删除测试无 `risk:test-removal` 注解
+- 修改 `ci/` `CODEOWNERS` `.gitlab-ci.yml` `governance.config.yml` 须人工确认

@@ -1,0 +1,11 @@
+# governance: 会话产物 / 临时文件, 不入库
+.governance/
+governance/reports/
+reports/
+
+# Python
+__pycache__/
+*.pyc
+
+# 备份文件 (install.sh 生成)
+*.bak.*

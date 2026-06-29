@@ -1,0 +1,132 @@
+# governance-ci.yml — 中心 CI 治理模板
+#
+# 平台管理员将此文件发布到 governance 中心仓库后,
+# 各业务仓库在 .gitlab-ci.yml 里一行 include 即可接入所有治理 job:
+#
+#   include:
+#     - project: 'your-group/governance'
+#       ref: main
+#       file: '/ci/governance-ci.yml'
+#
+# 可通过 CI/CD Variables 覆盖默认值 (项目设置 → Variables):
+#   GOVERNANCE_SOFT_DEADLINE  软门禁截止日期, 如 2026-09-30
+#   GOVERNANCE_CONFIG_PATH    governance.config.yml 的仓库内路径
+#   GOVERNANCE_REPORT_OUTPUT  周报输出路径, 默认 governance/reports/expired-annotations.md
+
+stages:
+  - governance
+  - test
+  - build
+
+# ── 1. 风险扫描: 硬阻断 ──────────────────────────────────────────────────────
+governance:risk-scan:
+  stage: governance
+  image: python:3.11-slim
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH
+  variables:
+    GOVERNANCE_CONFIG_PATH: ${GOVERNANCE_CONFIG_PATH:-governance/governance.config.yml}
+  before_script:
+    - pip install -q pyyaml
+  script:
+    - |
+      BASE="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-HEAD~1}"
+      CONFIG_ARG=""
+      [ -f "$GOVERNANCE_CONFIG_PATH" ] && CONFIG_ARG="--config $GOVERNANCE_CONFIG_PATH"
+      python governance/scripts/scan_risks.py --diff-base "$BASE" $CONFIG_ARG
+  allow_failure: false
+
+# ── 2. 密钥扫描: 硬阻断 ──────────────────────────────────────────────────────
+governance:secret-scan:
+  stage: governance
+  image:
+    name: zricethezav/gitleaks:latest
+    entrypoint: [""]
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH
+  variables:
+    GIT_DEPTH: 0
+  script:
+    - |
+      BASE="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-HEAD~1}"
+      gitleaks detect \
+        --source . \
+        --log-opts="${BASE}..HEAD" \
+        --redact \
+        --no-banner \
+        --verbose
+  allow_failure: false
+
+# ── 3. MR 描述校验: 软→硬 ───────────────────────────────────────────────────
+governance:mr-validate:
+  stage: governance
+  image: python:3.11-slim
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  variables:
+    GIT_DEPTH: 0          # 需完整历史以读取 commit 里的 AI-Usage trailer
+  before_script:
+    - pip install -q pyyaml
+  script:
+    - |
+      BASE="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-HEAD~1}"
+      CONFIG_ARG=""
+      [ -f "${GOVERNANCE_CONFIG_PATH:-governance/governance.config.yml}" ] \
+        && CONFIG_ARG="--config ${GOVERNANCE_CONFIG_PATH:-governance/governance.config.yml}"
+      echo "$CI_MERGE_REQUEST_DESCRIPTION" \
+        | python governance/scripts/validate_mr.py --diff-base "$BASE" $CONFIG_ARG
+  allow_failure: false
+
+# ── 4. 测试痕迹检测: 软→硬 (失败测试记录无条件硬拦) ──────────────────────────
+# 改动的生产代码是否做过测试。CI 看不到 .governance/ 证据 (gitignore),
+# 退回读 commit 的 Tested: trailer。
+governance:test-check:
+  stage: governance
+  image: python:3.11-slim
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH
+  variables:
+    GIT_DEPTH: 0
+  before_script:
+    - pip install -q pyyaml
+  script:
+    - |
+      BASE="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-HEAD~1}"
+      CONFIG_ARG=""
+      [ -f "${GOVERNANCE_CONFIG_PATH:-governance/governance.config.yml}" ] \
+        && CONFIG_ARG="--config ${GOVERNANCE_CONFIG_PATH:-governance/governance.config.yml}"
+      python governance/scripts/check_tested.py --diff-base "$BASE" $CONFIG_ARG
+  allow_failure: false
+
+# ── 5. 过期注解周报: 仅报告, 不阻断 ─────────────────────────────────────────
+# 每周一 08:00 触发 (需在 GitLab → CI/CD → Schedules 里新建 pipeline 指向此分支)
+# 也可在 MR 流水线里手动触发 (when: manual) 随时生成快照。
+governance:expired-report:
+  stage: governance
+  image: python:3.11-slim
+  rules:
+    # 定时 pipeline
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    # 手动触发 (MR 或分支 pipeline 均可)
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: manual
+      allow_failure: true
+    - if: $CI_COMMIT_BRANCH
+      when: manual
+      allow_failure: true
+  before_script:
+    - pip install -q pyyaml
+  script:
+    - |
+      OUTPUT="${GOVERNANCE_REPORT_OUTPUT:-governance/reports/expired-annotations.md}"
+      python governance/scripts/report_expired.py \
+        --root . \
+        --output "$OUTPUT"
+  artifacts:
+    paths:
+      - governance/reports/
+    expire_in: 30 days
+  allow_failure: true
