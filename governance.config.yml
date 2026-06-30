@@ -1,0 +1,83 @@
+# AgentGate 治理配置 v1 (自举: AgentGate 用自己的规范管自己)
+# 注意: 本仓库脚本在根级 scripts/, 与消费仓库的 governance/scripts/ 不同。
+version: v1.0.0
+
+metadata:
+  enforcement: hard           # 自举: 新仓库无历史包袱, 直接硬启动
+  soft_deadline: 2026-09-27   # (已被 enforcement:hard 覆盖, 保留供参考)
+  mandatory_fields:
+    - background
+    - changes
+    - ai_usage
+    - self_test
+
+risk_annotations:
+  enforcement: hard           # 第一天起即硬阻断
+  reviewed_max_age_days: 180
+  registered_types:
+    - auth-bypass
+    - magic-id
+    - swallowed-exception
+    - suppressed-warning
+    - skipped-test
+    - time-bypass
+    - env-hardcode
+    - todo-no-context
+    - test-removal
+    - untested
+  reason_blacklist:
+    - 临时
+    - 先这样
+    - 历史原因
+    - TODO
+    - 待确认
+    - quick fix
+    - temp
+    - wip
+    - hack
+    - for now
+
+large_change:
+  line_threshold: 500
+  excluded_paths:
+    - "*.lock"
+    - "*.Designer.cs"
+    - "migrations/**"
+    - "**/*.generated.*"
+  sensitive_paths:
+    - "ci/"
+    - "CODEOWNERS"
+    - ".github/"
+    - "*secret*"
+  schema_paths:
+    - "*.sql"
+    - "*.proto"
+
+testing:
+  enforcement: hard           # 自举: 直接硬启动
+  soft_deadline: 2026-09-27   # (已被 enforcement:hard 覆盖)
+  untested_max_age_days: 180
+  # 本仓库是工具包: 脚本目录是被测主体, 文档/模板/指令文件不要求测试
+  exclude_paths:
+    - "docs/**"
+    - "templates/**"
+    - "agent-instructions/**"
+    - "ci/**"
+    - "*.md"
+    - "install.sh"
+    - "scripts/install-hooks.sh"
+    - "scripts/selftest.sh"
+  reason_blacklist:
+    - 临时
+    - 先这样
+    - 历史原因
+    - TODO
+    - 待确认
+    - quick fix
+    - temp
+    - wip
+    - hack
+    - for now
+
+deliverhq_integration:
+  enabled: false

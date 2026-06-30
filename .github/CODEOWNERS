@@ -1,0 +1,15 @@
+# AgentGate 关键文件保护 — 改动需仓库 owner 审批
+# (自举: 治理规范、扫描脚本、CI workflow 不能被随意改弱)
+
+# 治理配置与 CI
+/governance.config.yml      @kevinwanghd
+/.github/                   @kevinwanghd
+/ci/                        @kevinwanghd
+
+# 扫描脚本 (门禁的执行主体)
+/scripts/                   @kevinwanghd
+
+# 规范正文与风险类型定义
+/mr-spec.md                 @kevinwanghd
+/risk-types.md              @kevinwanghd
+/install.sh                 @kevinwanghd

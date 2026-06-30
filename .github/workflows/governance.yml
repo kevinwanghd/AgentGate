@@ -1,0 +1,105 @@
+# AgentGate 治理门禁 (GitHub Actions 版 — 自举: 本仓库用自己的规范管自己)
+#
+# 这是把 ci/governance-ci.yml (GitLab CI 语法) 翻译成 GitHub Actions 的版本。
+# 本仓库脚本在根级 scripts/, 故调用路径为 scripts/xxx.py (非 governance/scripts/)。
+#
+# 软门禁(mr-validate / test-check): enforcement:hard, 第一天起即阻断 (新仓库无历史包袱)。
+# 硬门禁(risk-scan / secret-scan): 第一天起即阻断。
+#
+# ┌──────────────────────────────────────────────────────────────┐
+# │ 硬约束: 严格只扫 PR 增量 (base..HEAD), 任何情况都不全量扫描。      │
+# │ - 只在 pull_request 触发 (PR 的 base.sha 永远存在, 是稳定基准)。  │
+# │ - 不在 push 触发 (push 无 base, 会退化成 HEAD~1 等不可控范围)。   │
+# │ - 不含 report_expired (它用 os.walk 全树遍历, 只能定时单独跑)。   │
+# └──────────────────────────────────────────────────────────────┘
+name: governance
+
+on:
+  pull_request:
+
+jobs:
+  # 风险扫描: 硬阻断 (命中风险模式且缺合法注解 → 拒合)
+  risk-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # 需完整历史以算 diff
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -q pyyaml
+      - name: scan risks
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          # 硬约束: base 必须存在; 缺失则报错退出, 绝不退化成全量或猜范围
+          if [ -z "$BASE" ]; then echo "::error::PR base.sha 缺失, 拒绝扫描 (不允许全量回退)"; exit 1; fi
+          python scripts/scan_risks.py --diff-base "$BASE" --config governance.config.yml
+
+  # 密钥扫描: 硬阻断
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks (本次 PR 范围)
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          # 硬约束: base 必须存在; 缺失则报错退出, 绝不退化成全量或猜范围
+          if [ -z "$BASE" ]; then echo "::error::PR base.sha 缺失, 拒绝扫描 (不允许全量回退)"; exit 1; fi
+          docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest \
+            detect --source /repo --log-opts="${BASE}..HEAD" \
+            --redact --no-banner --verbose
+
+  # MR 描述校验: 硬门禁 (从 PR body 读 + commit trailer 读 AI-Usage)
+  mr-validate:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -q pyyaml
+      - name: validate PR description
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          # 硬约束: base 必须存在; 缺失则报错退出, 绝不退化成全量或猜范围
+          if [ -z "$BASE" ]; then echo "::error::PR base.sha 缺失, 拒绝扫描 (不允许全量回退)"; exit 1; fi
+          printf '%s' "$PR_BODY" \
+            | python scripts/validate_mr.py --diff-base "$BASE" --config governance.config.yml
+
+  # 测试痕迹检测: 硬门禁 (失败测试记录无条件硬拦); 读 commit 的 Tested: trailer
+  test-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -q pyyaml
+      - name: check tested
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          # 硬约束: base 必须存在; 缺失则报错退出, 绝不退化成全量或猜范围
+          if [ -z "$BASE" ]; then echo "::error::PR base.sha 缺失, 拒绝扫描 (不允许全量回退)"; exit 1; fi
+          python scripts/check_tested.py --diff-base "$BASE" --config governance.config.yml
+
+  # 自测: 跑 governance 脚本自己的 39 个回归用例
+  selftest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -q pyyaml
+      - name: run selftest
+        run: bash scripts/selftest.sh
