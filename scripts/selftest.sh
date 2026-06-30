@@ -472,6 +472,29 @@ expect "关联自动补需求ID" 0 $?
 expect "需求文档缺失回退要求--why(exit2)" 2 $?
 
 echo
+# == custom_patterns (公司自定义规则, 在 cust_dir 内运行以便读源文件) ==
+echo
+echo "== custom_patterns =="
+CDATE="$(date +%Y-%m-%d)"
+rm -rf cust_dir && mkdir -p cust_dir
+( cd cust_dir && git init -q && git config user.email t@t && git config user.name t && echo base > b.txt && git add b.txt && git commit -qm base )
+cat > cust_dir/cfg.yml <<'CFG'
+risk_annotations:
+  enforcement: hard
+  reviewed_max_age_days: 36500
+  registered_types: [my-unsafe-query]
+  custom_patterns:
+    - type: my-unsafe-query
+      regex: 'UnsafeQuery\s*\('
+      desc: "no UnsafeQuery"
+CFG
+echo 'void f(){ UnsafeQuery("x"); }' > cust_dir/bad.cs
+( cd cust_dir && git add bad.cs && git diff --cached --unified=0 --no-color -- bad.cs > bad.diff
+  python3 "$SCAN" --diff-file bad.diff --config cfg.yml >/dev/null 2>&1 ); expect "自定义规则命中应拦截" 1 $?
+{ printf '// risk:my-unsafe-query reason:"legacy readonly report query reviewed safe" owner:@team reviewed:%s\n' "$CDATE"; echo 'void g(){ UnsafeQuery("y"); }'; } > cust_dir/good.cs
+( cd cust_dir && git add good.cs && git diff --cached --unified=0 --no-color -- good.cs > good.diff
+  python3 "$SCAN" --diff-file good.diff --config cfg.yml >/dev/null 2>&1 ); expect "自定义规则加注解应放行" 0 $?
+
 echo "============================================"
 echo " 通过 $PASS / 失败 $FAIL"
 echo "============================================"
