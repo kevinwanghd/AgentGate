@@ -264,6 +264,15 @@ rm -f ai_dir/.governance/ai-evidence.jsonl
 ( cd ai_dir && python3 "$COLLECT" --staged --trailer-only 2>/dev/null ) | grep -q "AI-Usage: none"
 expect "collect 无证据判定none" 0 $?
 
+# .sh / .yml 等脚本配置类文件也应计入 AI-Usage (改 CI/脚本的 PR 不被漏统计)
+( cd ai_dir && git checkout -q -- . 2>/dev/null; printf 'echo hi\n' > deploy.sh && git add deploy.sh )
+cat > ai_dir/.governance/ai-evidence.jsonl <<EOF
+{"ts":"${TODAY}T10:00:00Z","tool":"claude-code","model":"m","file":"deploy.sh","added":1,"removed":0}
+EOF
+( cd ai_dir && python3 "$COLLECT" --staged --trailer-only 2>/dev/null ) | grep -qE "AI-Usage: (light|heavy|medium)"
+expect "collect 识别 .sh 脚本文件" 0 $?
+( cd ai_dir && git reset -q HEAD deploy.sh; rm -f deploy.sh .governance/ai-evidence.jsonl )
+
 # == validate_mr.py 从 commit trailer 读 AI-Usage ==
 echo
 echo "== validate_mr.py × commit trailer =="
