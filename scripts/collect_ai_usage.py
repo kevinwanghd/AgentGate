@@ -56,11 +56,17 @@ THRESHOLDS = [
     (0.0, "light"),
 ]
 
-# 只统计源码文件 (与 scan_risks.py 一致)
+# 统计的文件: 源码 + 脚本/配置/IaC 类 (这些也是 AI 实际产出, 改 CI/脚本/配置的
+# 提交同样应计入 AI-Usage, 否则纯工具/CI 类 PR 盖不上 trailer 会被 mr-validate 拦)。
 SCAN_EXTENSIONS = {
+    # 源码
     ".cs", ".js", ".ts", ".jsx", ".tsx", ".java", ".go",
     ".py", ".rb", ".php", ".cpp", ".cc", ".c", ".h", ".hpp",
     ".kt", ".rs", ".scala", ".swift",
+    # 脚本 / 配置 / IaC
+    ".sh", ".bash", ".ps1",
+    ".yml", ".yaml", ".toml", ".json", ".xml",
+    ".tf", ".dockerfile",
 }
 
 
