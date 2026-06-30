@@ -172,6 +172,24 @@ def _build_patterns() -> list[tuple[str, re.Pattern, str]]:
 PATTERNS = _build_patterns()
 
 
+def build_custom_patterns(cfg: dict) -> list:
+    """读取 config 的 risk_annotations.custom_patterns, 编译公司自定义规则。
+    每条: {type, regex, desc}。正则无效则跳过并警告, 不中断扫描。"""
+    out = []
+    ra = cfg.get("risk_annotations", {}) if isinstance(cfg, dict) else {}
+    for item in (ra.get("custom_patterns") or []):
+        t = (item or {}).get("type")
+        rx = (item or {}).get("regex")
+        desc = (item or {}).get("desc") or t
+        if not t or not rx:
+            continue
+        try:
+            out.append((t, re.compile(rx), desc))
+        except re.error as e:
+            sys.stderr.write(f"[scan-risks] custom_pattern {t} regex invalid, skipped: {e}\n")
+    return out
+
+
 # ============================================================
 # 配置加载
 # ============================================================
@@ -459,6 +477,7 @@ def scan(diff_text: str, cfg: dict) -> list[dict]:
     """返回违规列表。每项: {file, line, type, desc, problems}"""
     violations: list[dict] = []
     parsed = parse_diff(diff_text)
+    all_patterns = PATTERNS + build_custom_patterns(cfg)
 
     # 缓存已读文件
     file_cache: dict[str, list[str] | None] = {}
@@ -470,7 +489,7 @@ def scan(diff_text: str, cfg: dict) -> list[dict]:
         for lineno, content in added:
             # 收集该行命中的所有风险类型 (一行可能同时命中多个模式)
             hits: list[tuple[str, str]] = []  # (type, desc)
-            for rtype, rx, desc in PATTERNS:
+            for rtype, rx, desc in all_patterns:
                 if rx.search(content):
                     hits.append((rtype, desc))
             if not hits:
