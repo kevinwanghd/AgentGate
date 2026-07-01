@@ -1,192 +1,242 @@
-# AgentGate · MR 治理规范 v1
+# AgentGate · AI 代码治理工具包
 
-> 让 AI agent 自主写代码、自主提交、自主合并，**靠 CI 而非人工**把控质量；全程自动留痕（AI 用量 / 测试 / 风险注解），第一版不对现有开发流程造成强制阻碍。
+> 让 AI agent 自主写代码、自主提交、自主合并，**靠 CI 而非人工**把控质量。  
+> 全程自动留痕（AI 用量 / 测试 / 风险注解），5 分钟接入，规则可配。
 
-全公司各事业部统一使用，一键安装，5 分钟接入。
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Platform: GitLab/GitHub](https://img.shields.io/badge/Platform-GitLab%20%7C%20GitHub-orange)]()
+[![Python: 3.8+](https://img.shields.io/badge/Python-3.8%2B-green)]()
 
 ---
 
-## 完整操作手册（按角色阅读）
+## 📖 完整文档
 
-详细的安装与使用文档在 `docs/` 目录，按角色分册：
+| 文档 | 说明 |
+|---|---|
+| **[INSTALL.md](INSTALL.md)** | 本地安装指南 (Windows/Linux/macOS + GitLab/GitHub/本地) |
+| **[USER_GUIDE.md](USER_GUIDE.md)** | 使用手册 (开发者工作流 + 配置 + 高级用法 + 管理员指南) |
 
-| 文档 | 读者 | 内容 |
+**5 分钟快速上手** → 直接看 [USER_GUIDE.md 第 1 节](USER_GUIDE.md#5-分钟快速上手)
+
+---
+
+## ⚡ 快速安装
+
+### GitLab 项目(推荐)
+
+```bash
+# 1. 克隆 AgentGate 到本地
+git clone https://github.com/kevinwanghd/AgentGate.git ~/agentgate
+
+# 2. 进入你的 GitLab 项目
+cd /path/to/your-gitlab-project
+
+# 3. 运行安装(只装 Claude 指令,减少根目录文件)
+bash ~/agentgate/install.sh . --agents claude
+
+# 4. 接入 GitLab CI
+echo 'include:
+  - local: "/governance/ci-snippet.yml"' >> .gitlab-ci.yml
+
+# 5. 提交推送
+git add . && git commit -m "chore: 接入 AgentGate 治理" && git push
+```
+
+**可选 `--agents` 参数**(控制装哪些 AI 指令文件,减少根目录散落):
+- `--agents all` — 装所有(Claude + Copilot + Cursor + Hermes,默认)
+- `--agents claude` — 只装 Claude(根目录只有 `CLAUDE.md`)
+- `--agents none` — 不装任何 AI 指令文件
+
+### GitHub 项目
+
+安装步骤同上,但需手动创建 GitHub Actions workflow。  
+详见 [INSTALL.md 场景 B](INSTALL.md#场景-bgithub-项目)。
+
+---
+
+## 🔍 这套工具做什么
+
+### 5 项自动检查(CI 跑)
+
+| 检查 | 做什么 | 拦什么 |
 |---|---|---|
-| [docs/00-overview.md](docs/00-overview.md) | 所有人 | 总览、两层 enforcement 模型、文件地图 |
-| [docs/01-gitlab-admin-setup.md](docs/01-gitlab-admin-setup.md) | GitLab 管理员 | 规范仓库、分支保护、MR 审批、CODEOWNERS、CI 模板 |
-| [docs/02-repo-onboarding.md](docs/02-repo-onboarding.md) | 仓库负责人 | 一键安装到业务仓库、接入 CI、验证 |
-| [docs/03-developer-terminal-setup.md](docs/03-developer-terminal-setup.md) | 开发者 | AI 工具安装、commit trailer 模板、本地预检 |
-| [docs/04-ai-agent-workflow.md](docs/04-ai-agent-workflow.md) | AI agent / 开发者 | 每次提交的标准流程、注解写法、排错 |
-| [docs/05-ci-reference.md](docs/05-ci-reference.md) | 所有人 | CI 门禁行为、读懂报错、申请豁免 |
+| **risk-scan** | 扫描 8 类风险模式 + 公司自定义规则 | 硬编码 ID/密钥、SQL 拼接、认证绕过等 |
+| **secret-scan** | gitleaks 检测密钥泄露 | 私钥、API token、数据库连接串 |
+| **test-check** | 验证测试覆盖 | 改了生产代码但没测试痕迹 |
+| **mr-validate** | 校验 MR 描述格式 | 缺背景/变更内容/自测确认段落 |
+| **selftest** | 工具自检 | 确保脚本本身没 bug(仅 AgentGate 仓库) |
 
-下面是 5 分钟快速上手版。
+### 本地自动化
 
----
+- ✅ **提交时自动盖 AI-Usage trailer**(读 AI 证据,算占比,写进 commit message)
+- ✅ **自动盖 Tested trailer**(记录测试运行结果)
+- ✅ **本地预检**(提交前手动跑同样的扫描)
 
-## 目录结构
+### 留痕与审计
 
+每次提交自动记录:
 ```
-governance/
-├── install.sh                    # 一键安装脚本
-├── README.md                     # 本文件（快速上手）
-├── mr-spec.md                    # MR 规范说明（人读）
-├── risk-types.md                 # 风险注解目录（AI agent 提交前参考）
-├── templates/
-│   └── merge_request_default.md  # MR 模板源文件
-├── agent-instructions/           # 各 AI 工具指令文件源
-│   ├── CLAUDE.md
-│   ├── hermes-instructions.md
-│   ├── copilot-instructions.md
-│   └── cursor-rules.mdc
-└── docs/                         # 完整操作手册（见上表）
-    ├── 00-overview.md
-    ├── 01-gitlab-admin-setup.md
-    ├── 02-repo-onboarding.md
-    ├── 03-developer-terminal-setup.md
-    ├── 04-ai-agent-workflow.md
-    └── 05-ci-reference.md
+AI-Usage: heavy
+AI-Tools: claude-code
+AI-Models: opus-4.8
+AI-Lines: 23/25
+Tested: pass (12/12)
 ```
 
-安装后写入目标仓库的位置：
-
-```
-<目标仓库>/
-├── CLAUDE.md                               # Claude Code / Kiro
-├── .hermes.md                              # Hermes Agent v0.17.0
-├── .github/
-│   └── copilot-instructions.md             # GitHub Copilot Workspace
-├── .cursor/
-│   └── rules/governance.mdc               # Cursor
-├── .gitlab/
-│   └── merge_request_templates/
-│       └── default.md                      # GitLab MR 模板
-├── docs/governance/
-│   ├── mr-spec.md
-│   └── risk-types.md
-├── governance.config.yml
-└── governance/
-    └── ci-snippet.yml
+风险代码必须加注解(留审计痕迹):
+```csharp
+// risk:auth-bypass reason:"管理后台内网访问已通过IP白名单隔离" owner:@security-team reviewed:2026-06-30
+if (req.Headers["X-Internal"] == "true") return true;
 ```
 
 ---
 
-## 一键安装
+## 🎯 为什么需要这个
 
-### 方式一：本地克隆后安装（推荐）
+**场景**:团队用 AI(Claude/Cursor/Copilot)写代码,速度快但质量怎么保证?
 
-```bash
-# 1. 克隆治理规范仓库（或 submodule 引用）
-git clone https://gitlab.example.com/your-org/governance.git /tmp/governance
+**传统方案**:人工 code review → 慢、主观、漏检  
+**AgentGate 方案**:机器自动检查 → 快、客观、全覆盖
 
-# 2. 在目标仓库根目录执行
-cd /path/to/your-repo
-bash /tmp/governance/governance/install.sh .
-```
-
-### 方式二：curl 一行安装（需设置 raw URL）
-
-```bash
-cd /path/to/your-repo
-export GOVERNANCE_SOURCE="https://gitlab.example.com/your-org/governance/-/raw/main/governance"
-curl -fsSL "${GOVERNANCE_SOURCE}/install.sh" | bash
-```
-
-### 方式三：仓库内自装（本仓库已包含 governance/）
-
-```bash
-cd /path/to/this-repo
-bash governance/install.sh .
-```
-
-脚本幂等，可重入。已存在的文件自动备份为 `*.bak.<时间戳>`，不会静默覆盖。
+| 问题 | AgentGate 怎么解决 |
+|---|---|
+| AI 写了不安全的代码 | risk-scan 拦住,要求加注解说明 |
+| 不知道哪些代码是 AI 写的 | 自动记录 AI-Usage,可统计、可审计 |
+| 改了代码没跑测试 | test-check 要求测试痕迹 |
+| 提交了密钥到仓库 | secret-scan 立刻拦截 |
+| MR 描述写得太随意 | mr-validate 强制写背景/变更/自测 |
 
 ---
 
-## 安装后操作（3 步）
+## 🛠️ 核心脚本
 
-### 第 1 步：把 MR 模板提交进仓库
+AgentGate 包含 9 个 Python 脚本(在 `scripts/` 目录):
+
+| 脚本 | 功能 |
+|---|---|
+| `scan_risks.py` | 风险代码扫描(8 类内置 + 自定义规则) |
+| `check_tested.py` | 测试覆盖检查 |
+| `validate_mr.py` | MR 描述校验 |
+| `collect_ai_usage.py` | AI 用量统计(读证据,算占比,盖 trailer) |
+| `record_test_run.py` | 记录测试运行(盖 Tested trailer) |
+| `create_mr.py` | 自动生成 MR(从 commit 提取信息) |
+| `report_expired.py` | 过期注解周报(找 180 天未复查的风险注解) |
+| `install-hooks.sh` | 安装 git hook |
+| `selftest.sh` | 工具自检(42 个用例) |
+
+---
+
+## 🚀 工作流程
+
+### 1. 开发者:AI 写代码
+
+用 Claude/Cursor/Copilot 写代码,工具自动留证据(`.governance/ai-evidence.jsonl`)。
+
+### 2. 提交时:自动盖 trailer
 
 ```bash
-git checkout -b chore/governance-v1
-git add .gitlab/ docs/governance/ governance.config.yml governance/ci-snippet.yml
-git commit -m "chore: install MR governance v1"
-git push -u origin chore/governance-v1
-# 然后在 GitLab 上提 MR 合入
+git commit -m "feat: 加支付功能"
+# hook 自动追加:
+# AI-Usage: heavy (23/25)
+# Tested: pass (12/12)
 ```
 
-### 第 2 步：接入 CI
+### 3. 发 MR:CI 自动检查
 
-在 `.gitlab-ci.yml` 的 `include:` 段加一行：
+推送后,GitLab/GitHub CI 跑 4 个 job:
+- ❌ **risk-scan FAIL** → 检测到硬编码 ID,要求加注解
+- ✅ **secret-scan PASS**
+- ❌ **test-check FAIL** → 没测试覆盖
+- ✅ **mr-validate PASS**
+
+### 4. 修复:加注解 + 补测试
+
+```csharp
+// risk:magic-id reason:"合法机器人账号白名单" owner:@team reviewed:2026-06-30
+if (user.Id == "bot_12345") return true;
+```
+
+补测试后再推,CI 全绿 → 可以合并。
+
+---
+
+## 📊 配置示例
+
+`governance/config.yml`(完整说明见 [USER_GUIDE.md](USER_GUIDE.md#配置参考)):
 
 ```yaml
-include:
-  - local: '/ci/test.yml'
-  - local: '/ci/flow.yml'
-  - local: '/governance/ci-snippet.yml'   # ← 新增
+metadata:
+  enforcement: soft       # soft(只警告) / hard(拦合并)
+  soft_deadline: 90       # 90 天后自动切 hard
+
+risk_annotations:
+  enforcement: soft
+  registered_types:
+    - auth-bypass
+    - magic-id
+    - my-unsafe-api       # 公司自定义类型
+  reviewed_max_age_days: 180
+  reason_blacklist: [临时, hack]
+  custom_patterns:         # 公司专属扫描规则
+    - type: my-unsafe-api
+      regex: 'UnsafeAPI\s*\('
+      desc: "禁用 UnsafeAPI"
+
+testing:
+  enforcement: soft
+  exclude_paths: ["*.md", "docs/"]
 ```
 
-> v1 的 `governance:risk-scan` 是硬阻断，`governance:mr-validate` 是软警告（不阻断合并）。
+---
 
-### 第 3 步：在 GitLab 确认模板生效
+## 🎓 实战案例
 
-新建 MR 时，描述框右上角 → "选择模板" → 选 `default` 即可自动填充。
+- **UseGEO** (GitHub 私有仓库) — 中心化形态,4 个 job 自动跑,软门禁
+- **AgentGate 自己** — 用自己管自己(dogfooding),5 个 job + 分支保护,硬门禁
 
 ---
 
-## v1 软启动说明
+## 📂 安装后的文件结构
 
-| 规则 | v1 模式 | 到期转硬 |
-|---|---|---|
-| 风险注解（8 类）| 硬阻断，第一天起生效 | — |
-| 密钥扫描 | 硬阻断，第一天起生效 | — |
-| 测试删除保护 | 硬阻断，第一天起生效 | — |
-| MR 描述字段（M1–M4）| 软警告 | `governance.config.yml` 的 `soft_deadline` |
+```
+你的项目/
+├── governance/                # 治理文件集中目录
+│   ├── config.yml             # 配置(风险规则/测试要求/门禁强度)
+│   ├── ci-snippet.yml         # GitLab CI 片段
+│   ├── mr-spec.md             # MR 规范说明
+│   ├── risk-types.md          # 风险类型清单
+│   └── scripts/               # 9 个检查脚本
+│       ├── scan_risks.py
+│       ├── check_tested.py
+│       └── ...
+├── .gitlab/
+│   └── merge_request_templates/
+│       └── default.md         # MR 模板
+├── CLAUDE.md                  # AI 指令(可选,用 --agents 控制)
+└── .git/hooks/
+    └── prepare-commit-msg     # 提交时自动盖 trailer
+```
 
-`soft_deadline` 安装时自动设为距今 90 天，修改需要走 MR。
-
----
-
-## AI agent 使用须知
-
-install.sh 会向四个 AI 工具分别部署指令文件，各工具在会话启动时自动加载：
-
-| Agent 工具 | 指令文件 | 加载时机 |
-|---|---|---|
-| Claude Code / Kiro | `CLAUDE.md`（仓库根） | 会话启动时自动 |
-| Hermes Agent v0.17.0 | `.hermes.md`（仓库根） | 会话启动时自动，优先于 AGENTS.md |
-| OpenAI Codex CLI | `AGENTS.md`（仓库根） | 任务启动时自动，同时作为 Hermes fallback |
-| GitHub Copilot Workspace | `.github/copilot-instructions.md` | 自动注入 system prompt |
-| Cursor | `.cursor/rules/governance.mdc` | Always apply 规则 |
-
-提交代码前，AI agent 必须对照 `docs/governance/risk-types.md` 做自检：
-
-1. 每次编辑源码后，把客观证据（工具/模型/增删行数）追加进 `.governance/ai-evidence.jsonl`。
-2. 改了生产代码就写测试，用 `record_test_run.py` 跑（留痕到 `Tested:` trailer）；确无法单测的加 `risk:untested` 注解。
-3. diff 里有没有命中 8 类风险模式？
-4. 有 → 在该代码上方加 `risk:*` 注解，四个字段缺一不可（type、reason、owner、reviewed）。
-5. reason 不能含黑名单词（临时 / 先这样 / 历史原因 / TODO / hack / wip 等）。
-6. `reviewed:` 填当天日期，有效期 6 个月，过期会在下次触碰该文件时强制刷新。
-7. 提交即可——`AI-Usage` 和 `Tested` trailer 由 git hook 自动写入，**无需手填**。
+**减少根目录散落**:用 `--agents claude` 只装 Claude,根目录只有 1 个 `CLAUDE.md`,不装 `.hermes.md` / `AGENTS.md` / `.cursor/` / `.github/copilot-instructions.md`。
 
 ---
 
-## DeliverHQ 共存
+## 🔗 相关资源
 
-安装脚本自动检测 `DeliverHQ/` 目录。检测到时：
-
-- `governance.config.yml` 自动写入 `deliverhq_integration.enabled: true`
-- `records_dirs` 同时包含 `docs/requirements/` 和 `DeliverHQ/change-requests/`
-- MR 描述的 `Requirement-ID:` 填 `CR-xxxx` 或 `REQ-xxxx` 均可
-
-两者通过 **commit trailer + `DeliverHQ/evidence-summary.json`** 联动，不互相读取内部目录结构。
+- **文档**:[INSTALL.md](INSTALL.md) | [USER_GUIDE.md](USER_GUIDE.md)
+- **问题反馈**:[GitHub Issues](https://github.com/kevinwanghd/AgentGate/issues)
+- **版本**:v1.0.0 (2026-06-30)
 
 ---
 
-## 修改规范
+## 📜 License
 
-| 改什么 | 流程 |
-|---|---|
-| 新增风险类型 | 改 `docs/governance/risk-types.md` → MR 标题 `governance: add risk type <name>` → CODEOWNERS 审批 |
-| 调整 enforcement 参数 | 改 `governance.config.yml` → MR → CODEOWNERS 审批 |
-| 延期 soft_deadline | 改 `governance.config.yml` → MR → CODEOWNERS 审批（不能私自改文件） |
-| 升级 v2 | 新建 `governance/v2/` 目录，不破坏 v1 |
+MIT License - 详见 [LICENSE](LICENSE)
+
+---
+
+## 🙏 致谢
+
+本项目基于 AI 辅助开发完成,使用 Claude Opus 4.8 作为核心开发工具。
+
+**Co-Authored-By**: Claude Opus 4.8 (1M context)
