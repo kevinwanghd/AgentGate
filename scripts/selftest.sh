@@ -649,6 +649,25 @@ Tested: pass (2/2)"
   python3 "$CHK" --diff-base main --config hard.yml >/dev/null 2>&1 )
 expect "P1 merge他人未测代码不拦自己" 0 $?
 
+# [自指] 扫描器脚本目录豁免: 业务仓库自包含副本改动 governance/scripts/ 不被自己扫
+SELF="$(mktemp -d)"
+( cd "$SELF" && git init -q && git config user.email t@t && git config user.name t && git config init.defaultBranch main
+  echo seed > seed.txt && git add -A && git commit -qm init && git branch -M main
+  git checkout -q -b feat
+  mkdir -p governance/scripts
+  # 造一个含风险模式字面示例的"脚本副本"(模拟 scan_risks.py 里的 catch{} 注释)
+  printf '# rule example: catch { }\nPATTERN = "catch"\n' > governance/scripts/scan_risks.py
+  git add governance/scripts/scan_risks.py
+  git diff --cached -w --unified=0 --no-color > s.diff
+  cat > cfg.yml <<'CFG'
+risk_annotations:
+  enforcement: hard
+  scan_exclude_paths: ["**/governance/scripts/**", "governance/scripts/**"]
+  registered_types: [swallowed-exception]
+CFG
+  python3 "$SCANP" --diff-file s.diff --config cfg.yml >/dev/null 2>&1 )
+expect "扫描器脚本目录豁免(不自指误报)" 0 $?
+
 echo "============================================"
 echo " 通过 $PASS / 失败 $FAIL"
 echo "============================================"

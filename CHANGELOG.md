@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.2.1] - 2026-07-01
+
+### Fixed
+
+- **扫描器自指误报 (关键修复)** — 自包含形态的业务仓库中, 当 MR 改动到 `governance/scripts/` 下的脚本副本时, scan_risks.py 会扫到脚本里的风险模式**字面示例**(如 swallowed-exception 规则注释里的 `catch { }`、黑名单词、ObjectId 样例), 误判为命中风险并硬拦, 阻碍提交。
+  - **根因**: 扫描器脚本本身合理地、大量包含风险模式的字面量(它们是规则的"家"), 但默认 `scan_exclude_paths` 未排除 `governance/scripts/`, 导致扫描器扫到自己。
+  - **修复**: 默认豁免路径加入 `**/governance/scripts/**` 和 `governance/scripts/**` — 扫描器不扫自己。同步到 scan_risks.py DEFAULT_CONFIG、install.sh 生成的 config。
+  - **回归测试**: selftest 新增自指豁免用例(共 50 个)。
+
+---
+
 ## [1.2.0] - 2026-07-01
 
 ### Fixed — 多人协作阻碍系统性修复
