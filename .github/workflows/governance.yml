@@ -8,7 +8,7 @@
 #
 # ┌──────────────────────────────────────────────────────────────┐
 # │ 硬约束: 严格只扫 PR 增量 (base..HEAD), 任何情况都不全量扫描。      │
-# │ - 只在 pull_request 触发 (PR 的 base.sha 永远存在, 是稳定基准)。  │
+# │ - 只在 pull_request 触发, 用目标分支最新 tip (origin/base.ref) 算 diff。│
 # │ - 不在 push 触发 (push 无 base, 会退化成 HEAD~1 等不可控范围)。   │
 # │ - 不含 report_expired (它用 os.walk 全树遍历, 只能定时单独跑)。   │
 # └──────────────────────────────────────────────────────────────┘
@@ -31,10 +31,12 @@ jobs:
       - run: pip install -q pyyaml
       - name: scan risks
         run: |
-          BASE="${{ github.event.pull_request.base.sha }}"
-          # 硬约束: base 必须存在; 缺失则报错退出, 绝不退化成全量或猜范围
-          if [ -z "$BASE" ]; then echo "::error::PR base.sha 缺失, 拒绝扫描 (不允许全量回退)"; exit 1; fi
-          python scripts/scan_risks.py --diff-base "$BASE" --config governance.config.yml
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          # 用目标分支最新 tip 作 base (而非 PR 创建时的旧快照 base.sha),
+          # 否则 pull/merge 进来的他人改动会被误算进本次 diff。三点 diff 自动取 merge-base。
+          if [ -z "$BASE_REF" ]; then echo "::error::PR base.ref 缺失, 拒绝扫描 (不允许全量回退)"; exit 1; fi
+          git fetch -q origin "$BASE_REF"
+          python scripts/scan_risks.py --diff-base "origin/$BASE_REF" --config governance.config.yml
 
   # 密钥扫描: 硬阻断
   secret-scan:
@@ -45,11 +47,11 @@ jobs:
           fetch-depth: 0
       - name: gitleaks (本次 PR 范围)
         run: |
-          BASE="${{ github.event.pull_request.base.sha }}"
-          # 硬约束: base 必须存在; 缺失则报错退出, 绝不退化成全量或猜范围
-          if [ -z "$BASE" ]; then echo "::error::PR base.sha 缺失, 拒绝扫描 (不允许全量回退)"; exit 1; fi
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          if [ -z "$BASE_REF" ]; then echo "::error::PR base.ref 缺失, 拒绝扫描"; exit 1; fi
+          git fetch -q origin "$BASE_REF"
           docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest \
-            detect --source /repo --log-opts="${BASE}..HEAD" \
+            detect --source /repo --log-opts="origin/${BASE_REF}..HEAD" \
             --redact --no-banner --verbose
 
   # MR 描述校验: 硬门禁 (从 PR body 读 + commit trailer 读 AI-Usage)
@@ -68,11 +70,11 @@ jobs:
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
-          BASE="${{ github.event.pull_request.base.sha }}"
-          # 硬约束: base 必须存在; 缺失则报错退出, 绝不退化成全量或猜范围
-          if [ -z "$BASE" ]; then echo "::error::PR base.sha 缺失, 拒绝扫描 (不允许全量回退)"; exit 1; fi
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          if [ -z "$BASE_REF" ]; then echo "::error::PR base.ref 缺失, 拒绝扫描"; exit 1; fi
+          git fetch -q origin "$BASE_REF"
           printf '%s' "$PR_BODY" \
-            | python scripts/validate_mr.py --diff-base "$BASE" --config governance.config.yml
+            | python scripts/validate_mr.py --diff-base "origin/$BASE_REF" --config governance.config.yml
 
   # 测试痕迹检测: 硬门禁 (失败测试记录无条件硬拦); 读 commit 的 Tested: trailer
   test-check:
@@ -87,10 +89,10 @@ jobs:
       - run: pip install -q pyyaml
       - name: check tested
         run: |
-          BASE="${{ github.event.pull_request.base.sha }}"
-          # 硬约束: base 必须存在; 缺失则报错退出, 绝不退化成全量或猜范围
-          if [ -z "$BASE" ]; then echo "::error::PR base.sha 缺失, 拒绝扫描 (不允许全量回退)"; exit 1; fi
-          python scripts/check_tested.py --diff-base "$BASE" --config governance.config.yml
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          if [ -z "$BASE_REF" ]; then echo "::error::PR base.ref 缺失, 拒绝扫描"; exit 1; fi
+          git fetch -q origin "$BASE_REF"
+          python scripts/check_tested.py --diff-base "origin/$BASE_REF" --config governance.config.yml
 
   # 自测: 跑 governance 脚本自己的 39 个回归用例
   selftest:

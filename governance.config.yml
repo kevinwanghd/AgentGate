@@ -1,6 +1,6 @@
 # AgentGate 治理配置 v1 (自举: AgentGate 用自己的规范管自己)
 # 注意: 本仓库脚本在根级 scripts/, 与消费仓库的 governance/scripts/ 不同。
-version: v1.1.0
+version: v1.1.1
 
 metadata:
   enforcement: hard           # 自举: 新仓库无历史包袱, 直接硬启动
