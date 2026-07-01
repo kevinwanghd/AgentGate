@@ -22,7 +22,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 SOURCE_BASE="${GOVERNANCE_SOURCE:-}"
-VERSION="v1.1.2"
+VERSION="v1.2.0"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 
 # 90 天 soft_deadline 默认值
@@ -168,8 +168,23 @@ metadata:
     - self_test           # ## 自测确认
 
 risk_annotations:
-  enforcement: hard           # 第一天起即硬阻断
+  enforcement: soft           # 默认软启动(只警告); 团队稳定后显式改 hard
   reviewed_max_age_days: 180  # 6 个月
+  # 路径豁免: 生成/引入/第三方代码不扫 (开发者不为这些代码负责)
+  scan_exclude_paths:
+    - "**/vendor/**"
+    - "**/node_modules/**"
+    - "**/third_party/**"
+    - "**/*_pb2.py"
+    - "**/*_pb2_grpc.py"
+    - "**/*.pb.go"
+    - "**/*.generated.*"
+    - "**/gen/**"
+    - "**/dist/**"
+    - "**/build/**"
+    - "**/migrations/**"
+    - "**/*.min.js"
+    - "**/*.min.css"
   registered_types:
     - auth-bypass
     - magic-id

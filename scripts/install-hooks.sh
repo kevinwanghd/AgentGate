@@ -52,9 +52,14 @@ if [ -f "$AI_SCRIPT" ] && ! grep -qi '^AI-Usage:' "$COMMIT_MSG_FILE"; then
 fi
 
 # 2. Tested trailer (若尚未存在) —— 供 CI 在证据文件 (gitignore) 不可见时读取
+# 仅当有实质结果(pass/fail)才写; 证据缺失得到 "none" 时不写,
+# 避免 rebase/squash 重写历史时用 Tested:none 覆盖掉原有的 Tested:pass。
 if [ -f "$TEST_SCRIPT" ] && ! grep -qi '^Tested:' "$COMMIT_MSG_FILE"; then
   T="$("$PY" "$TEST_SCRIPT" --emit-trailer 2>/dev/null || true)"
-  [ -n "$T" ] && printf '%s\n' "$T" >> "$COMMIT_MSG_FILE"
+  case "$T" in
+    *pass*|*fail*) printf '%s\n' "$T" >> "$COMMIT_MSG_FILE" ;;
+    *) : ;;  # none / 空 → 不写, 保留历史 trailer
+  esac
 fi
 HOOK
 

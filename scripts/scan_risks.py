@@ -37,8 +37,15 @@ except Exception:  # pragma: no cover
 # ============================================================
 DEFAULT_CONFIG = {
     "risk_annotations": {
-        "enforcement": "hard",
+        "enforcement": "soft",  # 默认软启动(只警告); 团队显式配 hard 才硬拦
         "reviewed_max_age_days": 180,
+        # 路径豁免: 生成/引入/第三方代码不扫 (开发者不为这些代码负责)
+        "scan_exclude_paths": [
+            "**/vendor/**", "**/node_modules/**", "**/third_party/**",
+            "**/*_pb2.py", "**/*_pb2_grpc.py", "**/*.pb.go",
+            "**/*.generated.*", "**/gen/**", "**/dist/**", "**/build/**",
+            "**/migrations/**", "**/*.min.js", "**/*.min.css",
+        ],
         "registered_types": [
             "auth-bypass",
             "magic-id",
@@ -239,12 +246,13 @@ def run_git(args: list[str]) -> str:
 
 
 def get_diff(diff_base: str | None, staged: bool) -> str:
+    # -w 忽略空白改动: 重缩进/换行包裹触碰他人既有风险行时不误报为新增
     if staged:
-        return run_git(["diff", "--cached", "--unified=0", "--no-color"])
+        return run_git(["diff", "--cached", "-w", "--unified=0", "--no-color"])
     if diff_base:
-        return run_git(["diff", f"{diff_base}...HEAD", "--unified=0", "--no-color"])
+        return run_git(["diff", f"{diff_base}...HEAD", "-w", "--unified=0", "--no-color"])
     # 默认: 与上一个提交比
-    return run_git(["diff", "HEAD~1...HEAD", "--unified=0", "--no-color"])
+    return run_git(["diff", "HEAD~1...HEAD", "-w", "--unified=0", "--no-color"])
 
 
 # ============================================================
@@ -359,9 +367,10 @@ def _validate_annotation_fields(
         age = (dt.date.today() - rev).days
         max_age = int(ra.get("reviewed_max_age_days", 180))
         if age > max_age:
-            problems.append(f'reviewed 已过期 ({age} 天 > {max_age} 天)')
+            # 过期是软提醒: 继承来的他人注解不应因日期年龄卡死协作
+            problems.append(f'[warn] reviewed 已过期 ({age} 天 > {max_age} 天), 建议复查更新')
         elif age < 0:
-            problems.append("reviewed 日期在未来")
+            problems.append("[warn] reviewed 日期在未来")
     except ValueError:
         problems.append(f'reviewed 日期格式非法 "{reviewed}"')
 
@@ -473,6 +482,28 @@ def _today_iso() -> str:
 # ============================================================
 # 主流程
 # ============================================================
+def _path_matches(path: str, pattern: str) -> bool:
+    """glob 匹配, 支持 ** 跨目录 (fnmatch 原生不支持 **)。"""
+    import re as _re
+    # 逐段构造正则: ** → 任意(含/); * → 非/; ? → 单字符; 其余转义
+    out = []
+    i = 0
+    n = len(pattern)
+    while i < n:
+        c = pattern[i]
+        if pattern[i:i+3] == "**/":
+            out.append("(?:.*/)?"); i += 3
+        elif pattern[i:i+2] == "**":
+            out.append(".*"); i += 2
+        elif c == "*":
+            out.append("[^/]*"); i += 1
+        elif c == "?":
+            out.append("[^/]"); i += 1
+        else:
+            out.append(_re.escape(c)); i += 1
+    return _re.fullmatch("".join(out), path) is not None
+
+
 def scan(diff_text: str, cfg: dict) -> list[dict]:
     """返回违规列表。每项: {file, line, type, desc, problems}"""
     violations: list[dict] = []
@@ -482,9 +513,13 @@ def scan(diff_text: str, cfg: dict) -> list[dict]:
     # 缓存已读文件
     file_cache: dict[str, list[str] | None] = {}
 
+    exclude = cfg["risk_annotations"].get("scan_exclude_paths", []) or []
     for path, added in parsed.items():
         ext = os.path.splitext(path)[1].lower()
         if ext not in SCAN_EXTENSIONS:
+            continue
+        # 路径豁免: 生成/引入/第三方代码整文件跳过
+        if any(_path_matches(path, pat) for pat in exclude):
             continue
         for lineno, content in added:
             # 收集该行命中的所有风险类型 (一行可能同时命中多个模式)
@@ -569,11 +604,23 @@ def main() -> int:
               f'// risk:{first_type} reason:"..." owner:@team reviewed:{_today_iso()}')
         print()
 
-    print(f"[scan-risks] 共 {len(violations)} 处违规。详见 docs/governance/risk-types.md")
+    # 区分实质违规(缺注解/字段错/类型未注册/黑名单) 与 纯软提醒([warn] 过期等)
+    def _is_blocking(v):
+        ps = v.get("problems", [])
+        return any(not str(p).lstrip().startswith("[warn]") for p in ps)
+    blocking = [v for v in violations if _is_blocking(v)]
 
-    enforcement = cfg["risk_annotations"].get("enforcement", "hard")
+    print(f"[scan-risks] 共 {len(violations)} 处违规 "
+          f"(其中 {len(blocking)} 处实质问题, {len(violations)-len(blocking)} 处仅提醒)。"
+          f"详见 docs/governance/risk-types.md")
+
+    enforcement = cfg["risk_annotations"].get("enforcement", "soft")
     if enforcement != "hard":
         print("[scan-risks] enforcement != hard, 仅警告不阻断。")
+        return 0
+    if not blocking:
+        # 硬模式但只剩软提醒(如继承的过期注解) → 不阻断协作
+        print("[scan-risks] 仅软提醒(如注解过期), 不阻断。")
         return 0
     return 1
 

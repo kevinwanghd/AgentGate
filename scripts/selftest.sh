@@ -65,9 +65,17 @@ public class S {
     }
 }
 EOF
+# 结构性违规测试用 hard 配置 (默认已改 soft, 需显式 hard 才拦实质问题)
+cat > hard_scan.yml <<'CFG'
+risk_annotations:
+  enforcement: hard
+  reviewed_max_age_days: 180
+  registered_types: [auth-bypass, magic-id, swallowed-exception, suppressed-warning, skipped-test, time-bypass, env-hardcode, todo-no-context, test-removal]
+  reason_blacklist: ["临时", "先这样", "历史原因", hack, wip]
+CFG
 mkdiff Bad.cs > d.diff
-python3 "$SCAN" --diff-file d.diff >/dev/null 2>&1
-expect "命中无注解应拦截" 1 $?
+python3 "$SCAN" --diff-file d.diff --config hard_scan.yml >/dev/null 2>&1
+expect "命中无注解应拦截(hard)" 1 $?
 
 # 2. 命中有合法注解 → PASS
 cat > Good.cs <<EOF
@@ -94,8 +102,8 @@ public class S {
 }
 EOF
 mkdiff Black.cs > d.diff
-python3 "$SCAN" --diff-file d.diff >/dev/null 2>&1
-expect "黑名单词理由应拦截" 1 $?
+python3 "$SCAN" --diff-file d.diff --config hard_scan.yml >/dev/null 2>&1
+expect "黑名单词理由应拦截(hard)" 1 $?
 
 # 4. 过期注解 → FAIL
 cat > Exp.cs <<EOF
@@ -108,8 +116,8 @@ public class S {
 }
 EOF
 mkdiff Exp.cs > d.diff
-python3 "$SCAN" --diff-file d.diff >/dev/null 2>&1
-expect "过期注解应拦截" 1 $?
+python3 "$SCAN" --diff-file d.diff --config hard_scan.yml >/dev/null 2>&1
+expect "过期注解降级为软提醒不阻断(新设计)" 0 $?
 
 # 5. 干净代码 → PASS
 cat > Clean.cs <<EOF
@@ -130,8 +138,8 @@ diff --git a/T.cs b/T.cs
 -    [Fact]
 -    public void Works() { Assert.True(true); }
 EOF
-python3 "$SCAN" --diff-file del.diff >/dev/null 2>&1
-expect "删测试无注解应拦截" 1 $?
+python3 "$SCAN" --diff-file del.diff --config hard_scan.yml >/dev/null 2>&1
+expect "删测试无注解应拦截(hard)" 1 $?
 
 echo
 echo "== validate_mr.py =="
@@ -546,6 +554,100 @@ CFG
 else
   skip "硬模式自己改生产代码没测应拦截"
 fi
+
+# ============================================================
+# 多人协作阻碍修复 回归测试 (P0/P1/P2 八项)
+# ============================================================
+echo
+echo "== 协作阻碍修复回归 =="
+SCANP="${SCRIPT_DIR}/scan_risks.py"
+CHK="${SCRIPT_DIR}/check_tested.py"
+
+# [P0-vendored] 生成/引入代码路径豁免: vendor 下命中风险也不拦
+VD="$(mktemp -d)"
+( cd "$VD" && git init -q && git config user.email t@t && git config user.name t && git config init.defaultBranch main
+  echo "x" > seed.txt && git add -A && git commit -qm init && git branch -M main
+  cat > hard.yml <<'CFG'
+risk_annotations:
+  enforcement: hard
+  scan_exclude_paths: ["**/vendor/**", "**/*.generated.*"]
+  registered_types: [auth-bypass]
+CFG
+  git checkout -q -b feat
+  mkdir -p vendor/lib
+  echo 'bool f(string userId){ return userId == "626786582b50ab8ec08b0fa0"; }' > vendor/lib/dep.cs
+  git add vendor/lib/dep.cs
+  git diff --cached -w --unified=0 --no-color > v.diff
+  python3 "$SCANP" --diff-file v.diff --config hard.yml >/dev/null 2>&1 )
+expect "P0 vendor路径豁免不拦" 0 $?
+
+# [P0-default-soft] 默认无 config = 软, 命中风险只警告不拦
+SD="$(mktemp -d)"
+( cd "$SD" && git init -q && git config user.email t@t && git config user.name t
+  echo 'bool f(string u){ return u == "626786582b50ab8ec08b0fa0"; }' > a.cs
+  git add a.cs && git commit -qm x >/dev/null 2>&1
+  git diff --unified=0 --no-color "$EMPTY_TREE" HEAD -- a.cs > a.diff
+  python3 "$SCANP" --diff-file a.diff >/dev/null 2>&1 )
+expect "P0 默认soft命中风险不拦" 0 $?
+
+# [P1-preexisting] -w 忽略空格: 只重缩进他人风险行不误报
+WS="$(mktemp -d)"
+( cd "$WS" && git init -q && git config user.email t@t && git config user.name t && git config init.defaultBranch main
+  printf 'class S {
+bool f(string u){ return u == "626786582b50ab8ec08b0fa0"; }
+}
+' > s.cs
+  git add s.cs && git commit -qm init && git branch -M main
+  git checkout -q -b feat
+  # 只加缩进(空格), 内容不变
+  printf 'class S {
+    bool f(string u){ return u == "626786582b50ab8ec08b0fa0"; }
+}
+' > s.cs
+  git add s.cs && git commit -qm reindent
+  cat > hard.yml <<'CFG'
+risk_annotations:
+  enforcement: hard
+  registered_types: [auth-bypass]
+CFG
+  python3 "$SCANP" --diff-base main --config hard.yml >/dev/null 2>&1 )
+expect "P1 重缩进他人风险行不误报(-w)" 0 $?
+
+# [P1-rename] 纯重命名文件不要求补测试
+RN="$(mktemp -d)"
+( cd "$RN" && git init -q && git config user.email t@t && git config user.name t && git config init.defaultBranch main
+  echo 'class Svc { void Pay(){} }' > svc.cs && git add svc.cs && git commit -qm init && git branch -M main
+  cat > hard.yml <<'CFG'
+testing:
+  enforcement: hard
+  exclude_paths: []
+CFG
+  git checkout -q -b feat
+  git mv svc.cs service.cs && git commit -qm "rename svc"
+  python3 "$CHK" --diff-base main --config hard.yml >/dev/null 2>&1 )
+expect "P1 纯重命名不要求测试" 0 $?
+
+# [P1-squash] 目标分支 squash 前进后, 本分支只检查自己真实改动
+SQ="$(mktemp -d)"
+( cd "$SQ" && git init -q && git config user.email t@t && git config user.name t && git config init.defaultBranch main
+  echo "base" > app.cs && git add app.cs && git commit -qm init && git branch -M main
+  cat > hard.yml <<'CFG'
+testing:
+  enforcement: hard
+  exclude_paths: []
+CFG
+  git checkout -q -b feat
+  echo 'class Mine { void Go(){} }' > mine.cs
+  echo 'class MineTests {}' > mineTests.cs
+  git add -A && git commit -qm "my work + test
+
+Tested: pass (2/2)"
+  # 同事在 main 加未测生产文件
+  git checkout -q main
+  echo 'class Other { void Do(){} }' > other.cs && git add other.cs && git commit -qm "colleague"
+  git checkout -q feat && git merge -q main -m merge
+  python3 "$CHK" --diff-base main --config hard.yml >/dev/null 2>&1 )
+expect "P1 merge他人未测代码不拦自己" 0 $?
 
 echo "============================================"
 echo " 通过 $PASS / 失败 $FAIL"

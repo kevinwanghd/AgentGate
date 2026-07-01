@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.2.0] - 2026-07-01
+
+### Fixed — 多人协作阻碍系统性修复
+
+经系统性审计(12 个协作场景), 确认并修复 8 个会阻碍正常多人协作的门禁问题。核心原则: **exit 1 只留给开发者本次真正新写的风险逻辑, 不为 git 重吐的他人历史代码背锅**。
+
+- **[P0] 生成/引入代码路径豁免** — scan_risks.py 新增 `scan_exclude_paths` 配置, 支持 `**` 跨目录 glob。vendor/node_modules/*.pb.go/*.generated.* 等整文件跳过风险扫描 (之前该字段被静默忽略)。
+- **[P0] 默认门禁软化** — risk_annotations.enforcement 默认 `hard→soft`。revert/cherry-pick 恢复他人历史风险行无法从 diff 层干净区分, 默认只警告, 团队显式 opt-in hard 才硬拦。结构性缺陷(缺注解/字段错/类型未注册/黑名单词)在 hard 下仍拦。
+- **[P1] rename 不误拦** — check_tested.py 用 `--name-status -M` 检测, 重命名/移动(R/C 状态)文件不要求补测试。
+- **[P1] squash 历史塌陷修复** — 用二点端点 diff 交集过滤, 目标分支 squash 后未变的历史文件不计入你的改动。
+- **[P1] rebase/squash 不丢 Tested trailer** — hook 在证据缺失时不写 `Tested:none` 覆盖历史; read_tested_trailer 取全范围最强信号(任一 pass 即 pass)。
+- **[P1] 重排版不误报** — scan_risks/check_tested 的 git diff 加 `-w`, 重缩进/换行包裹触碰他人风险行不再误判为新增。
+- **[P2] 注解过期降级软提醒** — 继承来的他人过期注解只提示不阻断(exit 0), 不因日期年龄卡死协作。
+
+### Changed
+
+- 消费仓库默认配置(install.sh): risk_annotations 默认 soft + 内置 scan_exclude_paths。
+- AgentGate 自身保持 hard (dogfooding 展示严格模式), 并加 scan_exclude_paths。
+
+### Testing
+
+- selftest 新增 5 个协作场景回归用例 + 更新 4 个既有用例反映软化默认, 共 49 个全过。
+
+### 推行结论
+
+修完后可在公司层面推行: 守住"新增未注解风险代码"的真实防线, 杜绝"替同事/第三方代码背锅"的协作阻碍。
+
+---
+
 ## [1.1.2] - 2026-07-01
 
 ### Documentation
