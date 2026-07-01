@@ -12,8 +12,16 @@
 set -euo pipefail
 
 # ---------- 参数 ----------
-TARGET_DIR="${1:-$PWD}"
-SOURCE_BASE="${GOVERNANCE_SOURCE:-}"   # 可设为 raw URL 前缀, 例如 https://gitlab.example.com/.../-/raw/main
+TARGET_DIR="$PWD"
+AGENTS="all"   # 默认装所有 AI 指令文件
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --agents) AGENTS="$2"; shift 2 ;;
+    --agents=*) AGENTS="${1#*=}"; shift ;;
+    *) TARGET_DIR="$1"; shift ;;
+  esac
+done
+SOURCE_BASE="${GOVERNANCE_SOURCE:-}"
 VERSION="v1.0.0"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 
@@ -90,39 +98,55 @@ fetch_or_local "mr-spec.md"    | write_file "docs/governance/mr-spec.md"
 fetch_or_local "risk-types.md" | write_file "docs/governance/risk-types.md"
 
 # ---------- 3. AI Agent 指令文件 ----------
-log "安装 AI agent 指令文件"
+# --agents 选项: all(全部) / claude / copilot / cursor / hermes / none
+case "$AGENTS" in
+  all|claude|copilot|cursor|hermes)
+    log "安装 AI agent 指令文件 (--agents=$AGENTS)"
+    ;;
+  none)
+    log "跳过 AI agent 指令文件 (--agents=none)"
+    ;;
+  *)
+    err "无效的 --agents 值: $AGENTS (可选: all/claude/copilot/cursor/hermes/none)"
+    exit 1
+    ;;
+esac
 
-# Claude Code / Kiro: CLAUDE.md (仓库根, 会话启动时自动加载)
-if [[ -e "${TARGET_DIR}/CLAUDE.md" ]]; then
-  warn "CLAUDE.md 已存在, 追加治理规范 section 而非覆盖"
-  {
-    printf '\n\n---\n<!-- governance-v1-begin -->\n'
-    fetch_or_local "agent-instructions/CLAUDE.md"
-    printf '\n<!-- governance-v1-end -->\n'
-  } >> "${TARGET_DIR}/CLAUDE.md"
-  ok "追加 governance 规范到 CLAUDE.md"
-else
-  fetch_or_local "agent-instructions/CLAUDE.md" \
-    | write_file "CLAUDE.md"
+# Claude Code / Kiro
+if [[ "$AGENTS" == "all" || "$AGENTS" == "claude" ]]; then
+  if [[ -e "${TARGET_DIR}/CLAUDE.md" ]]; then
+    warn "CLAUDE.md 已存在, 追加治理规范 section 而非覆盖"
+    {
+      printf '\n\n---\n<!-- governance-v1-begin -->\n'
+      fetch_or_local "agent-instructions/CLAUDE.md"
+      printf '\n<!-- governance-v1-end -->\n'
+    } >> "${TARGET_DIR}/CLAUDE.md"
+    ok "追加 governance 规范到 CLAUDE.md"
+  else
+    fetch_or_local "agent-instructions/CLAUDE.md" | write_file "CLAUDE.md"
+  fi
 fi
 
-# GitHub Copilot Workspace
-fetch_or_local "agent-instructions/copilot-instructions.md" \
-  | write_file ".github/copilot-instructions.md"
+# GitHub Copilot
+if [[ "$AGENTS" == "all" || "$AGENTS" == "copilot" ]]; then
+  fetch_or_local "agent-instructions/copilot-instructions.md" \
+    | write_file ".github/copilot-instructions.md"
+fi
 
 # Cursor
-fetch_or_local "agent-instructions/cursor-rules.mdc" \
-  | write_file ".cursor/rules/governance.mdc"
+if [[ "$AGENTS" == "all" || "$AGENTS" == "cursor" ]]; then
+  fetch_or_local "agent-instructions/cursor-rules.mdc" \
+    | write_file ".cursor/rules/governance.mdc"
+fi
 
-# Hermes Agent v0.17.0: .hermes.md (仓库根, 优先级高于 AGENTS.md / CLAUDE.md)
-fetch_or_local "agent-instructions/hermes-instructions.md" \
-  | write_file ".hermes.md"
-
-# OpenAI Codex CLI + Hermes fallback: AGENTS.md (仓库根)
-# Codex 读 AGENTS.md / AGENTS.override.md; Hermes 在找不到 .hermes.md 时也 fallback 到这里
-# 两者共用同一份内容, 无需维护两份
-fetch_or_local "agent-instructions/hermes-instructions.md" \
-  | write_file "AGENTS.md"
+# Hermes Agent
+if [[ "$AGENTS" == "all" || "$AGENTS" == "hermes" ]]; then
+  fetch_or_local "agent-instructions/hermes-instructions.md" \
+    | write_file ".hermes.md"
+  # Hermes fallback: AGENTS.md
+  fetch_or_local "agent-instructions/hermes-instructions.md" \
+    | write_file "AGENTS.md"
+fi
 
 # ---------- 3. governance.config.yml ----------
 log "生成 governance.config.yml"
