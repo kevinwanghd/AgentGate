@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.2] - 2026-07-01
+
+### Documentation
+
+- **新增 diff-base bug 复盘文档** — `docs/postmortem-diff-base-2026-07-01.md`，完整记录多人协作误拦 bug 的现象、根因分析、修复方案、验证方法和经验教训。
+
+---
+
 ## [1.1.1] - 2026-07-01
 
 ### Fixed
