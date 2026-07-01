@@ -41,6 +41,8 @@ DEFAULT_CONFIG = {
         "reviewed_max_age_days": 180,
         # 路径豁免: 生成/引入/第三方代码不扫 (开发者不为这些代码负责)
         "scan_exclude_paths": [
+            # 扫描器自身不扫自己 (脚本里含风险模式的字面示例, 会自指误报)
+            "**/governance/scripts/**", "governance/scripts/**",
             "**/vendor/**", "**/node_modules/**", "**/third_party/**",
             "**/*_pb2.py", "**/*_pb2_grpc.py", "**/*.pb.go",
             "**/*.generated.*", "**/gen/**", "**/dist/**", "**/build/**",

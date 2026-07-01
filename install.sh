@@ -22,7 +22,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 SOURCE_BASE="${GOVERNANCE_SOURCE:-}"
-VERSION="v1.2.0"
+VERSION="v1.2.1"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 
 # 90 天 soft_deadline 默认值
@@ -172,6 +172,8 @@ risk_annotations:
   reviewed_max_age_days: 180  # 6 个月
   # 路径豁免: 生成/引入/第三方代码不扫 (开发者不为这些代码负责)
   scan_exclude_paths:
+    - "**/governance/scripts/**"   # 扫描器自身不扫自己(含风险模式字面示例)
+    - "governance/scripts/**"
     - "**/vendor/**"
     - "**/node_modules/**"
     - "**/third_party/**"
