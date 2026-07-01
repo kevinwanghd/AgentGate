@@ -22,7 +22,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 SOURCE_BASE="${GOVERNANCE_SOURCE:-}"
-VERSION="v1.1.0"
+VERSION="v1.1.1"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 
 # 90 天 soft_deadline 默认值
@@ -308,9 +308,11 @@ governance:risk-scan:
     - pip install -q pyyaml
   script:
     - |
-      # MR 事件用 GitLab 提供的 base sha, 否则退化为与上一提交比
-      BASE="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-HEAD~1}"
-      python governance/scripts/scan_risks.py --diff-base "$BASE"
+      # 用目标分支最新 tip 作 base (而非 MR 创建时的旧快照), 否则 merge 进来的
+      # 他人改动会被误算进本次 diff。三点 diff 自动取 merge-base。
+      TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
+      git fetch -q origin "$TB"
+      python governance/scripts/scan_risks.py --diff-base "origin/$TB"
   allow_failure: false
 
 # 密钥扫描: 硬阻断 (本次 MR 引入的提交里出现密钥/凭据 → 拒合)
@@ -327,11 +329,12 @@ governance:secret-scan:
     GIT_DEPTH: 0          # 需要完整历史以便按范围扫描
   script:
     - |
-      BASE="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-HEAD~1}"
+      TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
+      git fetch -q origin "$TB"
       # 只扫本次 MR 引入的提交; 命中任一密钥 gitleaks 返回非 0
       gitleaks detect \
         --source . \
-        --log-opts="${BASE}..HEAD" \
+        --log-opts="origin/${TB}..HEAD" \
         --redact \
         --no-banner \
         --verbose
@@ -349,9 +352,10 @@ governance:mr-validate:
     - pip install -q pyyaml
   script:
     - |
-      BASE="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-HEAD~1}"
+      TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
+      git fetch -q origin "$TB"
       echo "$CI_MERGE_REQUEST_DESCRIPTION" \
-        | python governance/scripts/validate_mr.py --diff-base "$BASE"
+        | python governance/scripts/validate_mr.py --diff-base "origin/$TB"
   # 软模式期内脚本自身返回 0; deadline 过后脚本返回 1, 此时该 job 才真正阻断。
   # allow_failure 设 false 以便 deadline 后生效; 软模式期脚本不会 fail。
   allow_failure: false
@@ -370,8 +374,9 @@ governance:test-check:
     - pip install -q pyyaml
   script:
     - |
-      BASE="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-HEAD~1}"
-      python governance/scripts/check_tested.py --diff-base "$BASE"
+      TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
+      git fetch -q origin "$TB"
+      python governance/scripts/check_tested.py --diff-base "origin/$TB"
   # 软模式期脚本对"未测"仅警告返回 0; 但"失败测试记录"始终返回 1 硬拦。
   allow_failure: false
 

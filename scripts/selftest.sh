@@ -495,6 +495,58 @@ echo 'void f(){ UnsafeQuery("x"); }' > cust_dir/bad.cs
 ( cd cust_dir && git add good.cs && git diff --cached --unified=0 --no-color -- good.cs > good.diff
   python3 "$SCAN" --diff-file good.diff --config cfg.yml >/dev/null 2>&1 ); expect "自定义规则加注解应放行" 0 $?
 
+# ============================================================
+# 多人协作 diff-base 回归测试
+# 复现: 你从 main 建分支改自己的文件, 期间同事往 main 提交并被你 merge 进来,
+# 检查时不应把同事的改动算进"你要负责的 diff"。
+# ============================================================
+echo
+echo "== 多人协作 diff-base =="
+CHECK="${SCRIPT_DIR}/check_tested.py"
+COLLAB="$(mktemp -d)"
+(
+  cd "$COLLAB"
+  git init -q; git config user.email t@t; git config user.name t; git config init.defaultBranch main
+  echo "class App {}" > app.cs; git add app.cs; git commit -qm init; git branch -M main
+  # 你建分支, 改自己的文件并写了测试
+  git checkout -q -b feature
+  echo "class MyFeature {}" > myfeature.cs
+  echo "class MyFeatureTests {}" > MyFeatureTests.cs
+  git add -A; git commit -qm "feat: my work with test"
+  # 同事往 main 提交一个"未测的生产代码文件"
+  git checkout -q main
+  echo "class ColleagueService { void Pay(){} }" > colleague.cs
+  git add colleague.cs; git commit -qm "feat: colleague work (no test)"
+  # 你把 main 最新代码 merge 进自己分支
+  git checkout -q feature
+  git merge -q main -m "merge main"
+  # 模拟 CI 修复后行为: diff-base = 目标分支最新 tip (main)
+  python3 "$CHECK" --diff-base main >/dev/null 2>&1
+)
+expect "merge他人代码后只检查自己的改动(不误拦)" 0 $?
+
+# 反向验证: 硬模式下自己改了生产代码却没测, 仍应拦 (证明修复没把门禁弄失效)
+if [[ "$HAS_YAML" == "1" ]]; then
+  COLLAB2="$(mktemp -d)"
+  (
+    cd "$COLLAB2"
+    git init -q; git config user.email t@t; git config user.name t; git config init.defaultBranch main
+    echo "class App {}" > app.cs; git add app.cs; git commit -qm init; git branch -M main
+    cat > cfg.yml <<'CFG'
+testing:
+  enforcement: hard
+  exclude_paths: []
+CFG
+    git checkout -q -b feature
+    echo "class MyService { void DoWork(){} }" > myservice.cs   # 生产代码, 无测试
+    git add myservice.cs; git commit -qm "feat: untested work"
+    python3 "$CHECK" --diff-base main --config cfg.yml >/dev/null 2>&1
+  )
+  expect "硬模式自己改生产代码没测应拦截" 1 $?
+else
+  skip "硬模式自己改生产代码没测应拦截"
+fi
+
 echo "============================================"
 echo " 通过 $PASS / 失败 $FAIL"
 echo "============================================"

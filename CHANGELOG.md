@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.1] - 2026-07-01
+
+### Fixed
+
+- **多人协作 diff-base 误拦 (关键修复)** — 修复多人协作时的误拦 bug: 当你 `git pull`/merge 了同事已合入目标分支的代码后再提交, CI 会把同事的改动也算进"你要负责的 diff", 要求你为没写过的代码提供测试痕迹, 导致被误拦。
+  - **根因**: CI 传给扫描脚本的 diff-base 是 MR/PR **创建时的旧快照** (`base.sha` / `CI_MERGE_REQUEST_DIFF_BASE_SHA`), 不随目标分支更新。用旧 base 做三点 diff, 后来 merge 进来的他人改动会被算进来。
+  - **修复**: CI 改用**目标分支最新 tip** (`origin/<base.ref>` / `origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME`) 作 base, 先 `git fetch` 拉最新再算。三点 diff 自动取 merge-base, 正确排除已在目标分支的他人改动。
+  - **影响**: GitHub workflow 4 个 job + GitLab ci-snippet 4 个 job 全部修正。
+  - **回归测试**: selftest 新增 2 个多人协作用例 (共 44 个)。
+
+---
+
 ## [1.1.0] - 2026-07-01
 
 ### Added

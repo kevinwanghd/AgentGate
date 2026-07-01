@@ -224,7 +224,7 @@ testing:
 
 - **文档**:[INSTALL.md](INSTALL.md) | [USER_GUIDE.md](USER_GUIDE.md)
 - **问题反馈**:[GitHub Issues](https://github.com/kevinwanghd/AgentGate/issues)
-- **版本**:v1.1.0 (2026-07-01)
+- **版本**:v1.1.1 (2026-07-01)
 
 ---
 
