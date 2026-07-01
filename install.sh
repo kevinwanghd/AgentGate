@@ -22,7 +22,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 SOURCE_BASE="${GOVERNANCE_SOURCE:-}"
-VERSION="v1.0.0"
+VERSION="v1.1.0"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 
 # 90 天 soft_deadline 默认值
