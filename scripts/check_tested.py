@@ -139,10 +139,33 @@ def run_git(args: list[str]) -> str:
 
 def get_diff(diff_base: str | None, staged: bool) -> str:
     if staged:
-        return run_git(["diff", "--cached", "--unified=0", "--no-color"])
+        return run_git(["diff", "--cached", "-w", "--unified=0", "--no-color"])
     if diff_base:
-        return run_git(["diff", f"{diff_base}...HEAD", "--unified=0", "--no-color"])
-    return run_git(["diff", "HEAD~1...HEAD", "--unified=0", "--no-color"])
+        return run_git(["diff", f"{diff_base}...HEAD", "-w", "--unified=0", "--no-color"])
+    return run_git(["diff", "HEAD~1...HEAD", "-w", "--unified=0", "--no-color"])
+
+
+def changed_prod_status(diff_base: str | None, staged: bool) -> dict:
+    """用 --name-status -M 拿每个文件的状态; rename(R) 不计入需测集。
+    返回 {path: status_letter}。squash 后 tree 未变的历史文件不在端点 diff, 自动剔除。"""
+    if staged:
+        args = ["diff", "--cached", "--name-status", "-M", "--no-color"]
+    elif diff_base:
+        # 二点端点比较: 只含 base 与 HEAD 树的真实差异 (排除 squash 塌陷的历史文件)
+        args = ["diff", f"{diff_base}", "HEAD", "--name-status", "-M", "--no-color"]
+    else:
+        args = ["diff", "HEAD~1", "HEAD", "--name-status", "-M", "--no-color"]
+    out = run_git(args)
+    result = {}
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        status = parts[0]
+        # rename/copy: R100\told\tnew — 取新路径, 状态记 R (不要求测试)
+        path = parts[-1]
+        result[path] = status[0]  # A/M/D/R/C
+    return result
 
 
 _FILE_RE = re.compile(r'^\+\+\+ (?:b/)?(.+)$')
@@ -236,9 +259,15 @@ def read_tested_trailer(diff_base: str | None) -> str | None:
         ).stdout
     except Exception:
         return None
-    for m in re.finditer(r'(?im)^Tested:\s*(\S+)', out):
-        return m.group(1).lower()
-    return None
+    vals = [m.group(1).lower() for m in re.finditer(r'(?im)^Tested:\s*(\S+)', out)]
+    if not vals:
+        return None
+    # 最强信号优先: 任一 pass 即视为 pass (rebase/squash 保留了任一子提交的 pass 就不被 none 顶掉)
+    if any(v.startswith("pass") for v in vals):
+        return "pass"
+    if any(v.startswith("fail") for v in vals):
+        return "fail"
+    return vals[0]
 
 
 def _read_lines(path: str) -> list[str] | None:
@@ -303,7 +332,8 @@ def resolve_mode(cfg: dict, force_soft: bool) -> tuple[str, str]:
 
 
 def check(diff_text: str, evidence: list[dict], cfg: dict,
-          trailer: str | None = None) -> tuple[list[str], list[dict]]:
+          trailer: str | None = None,
+          status_map: dict | None = None) -> tuple[list[str], list[dict]]:
     """
     返回 (硬错误列表, 未测文件违规列表)。
     硬错误: 失败的测试记录 (无条件拦)。
@@ -329,6 +359,11 @@ def check(diff_text: str, evidence: list[dict], cfg: dict,
 
     # 2. 收集本次 diff 的文件
     files = changed_files(diff_text)
+    # rename(R)/copy(C) 不要求测试(只是移动他人代码); squash 后端点无差异的历史文件也剔除
+    if status_map is not None:
+        renamed = {f for f, st in status_map.items() if st in ("R", "C")}
+        endpoint = set(status_map.keys())  # 二点端点真实改动集
+        files = {f for f in files if f in endpoint and f not in renamed}
     prod_files = [
         f for f in files
         if os.path.splitext(f)[1].lower() in PROD_EXTENSIONS and not is_test_file(f)
@@ -417,6 +452,7 @@ def main() -> int:
             diff_text = f.read()
     else:
         diff_text = get_diff(args.diff_base, args.staged)
+        status_map = changed_prod_status(args.diff_base, args.staged)
 
     if not diff_text.strip():
         print("[check-tested] diff 为空, 无需检查。")
@@ -427,7 +463,8 @@ def main() -> int:
     trailer = None
     if not evidence and not args.diff_file:
         trailer = read_tested_trailer(args.diff_base)
-    hard_errors, violations = check(diff_text, evidence, cfg, trailer)
+    hard_errors, violations = check(diff_text, evidence, cfg, trailer,
+                                    status_map=locals().get("status_map"))
     mode, mode_why = resolve_mode(cfg, args.soft)
 
     # 失败测试记录: 无条件硬拦 (不受软模式影响 —— 带红测试提交永远不允许)
