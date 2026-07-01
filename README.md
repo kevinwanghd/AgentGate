@@ -191,7 +191,6 @@ testing:
 
 ## 🎓 实战案例
 
-- **UseGEO** (GitHub 私有仓库) — 中心化形态,4 个 job 自动跑,软门禁
 - **AgentGate 自己** — 用自己管自己(dogfooding),5 个 job + 分支保护,硬门禁
 
 ---
@@ -236,7 +235,3 @@ MIT License - 详见 [LICENSE](LICENSE)
 ---
 
 ## 🙏 致谢
-
-本项目基于 AI 辅助开发完成,使用 Claude Opus 4.8 作为核心开发工具。
-
-**Co-Authored-By**: Claude Opus 4.8 (1M context)
