@@ -40,6 +40,8 @@ import re
 import subprocess
 import sys
 
+from governance_common import ConfigError, load_config as load_shared_config
+
 try:
     import yaml  # type: ignore
     _HAS_YAML = True
@@ -69,22 +71,7 @@ AI_USAGE_VALUES = {"none", "light", "medium", "heavy", "used"}
 # 配置
 # ============================================================
 def load_config(path: str | None) -> dict:
-    if not path:
-        for cand in ("governance.config.yml", "governance.config.yaml"):
-            if os.path.isfile(cand):
-                path = cand
-                break
-    if not path or not os.path.isfile(path) or not _HAS_YAML:
-        return DEFAULT_CONFIG
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-    except Exception:  # pragma: no cover
-        return DEFAULT_CONFIG
-    merged = {**DEFAULT_CONFIG, **data}
-    merged["metadata"] = {**DEFAULT_CONFIG["metadata"], **(data.get("metadata") or {})}
-    merged["large_change"] = {**DEFAULT_CONFIG["large_change"], **(data.get("large_change") or {})}
-    return merged
+    return load_shared_config(path, DEFAULT_CONFIG, ("metadata", "large_change"))
 
 
 # ============================================================
@@ -156,6 +143,7 @@ def find_ai_usage_in_commits(diff_base: str | None) -> tuple[bool, str | None]:
         out = subprocess.run(
             ["git", "log", f"{base}..HEAD", "--format=%B"],
             check=True, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
         ).stdout
     except Exception:
         return (False, None)
@@ -190,6 +178,7 @@ def detect_large_change(cfg: dict, diff_base: str | None) -> tuple[bool, list[st
         out = subprocess.run(
             ["git", "diff", "--numstat", f"{base}...HEAD"],
             check=True, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
         ).stdout
     except Exception:
         return (False, [])
@@ -302,7 +291,11 @@ def main() -> int:
     ap.add_argument("--soft", action="store_true", help="强制软模式 (仅警告)")
     args = ap.parse_args()
 
-    cfg = load_config(args.config)
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as exc:
+        sys.stderr.write(f"[validate-mr] 配置错误: {exc}\n")
+        return 2
     text = read_description(args.file)
 
     if not text.strip():

@@ -33,6 +33,8 @@ import re
 import subprocess
 import sys
 
+from governance_common import repository_state
+
 EVIDENCE_PATH = ".governance/test-evidence.jsonl"
 
 # 从常见测试框架输出里解析通过/失败数。保守: 解析不到就留 None, 不瞎猜。
@@ -92,7 +94,7 @@ def main() -> int:
     sys.stderr.write(f"[record-test] 运行: {' '.join(cmd)}\n")
     # 实时透传输出, 同时捕获用于解析
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True)
+        proc = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
     except FileNotFoundError:
         sys.stderr.write(f"[record-test] 找不到命令: {cmd[0]}\n")
         return 127
@@ -115,6 +117,7 @@ def main() -> int:
         "failed": counts["failed"] if counts["failed"] is not None
                   else (0 if proc.returncode == 0 else -1),
         "covers": covers,
+        "git_state": repository_state(),
     }
     if args.tool:
         record["tool"] = args.tool

@@ -76,7 +76,8 @@ SCAN_EXTENSIONS = {
 def run_git(args: list[str]) -> str:
     try:
         return subprocess.run(
-            ["git", *args], check=True, capture_output=True, text=True
+            ["git", *args], check=True, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
         ).stdout
     except FileNotFoundError:
         sys.stderr.write("[ai-usage] 找不到 git\n")

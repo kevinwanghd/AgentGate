@@ -277,6 +277,7 @@ fi
 
 # ---------- 4. 扫描脚本 ----------
 log "安装扫描脚本 -> governance/scripts/"
+fetch_or_local "scripts/governance_common.py" | write_file "governance/scripts/governance_common.py"
 fetch_or_local "scripts/scan_risks.py"      | write_file "governance/scripts/scan_risks.py"
 fetch_or_local "scripts/validate_mr.py"     | write_file "governance/scripts/validate_mr.py"
 fetch_or_local "scripts/report_expired.py"  | write_file "governance/scripts/report_expired.py"
@@ -322,7 +323,7 @@ governance:risk-scan:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH
   before_script:
-    - pip install -q pyyaml
+    - pip install -q pyyaml==6.0.3
   script:
     - |
       # 用目标分支最新 tip 作 base (而非 MR 创建时的旧快照), 否则 merge 进来的
@@ -337,7 +338,7 @@ governance:risk-scan:
 governance:secret-scan:
   stage: governance
   image:
-    name: zricethezav/gitleaks:latest
+    name: zricethezav/gitleaks:v8.30.1
     entrypoint: [""]
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -366,7 +367,7 @@ governance:mr-validate:
   variables:
     GIT_DEPTH: 0          # 需完整历史以读取 commit 里的 AI-Usage trailer
   before_script:
-    - pip install -q pyyaml
+    - pip install -q pyyaml==6.0.3
   script:
     - |
       TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
@@ -388,7 +389,7 @@ governance:test-check:
   variables:
     GIT_DEPTH: 0          # 需完整历史以读取 commit 里的 Tested: trailer
   before_script:
-    - pip install -q pyyaml
+    - pip install -q pyyaml==6.0.3
   script:
     - |
       TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
@@ -411,7 +412,7 @@ governance:expired-report:
       when: manual
       allow_failure: true
   before_script:
-    - pip install -q pyyaml
+    - pip install -q pyyaml==6.0.3
   script:
     - |
       python governance/scripts/report_expired.py \
