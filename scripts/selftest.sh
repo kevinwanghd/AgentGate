@@ -10,6 +10,23 @@
 #
 set -uo pipefail
 
+PYTHON_BIN="${AGENTGATE_PYTHON:-}"
+if [[ -z "$PYTHON_BIN" ]]; then
+  for candidate in python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1 \
+       && "$candidate" -c 'import sys' >/dev/null 2>&1; then
+      PYTHON_BIN="$(command -v "$candidate")"
+      break
+    fi
+  done
+fi
+if [[ -z "$PYTHON_BIN" ]]; then
+  echo "[selftest] 找不到 python3 或 python" >&2
+  exit 2
+fi
+python3() { "$PYTHON_BIN" "$@"; }
+BASH_BIN="$(command -v bash)"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCAN="${SCRIPT_DIR}/scan_risks.py"
 VAL="${SCRIPT_DIR}/validate_mr.py"
@@ -82,6 +99,7 @@ cat > Good.cs <<EOF
 public class S {
     bool C(string adminUserId) {
         // risk:auth-bypass reason:"机器人账号用于数据同步无人工登录" owner:@team reviewed:$TODAY
+        // risk:magic-id reason:"机器人账号标识由外部系统固定分配" owner:@team reviewed:$TODAY
         if (adminUserId == "626786582b50ab8ec08b0fa0") { return true; }
         return false;
     }
@@ -110,6 +128,7 @@ cat > Exp.cs <<EOF
 public class S {
     bool C(string userId) {
         // risk:auth-bypass reason:"机器人账号同步数据无需人工登录" owner:@team reviewed:2020-01-01
+        // risk:magic-id reason:"机器人账号标识由外部系统固定分配" owner:@team reviewed:2020-01-01
         if (userId == "626786582b50ab8ec08b0fa0") { return true; }
         return false;
     }
@@ -316,7 +335,7 @@ mkdir -p ct_dir/.governance ct_dir/src ct_dir/tests
 # 改动生产代码, 无测试痕迹, 软模式 -> WARN exit0
 echo "public class Foo { public int Bar()=>1; }" > ct_dir/src/Foo.cs
 ( cd ct_dir && git add src/Foo.cs && git diff --cached --unified=0 --no-color > d.diff )
-python3 "$CHECK" --diff-file ct_dir/d.diff --evidence ct_dir/.governance/test-evidence.jsonl --soft >/dev/null 2>&1
+( cd ct_dir && python3 "$CHECK" --diff-file d.diff --evidence .governance/test-evidence.jsonl --soft ) >/dev/null 2>&1
 expect "改生产码无测试软模式WARN(exit0)" 0 $?
 
 # risk:untested 注解豁免 -> 放行
@@ -326,7 +345,7 @@ public class Foo { public int Bar()=>1; }
 EOF
 sed -i "s/TODAY_PLACEHOLDER/${TODAY}/" ct_dir/src/Foo.cs
 ( cd ct_dir && git add src/Foo.cs && git diff --cached --unified=0 --no-color > d.diff )
-python3 "$CHECK" --diff-file ct_dir/d.diff --evidence ct_dir/.governance/test-evidence.jsonl >/dev/null 2>&1
+( cd ct_dir && python3 "$CHECK" --diff-file d.diff --evidence .governance/test-evidence.jsonl ) >/dev/null 2>&1
 expect "risk:untested注解豁免放行" 0 $?
 
 # record_test_run 跑全绿 + 改测试文件 -> 放行
@@ -335,27 +354,28 @@ public class Foo { public int Bar()=>1; }
 EOF
 echo "public class FooTests { public void T(){} }" > ct_dir/tests/FooTests.cs
 ( cd ct_dir && git add src/Foo.cs tests/FooTests.cs && git diff --cached --unified=0 --no-color > d.diff )
-( cd ct_dir && python3 "$RECORD" -- bash -c 'echo "Passed!  - Failed: 0, Passed: 5"' ) >/dev/null 2>&1
-python3 "$CHECK" --diff-file ct_dir/d.diff --evidence ct_dir/.governance/test-evidence.jsonl >/dev/null 2>&1
+( cd ct_dir && python3 "$RECORD" -- "$BASH_BIN" -c 'echo "Passed!  - Failed: 0, Passed: 5"' ) >/dev/null 2>&1
+( cd ct_dir && python3 "$CHECK" --diff-file d.diff --evidence .governance/test-evidence.jsonl ) >/dev/null 2>&1
 expect "全绿记录+改测试文件放行" 0 $?
 
 # 失败测试记录 -> 无条件硬拦 exit1
-( cd ct_dir && python3 "$RECORD" -- bash -c 'echo "Failed: 2, Passed: 3"; exit 1' ) >/dev/null 2>&1
-python3 "$CHECK" --diff-file ct_dir/d.diff --evidence ct_dir/.governance/test-evidence.jsonl >/dev/null 2>&1
+( cd ct_dir && python3 "$RECORD" -- "$BASH_BIN" -c 'echo "Failed: 2, Passed: 3"; exit 1' ) >/dev/null 2>&1
+( cd ct_dir && python3 "$CHECK" --diff-file d.diff --evidence .governance/test-evidence.jsonl ) >/dev/null 2>&1
 expect "失败测试记录硬拦(exit1)" 1 $?
 
 # 同命令修复后全绿 -> 不再硬拦 (只看每命令最新)
-( cd ct_dir && python3 "$RECORD" -- bash -c 'echo "Failed: 2, Passed: 3"; exit 1' ) >/dev/null 2>&1
+( cd ct_dir && python3 "$RECORD" -- "$BASH_BIN" -c 'echo "Failed: 2, Passed: 3"; exit 1' ) >/dev/null 2>&1
 sleep 1
 # 注意: record 用相同 cmd 文本, 最新一条覆盖旧的失败
+CURRENT_STATE="$(cd ct_dir && PYTHONPATH="$SCRIPT_DIR" python3 -c 'from governance_common import repository_state; print(repository_state())')"
 cat >> ct_dir/.governance/test-evidence.jsonl <<EOF
-{"ts":"2099-01-01T00:00:00Z","cmd":"bash -c echo \\"Failed: 2, Passed: 3\\"; exit 1","exit_code":0,"total":5,"passed":5,"failed":0,"covers":[]}
+{"ts":"2099-01-01T00:00:00Z","cmd":"bash -c echo \\"Failed: 2, Passed: 3\\"; exit 1","exit_code":0,"total":5,"passed":5,"failed":0,"covers":[],"git_state":"${CURRENT_STATE}"}
 EOF
 python3 "$CHECK" --diff-file ct_dir/d.diff --evidence ct_dir/.governance/test-evidence.jsonl >/dev/null 2>&1
 expect "同命令修复后全绿不再硬拦" 0 $?
 
 # record_test_run 透传退出码: 被包装命令失败则脚本也非0
-( cd ct_dir && python3 "$RECORD" -- bash -c 'exit 3' ) >/dev/null 2>&1
+( cd ct_dir && python3 "$RECORD" -- "$BASH_BIN" -c 'exit 3' ) >/dev/null 2>&1
 expect "record_test_run 透传退出码" 3 $?
 
 # == check_tested.py × Tested trailer (CI 退路) ==
@@ -397,8 +417,9 @@ printf 'public class PayTests { public void T(){} }\n' > mr_dir/tests/PayTests.c
 AI-Usage: medium
 AI-Tools: claude-code
 Tested: pass (15/15)" )
-cat > mr_dir/.governance/test-evidence.jsonl <<'EOF'
-{"ts":"2026-06-26T12:00:00Z","cmd":"dotnet test","exit_code":0,"total":15,"passed":15,"failed":0,"covers":[]}
+MR_STATE="$(cd mr_dir && PYTHONPATH="$SCRIPT_DIR" python3 -c 'from governance_common import repository_state; print(repository_state())')"
+cat > mr_dir/.governance/test-evidence.jsonl <<EOF
+{"ts":"2026-06-26T12:00:00Z","cmd":"dotnet test","exit_code":0,"total":15,"passed":15,"failed":0,"covers":[],"git_state":"${MR_STATE}"}
 EOF
 
 # dry-run 生成描述, 退出 0
@@ -667,6 +688,27 @@ risk_annotations:
 CFG
   python3 "$SCANP" --diff-file s.diff --config cfg.yml >/dev/null 2>&1 )
 expect "扫描器脚本目录豁免(不自指误报)" 0 $?
+
+# 已有 prepare-commit-msg 必须被链式调用, 不能只备份后弃用
+echo
+echo "== install-hooks.sh =="
+HOOK_REPO="$(mktemp -d)"
+HOOK_INSTALL="${SCRIPT_DIR}/install-hooks.sh"
+(
+  cd "$HOOK_REPO"
+  git init -q
+  mkdir -p .git/hooks
+  cat > .git/hooks/prepare-commit-msg <<'LEGACY'
+#!/usr/bin/env bash
+printf 'legacy-called\n' > "${1}.legacy"
+LEGACY
+  chmod +x .git/hooks/prepare-commit-msg
+  bash "$HOOK_INSTALL" >/dev/null
+  printf 'subject\n' > message.txt
+  .git/hooks/prepare-commit-msg message.txt
+  test -f message.txt.legacy
+)
+expect "安装后继续调用已有 prepare-commit-msg" 0 $?
 
 echo "============================================"
 echo " 通过 $PASS / 失败 $FAIL"

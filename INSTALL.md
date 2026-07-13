@@ -10,7 +10,7 @@
 |---|---|
 | **操作系统** | Windows / Linux / macOS |
 | **Git** | 2.0+ (用于 hook 和 diff 分析) |
-| **Python** | 3.8+ (运行扫描脚本) |
+| **Python** | 3.10+ (运行扫描脚本) |
 | **Bash** | Windows 用 Git Bash,Linux/macOS 自带 |
 
 ### Windows 用户注意

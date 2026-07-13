@@ -16,6 +16,8 @@ import os
 import re
 import sys
 
+from governance_common import ConfigError, load_config as load_shared_config
+
 try:
     import yaml  # type: ignore
     _HAS_YAML = True
@@ -53,19 +55,15 @@ _BLOCK_RE = re.compile(
 
 
 def load_max_age(config_path: str | None) -> int:
-    if not config_path:
-        for cand in ("governance.config.yml", "governance.config.yaml"):
-            if os.path.isfile(cand):
-                config_path = cand
-                break
-    if not config_path or not os.path.isfile(config_path) or not _HAS_YAML:
-        return DEFAULT_MAX_AGE
+    cfg = load_shared_config(
+        config_path,
+        {"risk_annotations": {"reviewed_max_age_days": DEFAULT_MAX_AGE}},
+        ("risk_annotations",),
+    )
     try:
-        with open(config_path, encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-        return int(data.get("risk_annotations", {}).get("reviewed_max_age_days", DEFAULT_MAX_AGE))
-    except Exception:
-        return DEFAULT_MAX_AGE
+        return int(cfg["risk_annotations"]["reviewed_max_age_days"])
+    except (TypeError, ValueError) as exc:
+        raise ConfigError("risk_annotations.reviewed_max_age_days 必须是整数") from exc
 
 
 def scan_file(path: str) -> list[dict]:
@@ -200,7 +198,11 @@ def main() -> int:
                     help="有过期注解时返回退出码 1 (默认仅报告)")
     args = ap.parse_args()
 
-    max_age = load_max_age(args.config)
+    try:
+        max_age = load_max_age(args.config)
+    except ConfigError as exc:
+        sys.stderr.write(f"[report-expired] 配置错误: {exc}\n")
+        return 2
     buckets = collect(args.root, max_age)
     report = render(buckets, max_age)
 

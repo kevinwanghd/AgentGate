@@ -54,17 +54,22 @@ ok "AgentGate 脚本就绪 ($AGENTGATE_HOME/scripts)"
 # 不在本仓库, 所以这里直接装一个指向缓存目录的 hook。
 HOOK_DIR="${REPO_ROOT}/.git/hooks"
 HOOK_FILE="${HOOK_DIR}/prepare-commit-msg"
+PREVIOUS_HOOK="${HOOK_FILE}.agentgate-previous"
 mkdir -p "$HOOK_DIR"
 
 if [[ -f "$HOOK_FILE" ]] && ! grep -q "agentgate:local" "$HOOK_FILE" 2>/dev/null; then
-  cp -a "$HOOK_FILE" "${HOOK_FILE}.bak.$(date +%s)"
-  warn "已备份原有 prepare-commit-msg"
+  cp -a "$HOOK_FILE" "$PREVIOUS_HOOK"
+  warn "已保留原有 prepare-commit-msg, 安装后将继续调用"
 fi
 
 cat > "$HOOK_FILE" <<HOOK
 #!/usr/bin/env bash
 # agentgate:local — 提交时自动写 AI-Usage / Tested trailer (中心化缓存脚本)
 COMMIT_MSG_FILE="\$1"; COMMIT_SOURCE="\${2:-}"
+LEGACY_HOOK="\${0}.agentgate-previous"
+if [ -x "\$LEGACY_HOOK" ]; then
+  "\$LEGACY_HOOK" "\$@" || exit \$?
+fi
 case "\$COMMIT_SOURCE" in merge|squash) exit 0 ;; esac
 AG="${AGENTGATE_HOME}/scripts"
 PY="\$(command -v python3 || command -v python || true)"

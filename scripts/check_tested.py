@@ -41,6 +41,8 @@ import re
 import subprocess
 import sys
 
+from governance_common import ConfigError, load_config as load_shared_config, repository_state
+
 try:
     import yaml  # type: ignore
     _HAS_YAML = True
@@ -104,21 +106,7 @@ _UNTESTED_INLINE_RE = re.compile(
 # 配置
 # ============================================================
 def load_config(path: str | None) -> dict:
-    if not path:
-        for cand in ("governance.config.yml", "governance.config.yaml"):
-            if os.path.isfile(cand):
-                path = cand
-                break
-    if not path or not os.path.isfile(path) or not _HAS_YAML:
-        return DEFAULT_CONFIG
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-    except Exception:  # pragma: no cover
-        return DEFAULT_CONFIG
-    merged = {**DEFAULT_CONFIG, **data}
-    merged["testing"] = {**DEFAULT_CONFIG["testing"], **(data.get("testing") or {})}
-    return merged
+    return load_shared_config(path, DEFAULT_CONFIG, ("testing",))
 
 
 # ============================================================
@@ -127,7 +115,8 @@ def load_config(path: str | None) -> dict:
 def run_git(args: list[str]) -> str:
     try:
         return subprocess.run(
-            ["git", *args], check=True, capture_output=True, text=True
+            ["git", *args], check=True, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
         ).stdout
     except FileNotFoundError:
         sys.stderr.write("[check-tested] 找不到 git\n")
@@ -225,6 +214,10 @@ def _latest_per_cmd(evidence: list[dict]) -> list[dict]:
     return list(latest.values())
 
 
+def filter_evidence_for_state(evidence: list[dict], state: str) -> list[dict]:
+    return [record for record in evidence if record.get("git_state") == state]
+
+
 def summarize_for_trailer(evidence: list[dict]) -> str:
     """把证据汇总成一行 Tested: trailer 值。供提交 hook 写入 commit。"""
     eff = _latest_per_cmd(evidence)
@@ -256,17 +249,19 @@ def read_tested_trailer(diff_base: str | None) -> str | None:
         out = subprocess.run(
             ["git", "log", f"{base}..HEAD", "--format=%B"],
             check=True, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
         ).stdout
     except Exception:
         return None
     vals = [m.group(1).lower() for m in re.finditer(r'(?im)^Tested:\s*(\S+)', out)]
     if not vals:
         return None
-    # 最强信号优先: 任一 pass 即视为 pass (rebase/squash 保留了任一子提交的 pass 就不被 none 顶掉)
-    if any(v.startswith("pass") for v in vals):
-        return "pass"
+    # 失败信号必须优先。否则一个无关提交的 pass 会掩盖区间内的 fail，
+    # 与“失败测试无条件硬拦”的门禁语义冲突。
     if any(v.startswith("fail") for v in vals):
         return "fail"
+    if any(v.startswith("pass") for v in vals):
+        return "pass"
     return vals[0]
 
 
@@ -405,9 +400,6 @@ def check(diff_text: str, evidence: list[dict], cfg: dict,
         # A. 有全绿记录 + 本次改了测试文件 (双重信号)
         if green_runs and touched_test_file:
             continue
-        # A. 有全绿记录 + 本次改了测试文件 (双重信号)
-        if green_runs and touched_test_file:
-            continue
         # A'. CI 退路: commit Tested: trailer 标记 pass + 本次改了测试文件
         if trailer_pass and touched_test_file:
             continue
@@ -439,11 +431,21 @@ def main() -> int:
                     help="只输出 Tested: trailer 值 (供提交 hook 写入 commit), 不做检查")
     args = ap.parse_args()
 
-    cfg = load_config(args.config)
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as exc:
+        sys.stderr.write(f"[check-tested] 配置错误: {exc}\n")
+        return 2
 
     # 提交 hook 用: 把本地证据汇总成一行 Tested: trailer
     if args.emit_trailer:
         evidence = load_evidence(args.evidence)
+        if evidence:
+            try:
+                evidence = filter_evidence_for_state(evidence, repository_state())
+            except RuntimeError as exc:
+                sys.stderr.write(f"[check-tested] {exc}\n")
+                return 2
         print(f"Tested: {summarize_for_trailer(evidence)}")
         return 0
 
@@ -459,6 +461,12 @@ def main() -> int:
         return 0
 
     evidence = load_evidence(args.evidence)
+    if evidence:
+        try:
+            evidence = filter_evidence_for_state(evidence, repository_state())
+        except RuntimeError as exc:
+            sys.stderr.write(f"[check-tested] {exc}\n")
+            return 2
     # 本地无证据 (CI 场景) 时, 退回读 commit 的 Tested: trailer
     trailer = None
     if not evidence and not args.diff_file:

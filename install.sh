@@ -115,13 +115,33 @@ esac
 # Claude Code / Kiro
 if [[ "$AGENTS" == "all" || "$AGENTS" == "claude" ]]; then
   if [[ -e "${TARGET_DIR}/CLAUDE.md" ]]; then
-    warn "CLAUDE.md 已存在, 追加治理规范 section 而非覆盖"
-    {
-      printf '\n\n---\n<!-- governance-v1-begin -->\n'
-      fetch_or_local "agent-instructions/CLAUDE.md"
-      printf '\n<!-- governance-v1-end -->\n'
-    } >> "${TARGET_DIR}/CLAUDE.md"
-    ok "追加 governance 规范到 CLAUDE.md"
+    if grep -q '<!-- governance-v1-begin -->' "${TARGET_DIR}/CLAUDE.md"; then
+      section_tmp="$(mktemp)"
+      output_tmp="$(mktemp)"
+      fetch_or_local "agent-instructions/CLAUDE.md" > "$section_tmp"
+      awk -v section="$section_tmp" '
+        /<!-- governance-v1-begin -->/ {
+          print
+          while ((getline line < section) > 0) print line
+          close(section)
+          replacing=1
+          next
+        }
+        /<!-- governance-v1-end -->/ && replacing { replacing=0; print; next }
+        !replacing { print }
+      ' "${TARGET_DIR}/CLAUDE.md" > "$output_tmp"
+      cat "$output_tmp" > "${TARGET_DIR}/CLAUDE.md"
+      rm -f "$section_tmp" "$output_tmp"
+      ok "更新 CLAUDE.md 中已有的 governance 规范"
+    else
+      warn "CLAUDE.md 已存在, 追加治理规范 section 而非覆盖"
+      {
+        printf '\n\n---\n<!-- governance-v1-begin -->\n'
+        fetch_or_local "agent-instructions/CLAUDE.md"
+        printf '\n<!-- governance-v1-end -->\n'
+      } >> "${TARGET_DIR}/CLAUDE.md"
+      ok "追加 governance 规范到 CLAUDE.md"
+    fi
   else
     fetch_or_local "agent-instructions/CLAUDE.md" | write_file "CLAUDE.md"
   fi
@@ -277,6 +297,7 @@ fi
 
 # ---------- 4. 扫描脚本 ----------
 log "安装扫描脚本 -> governance/scripts/"
+fetch_or_local "scripts/governance_common.py" | write_file "governance/scripts/governance_common.py"
 fetch_or_local "scripts/scan_risks.py"      | write_file "governance/scripts/scan_risks.py"
 fetch_or_local "scripts/validate_mr.py"     | write_file "governance/scripts/validate_mr.py"
 fetch_or_local "scripts/report_expired.py"  | write_file "governance/scripts/report_expired.py"
@@ -322,7 +343,7 @@ governance:risk-scan:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH
   before_script:
-    - pip install -q pyyaml
+    - pip install -q pyyaml==6.0.3
   script:
     - |
       # 用目标分支最新 tip 作 base (而非 MR 创建时的旧快照), 否则 merge 进来的
@@ -337,7 +358,7 @@ governance:risk-scan:
 governance:secret-scan:
   stage: governance
   image:
-    name: zricethezav/gitleaks:latest
+    name: zricethezav/gitleaks:v8.30.1
     entrypoint: [""]
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -366,7 +387,7 @@ governance:mr-validate:
   variables:
     GIT_DEPTH: 0          # 需完整历史以读取 commit 里的 AI-Usage trailer
   before_script:
-    - pip install -q pyyaml
+    - pip install -q pyyaml==6.0.3
   script:
     - |
       TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
@@ -388,7 +409,7 @@ governance:test-check:
   variables:
     GIT_DEPTH: 0          # 需完整历史以读取 commit 里的 Tested: trailer
   before_script:
-    - pip install -q pyyaml
+    - pip install -q pyyaml==6.0.3
   script:
     - |
       TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
@@ -411,7 +432,7 @@ governance:expired-report:
       when: manual
       allow_failure: true
   before_script:
-    - pip install -q pyyaml
+    - pip install -q pyyaml==6.0.3
   script:
     - |
       python governance/scripts/report_expired.py \

@@ -41,6 +41,8 @@ import subprocess
 import sys
 import tempfile
 
+from governance_common import ConfigError, load_config as load_shared_config, repository_state
+
 try:
     import yaml  # type: ignore
     _HAS_YAML = True
@@ -75,25 +77,9 @@ _NOISE_PATTERNS = ["*.lock", "**/*.generated.*", "*.Designer.cs"]
 # 配置
 # ============================================================
 def load_config(path: str | None) -> dict:
-    if not path:
-        for cand in ("governance.config.yml", "governance.config.yaml"):
-            if os.path.isfile(cand):
-                path = cand
-                break
-    if not path or not os.path.isfile(path) or not _HAS_YAML:
-        return DEFAULT_CONFIG
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-    except Exception:  # pragma: no cover
-        return DEFAULT_CONFIG
-    merged = {**DEFAULT_CONFIG, **data}
-    merged["large_change"] = {**DEFAULT_CONFIG["large_change"], **(data.get("large_change") or {})}
-    merged["deliverhq_integration"] = {
-        **DEFAULT_CONFIG["deliverhq_integration"],
-        **(data.get("deliverhq_integration") or {}),
-    }
-    return merged
+    return load_shared_config(
+        path, DEFAULT_CONFIG, ("large_change", "deliverhq_integration")
+    )
 
 
 # ============================================================
@@ -101,8 +87,10 @@ def load_config(path: str | None) -> dict:
 # ============================================================
 def run_git(args: list[str], check: bool = True) -> str:
     try:
-        r = subprocess.run(["git", *args], capture_output=True, text=True,
-                           check=check)
+        r = subprocess.run(
+            ["git", *args], capture_output=True, text=True, check=check,
+            encoding="utf-8", errors="replace",
+        )
         return r.stdout
     except FileNotFoundError:
         sys.stderr.write("[create-mr] 找不到 git\n")
@@ -287,7 +275,8 @@ def gen_tested(evidence_path: str) -> str:
                 "- [ ] 单元测试通过：`命令`\n"
                 "  <!-- 未找到 .governance/test-evidence.jsonl, "
                 "建议用 record_test_run.py 跑测试留痕 -->")
-    # 每条命令取最新结果
+    current_state = repository_state()
+    # 每条命令取当前代码状态对应的最新结果
     latest: dict[str, dict] = {}
     with open(evidence_path, encoding="utf-8") as f:
         for line in f:
@@ -297,6 +286,8 @@ def gen_tested(evidence_path: str) -> str:
             try:
                 r = json.loads(line)
             except json.JSONDecodeError:
+                continue
+            if r.get("git_state") != current_state:
                 continue
             cmd = r.get("cmd", "")
             if cmd not in latest or str(r.get("ts", "")) >= str(latest[cmd].get("ts", "")):
@@ -484,7 +475,11 @@ def main() -> int:
                     help="生成草稿后打开编辑器, 保存后再提交")
     args = ap.parse_args()
 
-    cfg = load_config(args.config)
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as exc:
+        sys.stderr.write(f"[create-mr] 配置错误: {exc}\n")
+        return 2
 
     # --- 分层确定背景 (## 背景) ---
     # 优先级: 显式 --why > DeliverHQ 需求文档 > 报错要求 --why
@@ -516,7 +511,11 @@ def main() -> int:
     if req_link:
         args.link = (args.link or []) + [req_link]
 
-    description = build_description(args, cfg)
+    try:
+        description = build_description(args, cfg)
+    except RuntimeError as exc:
+        sys.stderr.write(f"[create-mr] {exc}\n")
+        return 2
     title = infer_title(args, args.target_branch)
 
     if args.interactive:

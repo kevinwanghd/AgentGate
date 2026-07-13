@@ -24,6 +24,8 @@ import re
 import subprocess
 import sys
 
+from governance_common import ConfigError, load_config as load_shared_config
+
 # ---------- 可选依赖 pyyaml, 缺失时退化为内置默认 ----------
 try:
     import yaml  # type: ignore
@@ -195,7 +197,10 @@ def build_custom_patterns(cfg: dict) -> list:
         try:
             out.append((t, re.compile(rx), desc))
         except re.error as e:
-            sys.stderr.write(f"[scan-risks] custom_pattern {t} regex invalid, skipped: {e}\n")
+            message = f"custom_pattern {t} regex invalid: {e}"
+            if str(ra.get("enforcement", "soft")).lower() == "hard":
+                raise ConfigError(message)
+            sys.stderr.write(f"[scan-risks] {message}, skipped\n")
     return out
 
 
@@ -203,30 +208,7 @@ def build_custom_patterns(cfg: dict) -> list:
 # 配置加载
 # ============================================================
 def load_config(path: str | None) -> dict:
-    if not path:
-        # 尝试默认位置
-        for cand in ("governance.config.yml", "governance.config.yaml"):
-            if os.path.isfile(cand):
-                path = cand
-                break
-    if not path or not os.path.isfile(path):
-        return DEFAULT_CONFIG
-    if not _HAS_YAML:
-        sys.stderr.write(
-            "[scan-risks] 警告: 未安装 pyyaml, 忽略 config 文件, 使用内置默认。\n"
-        )
-        return DEFAULT_CONFIG
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-    except Exception as e:  # pragma: no cover
-        sys.stderr.write(f"[scan-risks] 警告: 解析 {path} 失败 ({e}), 使用默认。\n")
-        return DEFAULT_CONFIG
-    # 合并: config 缺失字段用默认补齐
-    merged = {**DEFAULT_CONFIG, **data}
-    ra = {**DEFAULT_CONFIG["risk_annotations"], **(data.get("risk_annotations") or {})}
-    merged["risk_annotations"] = ra
-    return merged
+    return load_shared_config(path, DEFAULT_CONFIG, ("risk_annotations",))
 
 
 # ============================================================
@@ -237,6 +219,7 @@ def run_git(args: list[str]) -> str:
         out = subprocess.run(
             ["git", *args],
             check=True, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
         )
         return out.stdout
     except FileNotFoundError:
@@ -395,17 +378,24 @@ def find_annotation(
     window = lines[start:end]
     window_text = "\n".join(window)
 
-    # 先试单行格式
-    m = _RISK_INLINE_RE.search(window_text)
-    if m:
-        problems = _validate_annotation_fields(
-            m.group("type").lower(),
-            m.group("reason"),
-            m.group("reviewed"),
-            expected_types,
-            cfg,
-        )
-        return (len(problems) == 0, problems)
+    # 每个命中类型都必须由一条对应注解覆盖。
+    matches = list(_RISK_INLINE_RE.finditer(window_text))
+    if matches:
+        covered: set[str] = set()
+        problems: list[str] = []
+        for m in matches:
+            risk_type = m.group("type").lower()
+            current = _validate_annotation_fields(
+                risk_type, m.group("reason"), m.group("reviewed"), expected_types, cfg
+            )
+            if not current or all(p.startswith("[warn]") for p in current):
+                covered.add(risk_type)
+            else:
+                problems.extend(current)
+        missing = expected_types - covered
+        if missing:
+            problems.append(f'缺少风险类型注解: {", ".join(sorted(missing))}')
+        return (not problems, problems)
 
     # 再试多行块 risk-begin ... risk-end
     if "risk-begin" in window_text and "risk-end" in window_text:
@@ -458,22 +448,26 @@ def check_test_removal(diff_text: str, cfg: dict) -> list[str]:
         l[1:] for l in diff_text.splitlines()
         if l.startswith("+") and not l.startswith("+++")
     )
-    m = re.search(
-        r'risk:\s*test-removal.*?reason:\s*"([^"]*)".*?owner:.*?reviewed:\s*\d{4}-\d{2}-\d{2}',
+    matches = list(re.finditer(
+        r'risk:\s*test-removal.*?reason:\s*"([^"]*)".*?owner:.*?reviewed:\s*(\d{4}-\d{2}-\d{2})',
         added_text, re.IGNORECASE | re.DOTALL,
-    )
-    if m:
-        reason = m.group(1)
+    ))
+    valid = 0
+    invalid: list[str] = []
+    for m in matches:
         probs = _validate_annotation_fields(
-            "test-removal", reason, _today_iso(), {"test-removal"}, cfg,
+            "test-removal", m.group(1), m.group(2), {"test-removal"}, cfg,
         )
-        # reviewed 这里不强校验日期 (用今天占位), 只校验 reason
-        probs = [p for p in probs if "reviewed" not in p]
-        if not probs:
-            return []
-        return [f"删除了 {len(removed_tests)} 个测试, test-removal 注解无效: {'; '.join(probs)}"]
+        if probs:
+            invalid.extend(probs)
+        else:
+            valid += 1
+    if valid >= len(removed_tests):
+        return []
+    detail = f"，另有无效注解: {'; '.join(invalid)}" if invalid else ""
     return [
-        f"删除了 {len(removed_tests)} 个测试声明, 但未找到合法的 risk:test-removal 注解"
+        f"删除了 {len(removed_tests)} 个测试，但只有 {valid} 条合法 test-removal 注解；"
+        f"每个被删除测试都必须单独说明{detail}"
     ]
 
 
@@ -523,11 +517,22 @@ def scan(diff_text: str, cfg: dict) -> list[dict]:
         # 路径豁免: 生成/引入/第三方代码整文件跳过
         if any(_path_matches(path, pat) for pat in exclude):
             continue
+        added_by_line = dict(added)
         for lineno, content in added:
+            # 从当前新增行开始匹配，并允许规则延伸到后续连续新增行。
+            # 上下文和旧代码不进入窗口，避免把继承风险误算成本次引入。
+            window = [content]
+            for offset in range(1, 5):
+                following = added_by_line.get(lineno + offset)
+                if following is None:
+                    break
+                window.append(following)
+            scan_text = "\n".join(window)
             # 收集该行命中的所有风险类型 (一行可能同时命中多个模式)
             hits: list[tuple[str, str]] = []  # (type, desc)
             for rtype, rx, desc in all_patterns:
-                if rx.search(content):
+                match = rx.search(scan_text)
+                if match and match.start() <= len(content):
                     hits.append((rtype, desc))
             if not hits:
                 continue
@@ -575,7 +580,11 @@ def main() -> int:
     ap.add_argument("--diff-file", help="从文件读取 diff (测试用)")
     args = ap.parse_args()
 
-    cfg = load_config(args.config)
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as exc:
+        sys.stderr.write(f"[scan-risks] 配置错误: {exc}\n")
+        return 2
 
     if args.diff_file:
         with open(args.diff_file, "r", encoding="utf-8") as f:
@@ -587,7 +596,11 @@ def main() -> int:
         print("[scan-risks] diff 为空, 无需扫描。")
         return 0
 
-    violations = scan(diff_text, cfg)
+    try:
+        violations = scan(diff_text, cfg)
+    except ConfigError as exc:
+        sys.stderr.write(f"[scan-risks] 配置错误: {exc}\n")
+        return 2
 
     if not violations:
         print("[scan-risks] PASS — 未发现缺注解的风险代码。")

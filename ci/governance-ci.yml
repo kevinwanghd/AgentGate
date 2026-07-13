@@ -26,14 +26,17 @@ governance:risk-scan:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH
   variables:
-    GOVERNANCE_CONFIG_PATH: ${GOVERNANCE_CONFIG_PATH:-governance/governance.config.yml}
+    GIT_DEPTH: 0
   before_script:
-    - pip install -q pyyaml
+    - pip install -q pyyaml==6.0.3
   script:
     - |
-      BASE="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-HEAD~1}"
+      TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
+      git fetch -q origin "$TB"
+      BASE="origin/$TB"
       CONFIG_ARG=""
-      [ -f "$GOVERNANCE_CONFIG_PATH" ] && CONFIG_ARG="--config $GOVERNANCE_CONFIG_PATH"
+      CONFIG_PATH="${GOVERNANCE_CONFIG_PATH:-governance/governance.config.yml}"
+      [ -f "$CONFIG_PATH" ] && CONFIG_ARG="--config $CONFIG_PATH"
       python governance/scripts/scan_risks.py --diff-base "$BASE" $CONFIG_ARG
   allow_failure: false
 
@@ -41,7 +44,7 @@ governance:risk-scan:
 governance:secret-scan:
   stage: governance
   image:
-    name: zricethezav/gitleaks:latest
+    name: zricethezav/gitleaks:v8.30.1
     entrypoint: [""]
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -50,7 +53,9 @@ governance:secret-scan:
     GIT_DEPTH: 0
   script:
     - |
-      BASE="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-HEAD~1}"
+      TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
+      git fetch -q origin "$TB"
+      BASE="origin/$TB"
       gitleaks detect \
         --source . \
         --log-opts="${BASE}..HEAD" \
@@ -68,10 +73,12 @@ governance:mr-validate:
   variables:
     GIT_DEPTH: 0          # 需完整历史以读取 commit 里的 AI-Usage trailer
   before_script:
-    - pip install -q pyyaml
+    - pip install -q pyyaml==6.0.3
   script:
     - |
-      BASE="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-HEAD~1}"
+      TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
+      git fetch -q origin "$TB"
+      BASE="origin/$TB"
       CONFIG_ARG=""
       [ -f "${GOVERNANCE_CONFIG_PATH:-governance/governance.config.yml}" ] \
         && CONFIG_ARG="--config ${GOVERNANCE_CONFIG_PATH:-governance/governance.config.yml}"
@@ -91,10 +98,12 @@ governance:test-check:
   variables:
     GIT_DEPTH: 0
   before_script:
-    - pip install -q pyyaml
+    - pip install -q pyyaml==6.0.3
   script:
     - |
-      BASE="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-HEAD~1}"
+      TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
+      git fetch -q origin "$TB"
+      BASE="origin/$TB"
       CONFIG_ARG=""
       [ -f "${GOVERNANCE_CONFIG_PATH:-governance/governance.config.yml}" ] \
         && CONFIG_ARG="--config ${GOVERNANCE_CONFIG_PATH:-governance/governance.config.yml}"
@@ -118,7 +127,7 @@ governance:expired-report:
       when: manual
       allow_failure: true
   before_script:
-    - pip install -q pyyaml
+    - pip install -q pyyaml==6.0.3
   script:
     - |
       OUTPUT="${GOVERNANCE_REPORT_OUTPUT:-governance/reports/expired-annotations.md}"

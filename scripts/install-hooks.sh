@@ -18,12 +18,13 @@ fi
 
 HOOK_DIR="${REPO_ROOT}/.git/hooks"
 HOOK_FILE="${HOOK_DIR}/prepare-commit-msg"
+PREVIOUS_HOOK="${HOOK_FILE}.agentgate-previous"
 mkdir -p "$HOOK_DIR"
 
 # 若已有同名 hook 且非本工具生成, 备份
 if [[ -f "$HOOK_FILE" ]] && ! grep -q "governance:ai-usage" "$HOOK_FILE" 2>/dev/null; then
-  cp -a "$HOOK_FILE" "${HOOK_FILE}.bak.$(date +%s)"
-  echo "[hooks] 已备份原有 prepare-commit-msg"
+  cp -a "$HOOK_FILE" "$PREVIOUS_HOOK"
+  echo "[hooks] 已保留原有 prepare-commit-msg, 安装后将继续调用"
 fi
 
 cat > "$HOOK_FILE" <<'HOOK'
@@ -32,6 +33,11 @@ cat > "$HOOK_FILE" <<'HOOK'
 # 由 governance/scripts/install-hooks.sh 生成, 勿手改。
 COMMIT_MSG_FILE="$1"
 COMMIT_SOURCE="${2:-}"
+
+LEGACY_HOOK="${0}.agentgate-previous"
+if [ -x "$LEGACY_HOOK" ]; then
+  "$LEGACY_HOOK" "$@" || exit $?
+fi
 
 # merge / squash / 已有 message 模板时跳过, 避免重复注入
 case "$COMMIT_SOURCE" in
