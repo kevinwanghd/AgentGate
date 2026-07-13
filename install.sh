@@ -115,13 +115,33 @@ esac
 # Claude Code / Kiro
 if [[ "$AGENTS" == "all" || "$AGENTS" == "claude" ]]; then
   if [[ -e "${TARGET_DIR}/CLAUDE.md" ]]; then
-    warn "CLAUDE.md 已存在, 追加治理规范 section 而非覆盖"
-    {
-      printf '\n\n---\n<!-- governance-v1-begin -->\n'
-      fetch_or_local "agent-instructions/CLAUDE.md"
-      printf '\n<!-- governance-v1-end -->\n'
-    } >> "${TARGET_DIR}/CLAUDE.md"
-    ok "追加 governance 规范到 CLAUDE.md"
+    if grep -q '<!-- governance-v1-begin -->' "${TARGET_DIR}/CLAUDE.md"; then
+      section_tmp="$(mktemp)"
+      output_tmp="$(mktemp)"
+      fetch_or_local "agent-instructions/CLAUDE.md" > "$section_tmp"
+      awk -v section="$section_tmp" '
+        /<!-- governance-v1-begin -->/ {
+          print
+          while ((getline line < section) > 0) print line
+          close(section)
+          replacing=1
+          next
+        }
+        /<!-- governance-v1-end -->/ && replacing { replacing=0; print; next }
+        !replacing { print }
+      ' "${TARGET_DIR}/CLAUDE.md" > "$output_tmp"
+      cat "$output_tmp" > "${TARGET_DIR}/CLAUDE.md"
+      rm -f "$section_tmp" "$output_tmp"
+      ok "更新 CLAUDE.md 中已有的 governance 规范"
+    else
+      warn "CLAUDE.md 已存在, 追加治理规范 section 而非覆盖"
+      {
+        printf '\n\n---\n<!-- governance-v1-begin -->\n'
+        fetch_or_local "agent-instructions/CLAUDE.md"
+        printf '\n<!-- governance-v1-end -->\n'
+      } >> "${TARGET_DIR}/CLAUDE.md"
+      ok "追加 governance 规范到 CLAUDE.md"
+    fi
   else
     fetch_or_local "agent-instructions/CLAUDE.md" | write_file "CLAUDE.md"
   fi

@@ -256,11 +256,12 @@ def read_tested_trailer(diff_base: str | None) -> str | None:
     vals = [m.group(1).lower() for m in re.finditer(r'(?im)^Tested:\s*(\S+)', out)]
     if not vals:
         return None
-    # 最强信号优先: 任一 pass 即视为 pass (rebase/squash 保留了任一子提交的 pass 就不被 none 顶掉)
-    if any(v.startswith("pass") for v in vals):
-        return "pass"
+    # 失败信号必须优先。否则一个无关提交的 pass 会掩盖区间内的 fail，
+    # 与“失败测试无条件硬拦”的门禁语义冲突。
     if any(v.startswith("fail") for v in vals):
         return "fail"
+    if any(v.startswith("pass") for v in vals):
+        return "pass"
     return vals[0]
 
 

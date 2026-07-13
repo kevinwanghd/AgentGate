@@ -5,7 +5,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform: GitLab/GitHub](https://img.shields.io/badge/Platform-GitLab%20%7C%20GitHub-orange)]()
-[![Python: 3.8+](https://img.shields.io/badge/Python-3.8%2B-green)]()
+[![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-green)]()
 
 ---
 

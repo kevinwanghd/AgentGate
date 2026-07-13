@@ -94,7 +94,7 @@ jobs:
           git fetch -q origin "$BASE_REF"
           python scripts/check_tested.py --diff-base "origin/$BASE_REF" --config governance.config.yml
 
-  # 自测: 跑 governance 脚本自己的 39 个回归用例
+  # 自测: 跑 governance 脚本自己的完整回归套件
   selftest:
     runs-on: ubuntu-latest
     steps:

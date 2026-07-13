@@ -197,7 +197,10 @@ def build_custom_patterns(cfg: dict) -> list:
         try:
             out.append((t, re.compile(rx), desc))
         except re.error as e:
-            sys.stderr.write(f"[scan-risks] custom_pattern {t} regex invalid, skipped: {e}\n")
+            message = f"custom_pattern {t} regex invalid: {e}"
+            if str(ra.get("enforcement", "soft")).lower() == "hard":
+                raise ConfigError(message)
+            sys.stderr.write(f"[scan-risks] {message}, skipped\n")
     return out
 
 
@@ -445,20 +448,26 @@ def check_test_removal(diff_text: str, cfg: dict) -> list[str]:
         l[1:] for l in diff_text.splitlines()
         if l.startswith("+") and not l.startswith("+++")
     )
-    m = re.search(
+    matches = list(re.finditer(
         r'risk:\s*test-removal.*?reason:\s*"([^"]*)".*?owner:.*?reviewed:\s*(\d{4}-\d{2}-\d{2})',
         added_text, re.IGNORECASE | re.DOTALL,
-    )
-    if m:
-        reason = m.group(1)
+    ))
+    valid = 0
+    invalid: list[str] = []
+    for m in matches:
         probs = _validate_annotation_fields(
-            "test-removal", reason, m.group(2), {"test-removal"}, cfg,
+            "test-removal", m.group(1), m.group(2), {"test-removal"}, cfg,
         )
-        if not probs:
-            return []
-        return [f"删除了 {len(removed_tests)} 个测试, test-removal 注解无效: {'; '.join(probs)}"]
+        if probs:
+            invalid.extend(probs)
+        else:
+            valid += 1
+    if valid >= len(removed_tests):
+        return []
+    detail = f"，另有无效注解: {'; '.join(invalid)}" if invalid else ""
     return [
-        f"删除了 {len(removed_tests)} 个测试声明, 但未找到合法的 risk:test-removal 注解"
+        f"删除了 {len(removed_tests)} 个测试，但只有 {valid} 条合法 test-removal 注解；"
+        f"每个被删除测试都必须单独说明{detail}"
     ]
 
 
@@ -508,11 +517,22 @@ def scan(diff_text: str, cfg: dict) -> list[dict]:
         # 路径豁免: 生成/引入/第三方代码整文件跳过
         if any(_path_matches(path, pat) for pat in exclude):
             continue
+        added_by_line = dict(added)
         for lineno, content in added:
+            # 从当前新增行开始匹配，并允许规则延伸到后续连续新增行。
+            # 上下文和旧代码不进入窗口，避免把继承风险误算成本次引入。
+            window = [content]
+            for offset in range(1, 5):
+                following = added_by_line.get(lineno + offset)
+                if following is None:
+                    break
+                window.append(following)
+            scan_text = "\n".join(window)
             # 收集该行命中的所有风险类型 (一行可能同时命中多个模式)
             hits: list[tuple[str, str]] = []  # (type, desc)
             for rtype, rx, desc in all_patterns:
-                if rx.search(content):
+                match = rx.search(scan_text)
+                if match and match.start() <= len(content):
                     hits.append((rtype, desc))
             if not hits:
                 continue
@@ -576,7 +596,11 @@ def main() -> int:
         print("[scan-risks] diff 为空, 无需扫描。")
         return 0
 
-    violations = scan(diff_text, cfg)
+    try:
+        violations = scan(diff_text, cfg)
+    except ConfigError as exc:
+        sys.stderr.write(f"[scan-risks] 配置错误: {exc}\n")
+        return 2
 
     if not violations:
         print("[scan-risks] PASS — 未发现缺注解的风险代码。")

@@ -46,6 +46,39 @@ class ConfigFailureTests(unittest.TestCase):
         finally:
             os.unlink(path)
 
+    def test_invalid_custom_regex_is_fatal_in_hard_mode(self) -> None:
+        cfg = json.loads(json.dumps(scan_risks.DEFAULT_CONFIG))
+        cfg["risk_annotations"]["enforcement"] = "hard"
+        cfg["risk_annotations"]["custom_patterns"] = [
+            {"type": "broken", "regex": "(", "desc": "broken rule"}
+        ]
+        with self.assertRaises(scan_risks.ConfigError):
+            scan_risks.build_custom_patterns(cfg)
+
+    def test_invalid_custom_regex_returns_config_exit_code(self) -> None:
+        cfg = json.loads(json.dumps(scan_risks.DEFAULT_CONFIG))
+        cfg["risk_annotations"]["enforcement"] = "hard"
+        cfg["risk_annotations"]["custom_patterns"] = [
+            {"type": "broken", "regex": "(", "desc": "broken rule"}
+        ]
+        with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as f:
+            f.write("+++ b/app.py\n@@ -0,0 +1 @@\n+print('x')\n")
+            diff_path = f.name
+        try:
+            with mock.patch.object(scan_risks, "load_config", return_value=cfg), \
+                    mock.patch.object(sys, "argv", ["scan_risks.py", "--diff-file", diff_path]):
+                self.assertEqual(2, scan_risks.main())
+        finally:
+            os.unlink(diff_path)
+
+    def test_invalid_custom_regex_is_skipped_in_soft_mode(self) -> None:
+        cfg = json.loads(json.dumps(scan_risks.DEFAULT_CONFIG))
+        cfg["risk_annotations"]["enforcement"] = "soft"
+        cfg["risk_annotations"]["custom_patterns"] = [
+            {"type": "broken", "regex": "(", "desc": "broken rule"}
+        ]
+        self.assertEqual([], scan_risks.build_custom_patterns(cfg))
+
 
 class RiskAnnotationTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -76,8 +109,37 @@ class RiskAnnotationTests(unittest.TestCase):
         self.assertTrue(problems)
         self.assertIn("过期", problems[0])
 
+    def test_each_removed_test_requires_an_annotation(self) -> None:
+        today = dt.date.today().isoformat()
+        diff = (
+            "-def test_payment():\n"
+            "-def test_refund():\n"
+            f'+# risk:test-removal reason:"duplicate payment scenario is obsolete" '
+            f"owner:@qa reviewed:{today}\n"
+        )
+        problems = scan_risks.check_test_removal(diff, self.cfg)
+        self.assertEqual(1, len(problems))
+        self.assertIn("只有 1 条", problems[0])
+
+    def test_multiline_empty_catch_is_detected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "service.cs"
+            source.write_text("catch (Exception)\n{\n}\n", encoding="utf-8")
+            diff = (
+                f"+++ b/{source.as_posix()}\n"
+                "@@ -0,0 +1,3 @@\n"
+                "+catch (Exception)\n+{\n+}\n"
+            )
+            violations = scan_risks.scan(diff, self.cfg)
+        self.assertTrue(any(v["type"] == "swallowed-exception" for v in violations))
+
 
 class EvidenceBindingTests(unittest.TestCase):
+    def test_failed_trailer_cannot_be_hidden_by_pass(self) -> None:
+        completed = mock.Mock(stdout="Tested: fail\n\nTested: pass (10/10)\n")
+        with mock.patch.object(check_tested.subprocess, "run", return_value=completed):
+            self.assertEqual("fail", check_tested.read_tested_trailer("main"))
+
     def test_stale_evidence_does_not_count_as_green(self) -> None:
         evidence = [{
             "cmd": "pytest",
