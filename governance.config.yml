@@ -8,7 +8,6 @@ metadata:
   mandatory_fields:
     - background
     - changes
-    - ai_usage
     - self_test
 
 risk_annotations:

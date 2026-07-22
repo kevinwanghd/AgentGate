@@ -16,6 +16,7 @@ name: governance
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited]
 
 jobs:
   # 风险扫描: 硬阻断 (命中风险模式且缺合法注解 → 拒合)

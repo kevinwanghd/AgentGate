@@ -5,9 +5,12 @@ validate_mr.py — MR 治理规范 v1 描述校验器（软门禁, soft_deadline
 校验 MR 描述是否包含必填段落 / 字段:
   - ## 背景
   - ## 变更内容
-  - AI-Usage 字段
   - ## 自测确认
   - 大变更时额外要求 ## 风险与回滚
+
+AI-Usage 字段: 不再列为强制字段。采集能力保留 (collect_ai_usage.py + hook),
+但未安装 hook 时不阻断合并。如需恢复强制, 在 governance.config.yml 的
+metadata.mandatory_fields 中加回 ai_usage 即可。
 
 模式判定:
   读取 governance.config.yml 的 metadata.enforcement 与 soft_deadline。
@@ -53,7 +56,7 @@ DEFAULT_CONFIG = {
     "metadata": {
         "enforcement": "soft",
         "soft_deadline": None,
-        "mandatory_fields": ["background", "changes", "ai_usage", "self_test"],
+        "mandatory_fields": ["background", "changes", "self_test"],
     },
     "large_change": {
         "line_threshold": 500,
