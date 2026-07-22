@@ -80,17 +80,33 @@ SCAN_EXTENSIONS = {
     ".kt", ".rs", ".scala", ".swift",
 }
 
+# 测试文件判定 (与 check_tested.py 保持一致)
+_TEST_FILE_RE = re.compile(
+    r'(^|/)(tests?|spec|__tests?__)(/|$)'
+    r'|(_test|_spec)\.[a-z]+$'
+    r'|(^|/)test_[^/]+$',
+    re.IGNORECASE,
+)
+
+# 测试文件中仍然需要检查的模式 (skipped-test 的检测对象就是测试代码本身)
+_TEST_FILE_PATTERNS = {"skipped-test"}
+
+
+def _is_test_file(path: str) -> bool:
+    return bool(_TEST_FILE_RE.search(path))
+
 
 # ============================================================
 # 风险模式定义
-# 每个模式: (类型名, 编译后的正则, 说明)
+# 每个模式: (类型名, 编译后的正则, 说明, 适用扩展名集合, 模式)
+#   适用扩展名: frozenset, 空集合 = 所有语言
+#   模式: "block" (硬阻断) | "warn" (仅提醒, 不阻断)
 # 这些正则有意保守 —— 宁可少报也尽量减少误报, 真正的精确度靠 reason 注解兜底
 # ============================================================
-def _build_patterns() -> list[tuple[str, re.Pattern, str]]:
-    p: list[tuple[str, re.Pattern, str]] = []
+def _build_patterns() -> list[tuple[str, re.Pattern, str, frozenset, str]]:
+    p: list[tuple[str, re.Pattern, str, frozenset, str]] = []
 
-    # 1. auth-bypass: 认证相关字段与字面量字符串比较
-    #    userId == "xxx" / role == "admin" / adminUserId.Equals("...")
+    # 1. auth-bypass: 通用 — 认证字段与字面量字符串比较
     p.append((
         "auth-bypass",
         re.compile(
@@ -98,9 +114,11 @@ def _build_patterns() -> list[tuple[str, re.Pattern, str]]:
             r'\s*(?:==|!=|\.Equals\s*\()\s*"[^"]+"'
         ),
         "认证字段与字面量字符串比较",
+        frozenset(),   # 所有语言
+        "block",
     ))
 
-    # 2. magic-id: 业务代码硬编码 ObjectId(24 hex) / UUID / >=12 位连续数字
+    # 2. magic-id: 通用 — 硬编码 ObjectId / UUID / 长数字
     p.append((
         "magic-id",
         re.compile(
@@ -110,17 +128,21 @@ def _build_patterns() -> list[tuple[str, re.Pattern, str]]:
             r'|\d{12,})"'                                        # 长数字串
         ),
         "硬编码 ObjectId / UUID / 长数字 ID",
+        frozenset(),
+        "block",
     ))
 
-    # 3. swallowed-exception: 空 catch 块 (同行)
-    #    catch { }  /  catch (Exception) { }  /  catch (e) {}
+    # 3. swallowed-exception: 空 catch 块 — 仅适用于有 catch 语法的语言 (非 Go/Python/Ruby/Rust)
     p.append((
         "swallowed-exception",
         re.compile(r'\bcatch\b[^{]*\{\s*\}'),
         "catch 块为空 (吞异常)",
+        frozenset({".cs", ".java", ".js", ".ts", ".jsx", ".tsx",
+                   ".cpp", ".cc", ".c", ".h", ".hpp", ".kt", ".scala", ".swift"}),
+        "block",
     ))
 
-    # 4. suppressed-warning: 各类静态检查抑制指令
+    # 4. suppressed-warning: 通用 — nolint(Go), noqa(Python), eslint-disable(JS) 等
     p.append((
         "suppressed-warning",
         re.compile(
@@ -132,9 +154,11 @@ def _build_patterns() -> list[tuple[str, re.Pattern, str]]:
             r'|//\s*@ts-ignore)'
         ),
         "静态检查抑制指令",
+        frozenset(),
+        "block",
     ))
 
-    # 5. skipped-test: 跳过/忽略测试
+    # 5. skipped-test: 跳过/忽略测试 — Go 无 [Fact]/pytest 语法, 不适用
     p.append((
         "skipped-test",
         re.compile(
@@ -145,9 +169,12 @@ def _build_patterns() -> list[tuple[str, re.Pattern, str]]:
             r'|@pytest\.mark\.skip)'
         ),
         "跳过或忽略测试",
+        frozenset({".cs", ".py", ".js", ".ts", ".jsx", ".tsx",
+                   ".java", ".kt", ".rb", ".scala"}),
+        "block",
     ))
 
-    # 6. time-bypass: 当前时间与字面量日期比较
+    # 6. time-bypass: 通用 — time.Now() 是 Go, DateTime.Now 是 C#, Date.now() 是 JS
     p.append((
         "time-bypass",
         re.compile(
@@ -156,9 +183,11 @@ def _build_patterns() -> list[tuple[str, re.Pattern, str]]:
             r'.{0,20}?(?:new\s+DateTime\s*\(\s*\d{4}|"\d{4}-\d{2}-\d{2}")'
         ),
         "当前时间与字面量日期比较",
+        frozenset(),
+        "block",
     ))
 
-    # 7. env-hardcode: 环境字符串硬编码判断
+    # 7. env-hardcode: ASPNETCORE_ENVIRONMENT/NODE_ENV 不适用于 Go
     p.append((
         "env-hardcode",
         re.compile(
@@ -167,14 +196,18 @@ def _build_patterns() -> list[tuple[str, re.Pattern, str]]:
             r'(?:prod|production|dev|development|staging|test|local)"'
         ),
         "环境字符串硬编码判断行为",
+        frozenset({".cs", ".js", ".ts", ".jsx", ".tsx", ".py",
+                   ".java", ".kt", ".rb", ".php"}),
+        "block",
     ))
 
-    # 8. todo-no-context: TODO/FIXME/HACK 不含 (owner, date)
-    #    合规示例: // TODO(@alice, 2026-08-01): ...
+    # 8. todo-no-context: 通用
     p.append((
         "todo-no-context",
-        re.compile(r'(?i)\b(TODO|FIXME|HACK)\b(?!\s*\(\s*@?\w+\s*,\s*\d{4}-\d{2}-\d{2})'),
+        re.compile(r'(?i)\b(TODO|FIXME|HACK)(?![-\w])(?!\s*\(\s*@?\w+\s*,\s*\d{4}-\d{2}-\d{2})'),
         "TODO/FIXME/HACK 缺少 (owner, 日期)",
+        frozenset(),
+        "block",
     ))
 
     return p
@@ -185,17 +218,22 @@ PATTERNS = _build_patterns()
 
 def build_custom_patterns(cfg: dict) -> list:
     """读取 config 的 risk_annotations.custom_patterns, 编译公司自定义规则。
-    每条: {type, regex, desc}。正则无效则跳过并警告, 不中断扫描。"""
+    每条: {type, regex, desc, exts?, mode?}。正则无效则跳过并警告, 不中断扫描。
+    返回 5-tuple: (type, compiled_regex, desc, exts_frozenset, mode)。"""
     out = []
     ra = cfg.get("risk_annotations", {}) if isinstance(cfg, dict) else {}
     for item in (ra.get("custom_patterns") or []):
         t = (item or {}).get("type")
         rx = (item or {}).get("regex")
         desc = (item or {}).get("desc") or t
+        exts_raw = (item or {}).get("exts") or []
+        mode = str((item or {}).get("mode") or "block").lower()
+        if mode not in ("block", "warn"):
+            mode = "block"
         if not t or not rx:
             continue
         try:
-            out.append((t, re.compile(rx), desc))
+            out.append((t, re.compile(rx), desc, frozenset(exts_raw), mode))
         except re.error as e:
             message = f"custom_pattern {t} regex invalid: {e}"
             if str(ra.get("enforcement", "soft")).lower() == "hard":
@@ -207,8 +245,51 @@ def build_custom_patterns(cfg: dict) -> list:
 # ============================================================
 # 配置加载
 # ============================================================
+def _load_pattern_includes(cfg: dict, config_path: str | None) -> None:
+    """加载 risk_annotations.pattern_includes 列出的外部规则文件, 合并进 custom_patterns。
+    路径相对于 config_path 所在目录。新规则的 type 自动加入 registered_types。"""
+    if not _HAS_YAML:
+        return
+    includes = cfg["risk_annotations"].get("pattern_includes") or []
+    if not includes:
+        return
+    base_dir = (
+        os.path.dirname(os.path.abspath(config_path))
+        if config_path else os.getcwd()
+    )
+    existing = list(cfg["risk_annotations"].get("custom_patterns") or [])
+    registered = set(cfg["risk_annotations"].get("registered_types") or [])
+    for inc in includes:
+        full_path = inc if os.path.isabs(inc) else os.path.join(base_dir, inc)
+        if not os.path.isfile(full_path):
+            sys.stderr.write(f"[scan-risks] pattern_includes: 文件不存在: {full_path}\n")
+            continue
+        try:
+            import yaml as _yaml  # type: ignore
+            with open(full_path, encoding="utf-8") as f:
+                data = _yaml.safe_load(f) or {}
+        except Exception as e:
+            sys.stderr.write(f"[scan-risks] pattern_includes: 无法读取 {full_path}: {e}\n")
+            continue
+        for pat in (data.get("patterns") or []):
+            existing.append(pat)
+            if pat.get("type"):
+                registered.add(pat["type"])
+    cfg["risk_annotations"]["custom_patterns"] = existing
+    cfg["risk_annotations"]["registered_types"] = list(registered)
+
+
 def load_config(path: str | None) -> dict:
-    return load_shared_config(path, DEFAULT_CONFIG, ("risk_annotations",))
+    cfg = load_shared_config(path, DEFAULT_CONFIG, ("risk_annotations",))
+    # 解析 pattern_includes 时需要 config 文件的实际路径
+    resolved = path
+    if resolved is None:
+        for candidate in ("governance.config.yml", "governance.config.yaml"):
+            if os.path.isfile(candidate):
+                resolved = candidate
+                break
+    _load_pattern_includes(cfg, resolved)
+    return cfg
 
 
 # ============================================================
@@ -425,6 +506,7 @@ def find_annotation(
 _TEST_DECL_RE = re.compile(
     r'(\[\s*Fact\b|\[\s*Theory\b|\[\s*Test\b'
     r'|\bdef\s+test_\w+'
+    r'|\bfunc\s+Test\w+'          # Go
     r'|\bit\s*\(|\btest\s*\(|@Test\b)'
 )
 
@@ -501,7 +583,7 @@ def _path_matches(path: str, pattern: str) -> bool:
 
 
 def scan(diff_text: str, cfg: dict) -> list[dict]:
-    """返回违规列表。每项: {file, line, type, desc, problems}"""
+    """返回违规列表。每项: {file, line, type, desc, problems, mode}"""
     violations: list[dict] = []
     parsed = parse_diff(diff_text)
     all_patterns = PATTERNS + build_custom_patterns(cfg)
@@ -517,10 +599,9 @@ def scan(diff_text: str, cfg: dict) -> list[dict]:
         # 路径豁免: 生成/引入/第三方代码整文件跳过
         if any(_path_matches(path, pat) for pat in exclude):
             continue
+        is_test = _is_test_file(path)
         added_by_line = dict(added)
         for lineno, content in added:
-            # 从当前新增行开始匹配，并允许规则延伸到后续连续新增行。
-            # 上下文和旧代码不进入窗口，避免把继承风险误算成本次引入。
             window = [content]
             for offset in range(1, 5):
                 following = added_by_line.get(lineno + offset)
@@ -529,16 +610,24 @@ def scan(diff_text: str, cfg: dict) -> list[dict]:
                 window.append(following)
             scan_text = "\n".join(window)
             # 收集该行命中的所有风险类型 (一行可能同时命中多个模式)
-            hits: list[tuple[str, str]] = []  # (type, desc)
-            for rtype, rx, desc in all_patterns:
+            hits: list[tuple[str, str, str]] = []  # (type, desc, mode)
+            for rtype, rx, desc, exts, pmode in all_patterns:
+                # 扩展名过滤: 模式限定了语言且当前文件不在其中则跳过
+                if exts and ext not in exts:
+                    continue
+                # 测试文件: 只检查测试代码本身相关的模式 (如 skipped-test)
+                if is_test and rtype not in _TEST_FILE_PATTERNS:
+                    continue
                 match = rx.search(scan_text)
                 if match and match.start() <= len(content):
-                    hits.append((rtype, desc))
+                    hits.append((rtype, desc, pmode))
             if not hits:
                 continue
 
-            hit_types = {t for t, _ in hits}
-            descs = "; ".join(d for _, d in hits)
+            hit_types = {t for t, _, _ in hits}
+            descs = "; ".join(d for _, d, _ in hits)
+            # 所有命中模式均为 warn 时, 该违规为仅警告; 有任一 block 模式则阻断
+            violation_mode = "warn" if all(m == "warn" for _, _, m in hits) else "block"
 
             # 读源文件, 在上方查找注解
             if path not in file_cache:
@@ -550,6 +639,7 @@ def scan(diff_text: str, cfg: dict) -> list[dict]:
                     "type": "/".join(sorted(hit_types)),
                     "desc": descs,
                     "problems": ["无法读取源文件以校验注解"],
+                    "mode": violation_mode,
                 })
                 continue
 
@@ -560,6 +650,7 @@ def scan(diff_text: str, cfg: dict) -> list[dict]:
                     "file": path, "line": lineno,
                     "type": "/".join(sorted(hit_types)),
                     "desc": descs, "problems": problems,
+                    "mode": violation_mode,
                 })
 
     # test-removal 单独检测
@@ -567,6 +658,7 @@ def scan(diff_text: str, cfg: dict) -> list[dict]:
         violations.append({
             "file": "(diff)", "line": 0, "type": "test-removal",
             "desc": "测试删除保护", "problems": [prob],
+            "mode": "block",
         })
 
     return violations
@@ -619,8 +711,11 @@ def main() -> int:
               f'// risk:{first_type} reason:"..." owner:@team reviewed:{_today_iso()}')
         print()
 
-    # 区分实质违规(缺注解/字段错/类型未注册/黑名单) 与 纯软提醒([warn] 过期等)
+    # 区分实质违规 与 纯软提醒
+    # warn 模式的违规 (来自 mode:warn 规则) 不阻断; [warn] 前缀问题同样不阻断
     def _is_blocking(v):
+        if v.get("mode") == "warn":
+            return False
         ps = v.get("problems", [])
         return any(not str(p).lstrip().startswith("[warn]") for p in ps)
     blocking = [v for v in violations if _is_blocking(v)]

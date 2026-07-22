@@ -137,5 +137,31 @@ governance:expired-report:
   artifacts:
     paths:
       - governance/reports/
-    expire_in: 30 days
   allow_failure: true
+
+# ── 6. Go 受影响包测试: 硬阻断 (仅 Go 仓库) ─────────────────────────────────
+# 前提: 仓库根目录存在 go.mod 且可运行 go test。
+# Bazel 单仓需覆盖此 job 或设置 GOVERNANCE_SKIP_GO_TEST=true 跳过。
+governance:go-test:
+  stage: test
+  image: golang:1.22-bookworm
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $GOVERNANCE_SKIP_GO_TEST != "true"
+    - if: $CI_COMMIT_BRANCH && $GOVERNANCE_SKIP_GO_TEST != "true"
+  variables:
+    GIT_DEPTH: 0
+    GOFLAGS: "-mod=mod"
+  script:
+    - |
+      # 仓库没有 go.mod 时静默跳过 (非 Go 仓库)
+      if [ ! -f go.mod ]; then
+        echo "[go-test] 未找到 go.mod, 跳过 Go 测试。"
+        exit 0
+      fi
+      TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
+      git fetch -q origin "$TB"
+      BASE="origin/$TB"
+      python governance/scripts/run_affected_tests.py \
+        --diff-base "$BASE" \
+        --timeout "${GOVERNANCE_GO_TEST_TIMEOUT:-120}"
+  allow_failure: false

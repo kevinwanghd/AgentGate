@@ -20,6 +20,8 @@ risk_annotations:
     - "**/*.generated.*"
     - "**/dist/**"
     - "**/build/**"
+    - "tests/**"      # AgentGate 自身测试文件含规则模式字面量, 同 DEFAULT_CONFIG 的 governance/scripts/ 豁免原因
+    - "scripts/**"    # AgentGate 自身脚本含规则正则字面量 (如 TODO|FIXME|HACK), 自指误报
   registered_types:
     - auth-bypass
     - magic-id
