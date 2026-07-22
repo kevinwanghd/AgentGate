@@ -683,5 +683,58 @@ class ScanIgnoreTests(unittest.TestCase):
         self.assertTrue(any("pay.go" in f for f in files))
 
 
+class LargeDiffSummaryTests(unittest.TestCase):
+    """Tier 3: 大 diff 时向 GITHUB_STEP_SUMMARY 写拆分建议。"""
+
+    def _numstat_output(self) -> str:
+        return (
+            "300\t50\tsrc/payment/pay.go\n"
+            "100\t20\tsrc/order/order.go\n"
+            "80\t10\tsrc/user/user.go\n"
+        )
+
+    def test_large_diff_writes_warning_to_summary(self) -> None:
+        """净改动超阈值时, Job Summary 包含大变更警告和目录分布。"""
+        with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8") as f:
+            summary_path = f.name
+        try:
+            completed = mock.Mock(returncode=0, stdout=self._numstat_output())
+            with mock.patch.object(validate_mr.subprocess, "run", return_value=completed), \
+                 mock.patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": summary_path}):
+                validate_mr._write_large_diff_summary(
+                    total=560, threshold=500,
+                    reasons=["净改动 560 行 ≥ 500"],
+                    diff_base="origin/main",
+                    excluded=[],
+                )
+            with open(summary_path, encoding="utf-8") as f:
+                content = f.read()
+        finally:
+            os.unlink(summary_path)
+
+        self.assertIn("⚠️", content)
+        self.assertIn("560", content)
+        self.assertIn("src", content)
+
+    def test_no_summary_when_env_not_set(self) -> None:
+        """未设置 GITHUB_STEP_SUMMARY 时静默跳过。"""
+        env = {k: v for k, v in os.environ.items() if k != "GITHUB_STEP_SUMMARY"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            try:
+                validate_mr._write_large_diff_summary(600, 500, [], None, [])
+            except Exception as exc:
+                self.fail(f"不应抛异常: {exc}")
+
+    def test_small_diff_does_not_trigger(self) -> None:
+        """未超阈值时不写 Summary (函数不被调用, 因为 is_large 为 False)。"""
+        cfg = json.loads(json.dumps(validate_mr.DEFAULT_CONFIG))
+        with mock.patch.object(
+            validate_mr.subprocess, "run",
+            return_value=mock.Mock(returncode=0, stdout="10\t5\tsrc/foo.go\n"),
+        ):
+            is_large, _ = validate_mr.detect_large_change(cfg, "origin/main")
+        self.assertFalse(is_large)
+
+
 if __name__ == "__main__":
     unittest.main()

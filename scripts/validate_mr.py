@@ -220,6 +220,65 @@ def detect_large_change(cfg: dict, diff_base: str | None) -> tuple[bool, list[st
     return (len(reasons) > 0, reasons)
 
 
+def _write_large_diff_summary(
+    total: int,
+    threshold: int,
+    reasons: list[str],
+    diff_base: str | None,
+    excluded: list[str],
+) -> None:
+    """当 PR 超过行阈值时，向 GITHUB_STEP_SUMMARY 写拆分建议（含 Top 目录分布）。"""
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not summary_path:
+        return
+    import collections
+    import fnmatch as _fnmatch
+
+    dir_totals: dict[str, int] = collections.defaultdict(int)
+    try:
+        base = diff_base or "HEAD~1"
+        out = subprocess.run(
+            ["git", "diff", "--numstat", f"{base}...HEAD"],
+            check=True, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
+        ).stdout
+        for line in out.splitlines():
+            parts = line.split("\t")
+            if len(parts) != 3:
+                continue
+            add_s, del_s, path = parts
+            if any(_fnmatch.fnmatch(path, p) for p in excluded):
+                continue
+            try:
+                lines = int(add_s) + int(del_s)
+            except ValueError:
+                continue
+            top_dir = path.split("/")[0] if "/" in path else "."
+            dir_totals[top_dir] += lines
+    except Exception:
+        pass
+
+    top5 = sorted(dir_totals.items(), key=lambda x: x[1], reverse=True)[:5]
+
+    try:
+        with open(summary_path, "a", encoding="utf-8") as f:
+            f.write("\n## ⚠️ 大变更提示\n\n")
+            f.write(f"本次 PR 净改动 **{total}** 行（阈值 {threshold}），建议拆分为更小的 PR。\n\n")
+            if reasons:
+                for r in reasons:
+                    f.write(f"- {r}\n")
+                f.write("\n")
+            if top5:
+                f.write("### 改动分布（Top 目录）\n\n")
+                f.write("| 目录 | 增减行数 |\n|------|----------|\n")
+                for d, n in top5:
+                    f.write(f"| `{d}` | {n} |\n")
+                f.write("\n")
+            f.write("> 建议按业务模块拆分，每个 PR 控制在 300 行以内，方便 review 和回滚。\n")
+    except OSError:
+        pass
+
+
 # ============================================================
 # 模式判定: soft / hard
 # ============================================================
@@ -310,6 +369,37 @@ def main() -> int:
 
     mode, reason = resolve_mode(cfg, args.soft)
     problems = validate(text, cfg, args.diff_base)
+
+    is_large, reasons = detect_large_change(cfg, args.diff_base)
+    if is_large:
+        lc = cfg["large_change"]
+        total_lines = 0
+        try:
+            base = args.diff_base or "HEAD~1"
+            ns = subprocess.run(
+                ["git", "diff", "--numstat", f"{base}...HEAD"],
+                check=True, capture_output=True, text=True,
+                encoding="utf-8", errors="replace",
+            ).stdout
+            excluded = lc.get("excluded_paths", [])
+            import fnmatch as _fn
+            for ln in ns.splitlines():
+                pts = ln.split("\t")
+                if len(pts) == 3:
+                    try:
+                        if not any(_fn.fnmatch(pts[2], p) for p in excluded):
+                            total_lines += int(pts[0]) + int(pts[1])
+                    except ValueError:
+                        pass
+        except Exception:
+            total_lines = int(lc.get("line_threshold", 500))
+        _write_large_diff_summary(
+            total_lines,
+            int(lc.get("line_threshold", 500)),
+            reasons,
+            args.diff_base,
+            lc.get("excluded_paths", []),
+        )
 
     if not problems:
         print(f"[mr-validate] PASS ({mode} 模式: {reason})")
