@@ -311,9 +311,10 @@ fetch_or_local "scripts/selftest.sh"        | write_file "governance/scripts/sel
 chmod +x "${TARGET_DIR}/governance/scripts/selftest.sh" \
          "${TARGET_DIR}/governance/scripts/install-hooks.sh" 2>/dev/null || true
 
-# ---------- 4b. Go 风险规则包 ----------
-log "安装 Go 风险规则包 -> governance/patterns/"
+# ---------- 4b. 语言风险规则包 ----------
+log "安装语言风险规则包 -> governance/patterns/"
 fetch_or_local "patterns/go.yml" | write_file "governance/patterns/go.yml"
+fetch_or_local "patterns/csharp.yml" | write_file "governance/patterns/csharp.yml"
 
 # 自动安装 AI-Usage 采集 git hook (提交时自动写 trailer, 无需人工填)
 if [[ -d "${TARGET_DIR}/.git" ]]; then
@@ -501,6 +502,7 @@ cat <<EOF
   governance/scripts/install-hooks.sh   (安装 prepare-commit-msg hook)
   governance/scripts/selftest.sh        (脚本自测)
   governance/patterns/go.yml            (Go 专属风险规则包: warn 模式)
+  governance/patterns/csharp.yml        (C# / .NET 专属风险规则包: warn 模式)
   CLAUDE.md                     (Claude Code / Kiro)
   .hermes.md                    (Hermes Agent v0.17.0)
   AGENTS.md                     (OpenAI Codex CLI + Hermes fallback)
