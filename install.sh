@@ -22,7 +22,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 SOURCE_BASE="${GOVERNANCE_SOURCE:-}"
-VERSION="v1.2.1"
+VERSION="v1.3.0"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 
 # 90 天 soft_deadline 默认值
@@ -305,10 +305,15 @@ fetch_or_local "scripts/collect_ai_usage.py" | write_file "governance/scripts/co
 fetch_or_local "scripts/record_test_run.py" | write_file "governance/scripts/record_test_run.py"
 fetch_or_local "scripts/check_tested.py"    | write_file "governance/scripts/check_tested.py"
 fetch_or_local "scripts/create_mr.py"       | write_file "governance/scripts/create_mr.py"
+fetch_or_local "scripts/run_affected_tests.py" | write_file "governance/scripts/run_affected_tests.py"
 fetch_or_local "scripts/install-hooks.sh"   | write_file "governance/scripts/install-hooks.sh"
 fetch_or_local "scripts/selftest.sh"        | write_file "governance/scripts/selftest.sh"
 chmod +x "${TARGET_DIR}/governance/scripts/selftest.sh" \
          "${TARGET_DIR}/governance/scripts/install-hooks.sh" 2>/dev/null || true
+
+# ---------- 4b. Go 风险规则包 ----------
+log "安装 Go 风险规则包 -> governance/patterns/"
+fetch_or_local "patterns/go.yml" | write_file "governance/patterns/go.yml"
 
 # 自动安装 AI-Usage 采集 git hook (提交时自动写 trailer, 无需人工填)
 if [[ -d "${TARGET_DIR}/.git" ]]; then
@@ -443,6 +448,32 @@ governance:expired-report:
       - governance/reports/
     expire_in: 30 days
   allow_failure: true
+
+# Go 受影响包测试 (含反向依赖一跳扩展); 非 Go 仓库 (无 go.mod) 自动跳过
+# 需要在 CI runner 上有 golang 环境; 或使用 image: golang:1.22-bookworm
+governance:go-test:
+  stage: test
+  image: golang:1.22-bookworm
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $GOVERNANCE_SKIP_GO_TEST != "true"
+    - if: $CI_COMMIT_BRANCH && $GOVERNANCE_SKIP_GO_TEST != "true"
+  variables:
+    GIT_DEPTH: 0
+    GOFLAGS: "-mod=mod"
+  before_script:
+    - pip install -q pyyaml==6.0.3 2>/dev/null || python3 -m pip install -q pyyaml==6.0.3
+  script:
+    - |
+      if [ ! -f go.mod ]; then
+        echo "[go-test] 未找到 go.mod, 跳过 Go 测试。"
+        exit 0
+      fi
+      TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
+      git fetch -q origin "$TB"
+      python3 governance/scripts/run_affected_tests.py \
+        --diff-base "origin/$TB" \
+        --timeout "${GOVERNANCE_GO_TEST_TIMEOUT:-120}"
+  allow_failure: false
 EOF
 ok "生成 CI 片段 governance/ci-snippet.yml (已接入真实扫描脚本)"
 
@@ -466,8 +497,10 @@ cat <<EOF
   governance/scripts/record_test_run.py (测试运行记录器 -> 留痕)
   governance/scripts/check_tested.py    (测试痕迹检测, 软门禁)
   governance/scripts/create_mr.py       (自动生成并提交 MR)
+  governance/scripts/run_affected_tests.py (Go 受影响包测试 + 反向依赖)
   governance/scripts/install-hooks.sh   (安装 prepare-commit-msg hook)
   governance/scripts/selftest.sh        (脚本自测)
+  governance/patterns/go.yml            (Go 专属风险规则包: warn 模式)
   CLAUDE.md                     (Claude Code / Kiro)
   .hermes.md                    (Hermes Agent v0.17.0)
   AGENTS.md                     (OpenAI Codex CLI + Hermes fallback)
