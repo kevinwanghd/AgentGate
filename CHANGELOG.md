@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.0] - 2026-07-22
+
+### Added
+
+- **Go 受影响包测试 + 反向依赖扩展** — `run_affected_tests.py` 通过 `go list -json` 构建反向依赖图, 改动 pkg/A 时自动扩展并测试所有 importer (1-hop BFS); go list 失败时宽容降级为只测直接改动包。新增 `--no-reverse-deps` 标志供 Bazel / 大型 monorepo 用。
+- **行内 `scan:ignore reason:"..."` 豁免** — 在命中行同行或上一行注释 `scan:ignore reason:"..."` (reason ≥ 5 字符) 即可精确豁免单行, 替代整目录白名单。自指误报问题根治方案。
+- **GitHub Actions `go-test` job** — `.github/workflows/governance.yml` 补充 `go-test` job, 与 GitLab CI 的 `governance:go-test` 功能对等; 非 Go 仓库 (无 go.mod) 自动跳过; 支持 `GOVERNANCE_SKIP_GO_TEST` / `GOVERNANCE_GO_TEST_TIMEOUT` 变量。
+- **Go 风险规则包 `patterns/go.yml`** — 3 条 Go 专属 warn 模式: `swallowed-error` (显式丢弃 error)、`context-background` (截断请求链路)、`sensitive-log` (敏感字段进日志)。warn 模式观察期不阻断 CI, 命中写入 Job Summary 可见。
+- **`install.sh` 补全 Go 支持** — 新安装的消费仓库自动获得 `run_affected_tests.py`、`patterns/go.yml` 及 ci-snippet 中的 `governance:go-test` job。
+- **warn 违规写入 Job Summary** — `scan_risks.py` 将 warn 命中汇总写入 `$GITHUB_STEP_SUMMARY` (⚠️ 表格), block 违规写 ❌ 表格, 全绿写 ✅ 摘要。
+- **PR edited 触发** — GitHub Actions workflow 新增 `edited` 和 `reopened` 事件类型, 修改 PR 描述后立即重跑门禁。
+- **AI-Usage 改为可选** — `DEFAULT_CONFIG.mandatory_fields` 移除 `ai_usage`; 消费仓库默认不强制该字段, 团队可在 `governance.config.yml` 里显式加回。
+
+### Fixed
+
+- **Go 代码误报系统性修复** — `swallowed-exception`、`skipped-test`、`env-hardcode`、`todo-no-context` 等规则增加扩展名过滤, 不再误报 Go 文件。
+- **测试文件豁免** — Go `_test.go` / Python `test_*.py` 等测试文件不再触发 `skipped-test` 规则 (测试文件里的 skip 是合法的)。
+
+---
+
 ## [1.2.1] - 2026-07-01
 
 ### Fixed

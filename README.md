@@ -56,14 +56,15 @@ git add . && git commit -m "chore: 接入 AgentGate 治理" && git push
 
 ## 🔍 这套工具做什么
 
-### 5 项自动检查(CI 跑)
+### 6 项自动检查(CI 跑)
 
 | 检查 | 做什么 | 拦什么 |
 |---|---|---|
-| **risk-scan** | 扫描 8 类风险模式 + 公司自定义规则 | 硬编码 ID/密钥、SQL 拼接、认证绕过等 |
+| **risk-scan** | 扫描 8 类风险模式 + 公司自定义规则；warn 命中写 Job Summary | 硬编码 ID/密钥、SQL 拼接、认证绕过等 |
 | **secret-scan** | gitleaks 检测密钥泄露 | 私钥、API token、数据库连接串 |
 | **test-check** | 验证测试覆盖 | 改了生产代码但没测试痕迹 |
-| **mr-validate** | 校验 MR 描述格式 | 缺背景/变更内容/自测确认段落 |
+| **mr-validate** | 校验 MR 描述格式；大 PR 写拆分建议到 Job Summary | 缺背景/变更内容/自测确认段落 |
+| **go-test** | 对受影响 Go 包（含反向依赖一跳）跑 `go test`；非 Go 仓库自动跳过 | 直接/间接受影响包测试失败 |
 | **selftest** | 工具自检 | 确保脚本本身没 bug(仅 AgentGate 仓库) |
 
 ### 本地自动化
@@ -110,19 +111,20 @@ if (req.Headers["X-Internal"] == "true") return true;
 
 ## 🛠️ 核心脚本
 
-AgentGate 包含 9 个 Python 脚本(在 `scripts/` 目录):
+AgentGate 包含 10 个 Python 脚本(在 `scripts/` 目录):
 
 | 脚本 | 功能 |
 |---|---|
-| `scan_risks.py` | 风险代码扫描(8 类内置 + 自定义规则) |
+| `scan_risks.py` | 风险代码扫描(8 类内置 + 自定义规则；warn 命中写 Job Summary) |
 | `check_tested.py` | 测试覆盖检查 |
-| `validate_mr.py` | MR 描述校验 |
+| `validate_mr.py` | MR 描述校验；大 PR 写拆分建议到 Job Summary |
+| `run_affected_tests.py` | Go 受影响包测试 + 反向依赖一跳扩展 |
 | `collect_ai_usage.py` | AI 用量统计(读证据,算占比,盖 trailer) |
 | `record_test_run.py` | 记录测试运行(盖 Tested trailer) |
 | `create_mr.py` | 自动生成 MR(从 commit 提取信息) |
 | `report_expired.py` | 过期注解周报(找 180 天未复查的风险注解) |
 | `install-hooks.sh` | 安装 git hook |
-| `selftest.sh` | 工具自检(42 个用例) |
+| `selftest.sh` | 工具自检(48 个用例) |
 
 ---
 
@@ -224,7 +226,7 @@ testing:
 
 - **文档**:[INSTALL.md](INSTALL.md) | [USER_GUIDE.md](USER_GUIDE.md)
 - **问题反馈**:[GitHub Issues](https://github.com/kevinwanghd/AgentGate/issues)
-- **版本**:v1.2.1 (2026-07-01)
+- **版本**:v1.3.0 (2026-07-22)
 
 ---
 

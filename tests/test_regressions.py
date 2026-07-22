@@ -549,5 +549,192 @@ class WarnJobSummaryTests(unittest.TestCase):
                 self.fail(f"不应抛异常: {exc}")
 
 
+class ReverseDepsTests(unittest.TestCase):
+    """#8: run_affected_tests 反向依赖扩展。"""
+
+    def setUp(self) -> None:
+        self.ra = importlib.import_module("run_affected_tests")
+
+    def _fake_go_list_json(self, pkgs: list[dict]) -> str:
+        """生成 go list -json ./... 的输出格式（多个拼接 JSON 对象）。"""
+        return "\n".join(json.dumps(p) for p in pkgs)
+
+    def test_expand_with_importers_finds_dependent_pkg(self) -> None:
+        """改了 pkg/db, importer pkg/service 应被加入测试集。"""
+        pkgs = [
+            {"ImportPath": "example.com/app/pkg/db", "Imports": []},
+            {"ImportPath": "example.com/app/pkg/service",
+             "Imports": ["example.com/app/pkg/db"]},
+            {"ImportPath": "example.com/app/pkg/user",
+             "Imports": ["example.com/app/pkg/service"]},
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            # 写 go.mod
+            with open(os.path.join(tmp, "go.mod"), "w") as f:
+                f.write("module example.com/app\ngo 1.21\n")
+            # mock go list 输出
+            fake_out = self._fake_go_list_json(pkgs)
+            completed = mock.Mock(returncode=0, stdout=fake_out, stderr="")
+            with mock.patch.object(
+                self.ra.subprocess, "run", return_value=completed
+            ), mock.patch("os.path.abspath", side_effect=lambda p: os.path.join(tmp, p) if not os.path.isabs(p) else p):
+                reverse_map = self.ra.build_reverse_dep_map(tmp)
+                # pkg/db を直接改動した場合の拡張
+                with mock.patch.object(self.ra, "find_go_module_root", return_value=tmp):
+                    expanded = self.ra.expand_with_importers(
+                        ["pkg/db"], tmp, reverse_map
+                    )
+        self.assertIn("pkg/db", expanded)
+        self.assertIn("pkg/service", expanded)
+        # pkg/user は直接依存していないので含まれない (1-hop のみ)
+        self.assertNotIn("pkg/user", expanded)
+
+    def test_no_reverse_deps_returns_direct_only(self) -> None:
+        """--no-reverse-deps フラグ相当: 反向依赖图が空の場合は直接パッケージのみ。"""
+        direct = ["pkg/payment", "pkg/order"]
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "go.mod"), "w") as f:
+                f.write("module example.com/app\ngo 1.21\n")
+            result = self.ra.expand_with_importers(direct, tmp, {})
+        self.assertEqual(sorted(direct), sorted(result))
+
+    def test_go_list_failure_falls_back_gracefully(self) -> None:
+        """go list が失敗してもエラーにならず空の map を返す。"""
+        failed = mock.Mock(returncode=1, stdout="", stderr="error")
+        with mock.patch.object(
+            self.ra.subprocess, "run", return_value=failed
+        ):
+            result = self.ra.build_reverse_dep_map("/some/dir")
+        self.assertEqual({}, result)
+
+    def test_get_module_name_reads_go_mod(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "go.mod"), "w") as f:
+                f.write("module github.com/company/myapp\ngo 1.22\n")
+            name = self.ra.get_module_name(tmp)
+        self.assertEqual("github.com/company/myapp", name)
+
+    def test_affected_packages_deduplicates_dirs(self) -> None:
+        diff = "pkg/payment/pay.go\npkg/payment/refund.go\npkg/order/order.go\n"
+        pkgs = self.ra.affected_packages(diff)
+        self.assertEqual(["pkg/order", "pkg/payment"], pkgs)
+
+
+class ScanIgnoreTests(unittest.TestCase):
+    """#9: 行内 scan:ignore reason:"..." 豁免精确到行。"""
+
+    def setUp(self) -> None:
+        self.cfg = json.loads(json.dumps(scan_risks.DEFAULT_CONFIG))
+        self.cfg["risk_annotations"]["enforcement"] = "hard"
+
+    def _make_diff(self, path: str, lines: list[str]) -> str:
+        hdr = f"+++ b/{path}\n@@ -0,0 +1,{len(lines)} @@\n"
+        return hdr + "".join(f"+{l}\n" for l in lines)
+
+    def test_inline_ignore_on_same_line_suppresses_violation(self) -> None:
+        """magic-id 后跟 scan:ignore reason 在同一行时豁免。"""
+        diff = self._make_diff("service/pay.go", [
+            '"110101199001011234"  // scan:ignore reason:"fixture for integration test"',
+        ])
+        violations = scan_risks.scan(diff, self.cfg)
+        self.assertEqual([], violations)
+
+    def test_inline_ignore_on_prev_line_suppresses_violation(self) -> None:
+        """scan:ignore 在命中行上一行时同样豁免。"""
+        diff = self._make_diff("service/pay.go", [
+            "// scan:ignore reason:\"known test fixture for idcard format check\"",
+            '"110101199001011234"',
+        ])
+        violations = scan_risks.scan(diff, self.cfg)
+        self.assertEqual([], violations)
+
+    def test_inline_ignore_without_reason_does_not_suppress(self) -> None:
+        """scan:ignore 没有 reason 或 reason 太短时不豁免。"""
+        diff = self._make_diff("service/pay.go", [
+            '"110101199001011234"  // scan:ignore',
+        ])
+        violations = scan_risks.scan(diff, self.cfg)
+        # 没有合法 reason 就不豁免, 仍然报违规
+        types = [v["type"] for v in violations]
+        self.assertIn("magic-id", types)
+
+    def test_inline_ignore_two_lines_away_does_not_suppress(self) -> None:
+        """scan:ignore 在命中行两行之外不豁免 (只看同行和上一行)。"""
+        diff = self._make_diff("service/pay.go", [
+            "// scan:ignore reason:\"known test fixture for idcard format check\"",
+            "// some other comment",
+            '"110101199001011234"',
+        ])
+        violations = scan_risks.scan(diff, self.cfg)
+        types = [v["type"] for v in violations]
+        self.assertIn("magic-id", types)
+
+    def test_scan_ignore_in_non_adjacent_file_has_no_effect(self) -> None:
+        """不同文件的 scan:ignore 不会跨文件豁免。"""
+        diff = (
+            "+++ b/other/file.go\n@@ -0,0 +1 @@\n"
+            '// scan:ignore reason:"this is a completely different file"\n'
+            "+++ b/service/pay.go\n@@ -0,0 +1 @@\n"
+            '+adminId == "admin"\n'
+        )
+        violations = scan_risks.scan(diff, self.cfg)
+        # pay.go 里的 auth-bypass 没有被 other/file.go 的 ignore 豁免
+        files = [v["file"] for v in violations]
+        self.assertTrue(any("pay.go" in f for f in files))
+
+
+class LargeDiffSummaryTests(unittest.TestCase):
+    """Tier 3: 大 diff 时向 GITHUB_STEP_SUMMARY 写拆分建议。"""
+
+    def _numstat_output(self) -> str:
+        return (
+            "300\t50\tsrc/payment/pay.go\n"
+            "100\t20\tsrc/order/order.go\n"
+            "80\t10\tsrc/user/user.go\n"
+        )
+
+    def test_large_diff_writes_warning_to_summary(self) -> None:
+        """净改动超阈值时, Job Summary 包含大变更警告和目录分布。"""
+        with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8") as f:
+            summary_path = f.name
+        try:
+            completed = mock.Mock(returncode=0, stdout=self._numstat_output())
+            with mock.patch.object(validate_mr.subprocess, "run", return_value=completed), \
+                 mock.patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": summary_path}):
+                validate_mr._write_large_diff_summary(
+                    total=560, threshold=500,
+                    reasons=["净改动 560 行 ≥ 500"],
+                    diff_base="origin/main",
+                    excluded=[],
+                )
+            with open(summary_path, encoding="utf-8") as f:
+                content = f.read()
+        finally:
+            os.unlink(summary_path)
+
+        self.assertIn("⚠️", content)
+        self.assertIn("560", content)
+        self.assertIn("src", content)
+
+    def test_no_summary_when_env_not_set(self) -> None:
+        """未设置 GITHUB_STEP_SUMMARY 时静默跳过。"""
+        env = {k: v for k, v in os.environ.items() if k != "GITHUB_STEP_SUMMARY"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            try:
+                validate_mr._write_large_diff_summary(600, 500, [], None, [])
+            except Exception as exc:
+                self.fail(f"不应抛异常: {exc}")
+
+    def test_small_diff_does_not_trigger(self) -> None:
+        """未超阈值时不写 Summary (函数不被调用, 因为 is_large 为 False)。"""
+        cfg = json.loads(json.dumps(validate_mr.DEFAULT_CONFIG))
+        with mock.patch.object(
+            validate_mr.subprocess, "run",
+            return_value=mock.Mock(returncode=0, stdout="10\t5\tsrc/foo.go\n"),
+        ):
+            is_large, _ = validate_mr.detect_large_change(cfg, "origin/main")
+        self.assertFalse(is_large)
+
+
 if __name__ == "__main__":
     unittest.main()

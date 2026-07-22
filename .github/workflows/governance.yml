@@ -95,6 +95,41 @@ jobs:
           git fetch -q origin "$BASE_REF"
           python scripts/check_tested.py --diff-base "origin/$BASE_REF" --config governance.config.yml
 
+  # Go 受影响包测试 (含反向依赖一跳扩展)
+  # 跳过条件: 仓库无 go.mod (非 Go 仓库), 或 vars.GOVERNANCE_SKIP_GO_TEST == "true"
+  go-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -q pyyaml==6.0.3
+      - name: run affected go tests
+        env:
+          GOVERNANCE_SKIP_GO_TEST: ${{ vars.GOVERNANCE_SKIP_GO_TEST }}
+          GOVERNANCE_GO_TEST_TIMEOUT: ${{ vars.GOVERNANCE_GO_TEST_TIMEOUT }}
+        run: |
+          if [ "${GOVERNANCE_SKIP_GO_TEST}" = "true" ]; then
+            echo "[go-test] GOVERNANCE_SKIP_GO_TEST=true, 跳过。"
+            exit 0
+          fi
+          if [ ! -f go.mod ]; then
+            echo "[go-test] 未找到 go.mod, 跳过 Go 测试。"
+            exit 0
+          fi
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          if [ -z "$BASE_REF" ]; then echo "::error::PR base.ref 缺失, 拒绝扫描"; exit 1; fi
+          git fetch -q origin "$BASE_REF"
+          python scripts/run_affected_tests.py \
+            --diff-base "origin/$BASE_REF" \
+            --timeout "${GOVERNANCE_GO_TEST_TIMEOUT:-120}"
+
   # 自测: 跑 governance 脚本自己的完整回归套件
   selftest:
     runs-on: ubuntu-latest
