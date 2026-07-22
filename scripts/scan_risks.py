@@ -664,6 +664,42 @@ def scan(diff_text: str, cfg: dict) -> list[dict]:
     return violations
 
 
+def _write_summary(blocking: list[dict], warn_only: list[dict]) -> None:
+    """写入 GitHub Actions Job Summary ($GITHUB_STEP_SUMMARY)。
+    无 CI 环境时静默跳过。warn_only 命中即使绿色 job 也会显示, 为观察期提供可见性。"""
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not summary_path:
+        return
+    lines = []
+    if not blocking and not warn_only:
+        lines.append("### ✅ scan-risks: 无风险命中\n")
+    else:
+        if blocking:
+            lines.append(f"### ❌ scan-risks: {len(blocking)} 处需要注解\n")
+            lines.append("| 文件:行 | 类型 | 问题 |")
+            lines.append("|---|---|---|")
+            for v in blocking:
+                loc = f"`{v['file']}:{v['line']}`" if v["line"] else f"`{v['file']}`"
+                problems = "; ".join(v.get("problems", []))
+                lines.append(f"| {loc} | `{v['type']}` | {problems} |")
+            lines.append("")
+        if warn_only:
+            lines.append(f"### ⚠️ scan-risks: {len(warn_only)} 处 warn 命中 (不阻断, 观察期)\n")
+            lines.append("> 这些规则处于 `mode: warn` 阶段。命中多说明规则有效或有误报，"
+                         "积累数据后再决定是否升级为 `block`。\n")
+            lines.append("| 文件:行 | 类型 | 说明 |")
+            lines.append("|---|---|---|")
+            for v in warn_only:
+                loc = f"`{v['file']}:{v['line']}`" if v["line"] else f"`{v['file']}`"
+                lines.append(f"| {loc} | `{v['type']}` | {v.get('desc', '')} |")
+            lines.append("")
+    try:
+        with open(summary_path, "a", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+    except OSError:
+        pass  # 写 summary 失败不影响门禁结果
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="MR 治理风险扫描器")
     ap.add_argument("--diff-base", help="diff 基准 ref, 如 origin/master")
@@ -696,6 +732,7 @@ def main() -> int:
 
     if not violations:
         print("[scan-risks] PASS — 未发现缺注解的风险代码。")
+        _write_summary([], [])
         return 0
 
     print("[scan-risks] FAIL — 以下风险代码缺少合法注解:\n")
@@ -719,10 +756,13 @@ def main() -> int:
         ps = v.get("problems", [])
         return any(not str(p).lstrip().startswith("[warn]") for p in ps)
     blocking = [v for v in violations if _is_blocking(v)]
+    warn_only = [v for v in violations if not _is_blocking(v)]
 
     print(f"[scan-risks] 共 {len(violations)} 处违规 "
           f"(其中 {len(blocking)} 处实质问题, {len(violations)-len(blocking)} 处仅提醒)。"
           f"详见 docs/governance/risk-types.md")
+
+    _write_summary(blocking, warn_only)
 
     enforcement = cfg["risk_annotations"].get("enforcement", "soft")
     if enforcement != "hard":

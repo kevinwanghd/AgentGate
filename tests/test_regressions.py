@@ -438,5 +438,116 @@ class RunAffectedTestsTests(unittest.TestCase):
         self.assertIsNone(result)
 
 
+class AiUsageNotMandatoryTests(unittest.TestCase):
+    """AI-Usage 不再是强制字段: 无 trailer 无描述时不阻断。"""
+
+    def _mr_desc(self, extra: str = "") -> str:
+        return (
+            "## 背景\n\n修复支付超时问题。\n\n"
+            "## 变更内容\n\n- 增加重试逻辑\n\n"
+            "## 自测确认\n\n- [x] 本地测试通过\n"
+            + extra
+        )
+
+    def test_no_ai_usage_passes_by_default(self) -> None:
+        """DEFAULT_CONFIG 不含 ai_usage, 缺少 trailer/描述不应产生 problem。"""
+        cfg = validate_mr.load_config(None)
+        problems = validate_mr.validate(self._mr_desc(), cfg, None)
+        ai_problems = [p for p in problems if "AI-Usage" in p]
+        self.assertEqual([], ai_problems, f"不应有 AI-Usage 问题: {ai_problems}")
+
+    def test_ai_usage_optional_when_not_in_mandatory_fields(self) -> None:
+        """mandatory_fields 中不含 ai_usage 时, 校验器不检查该字段。"""
+        cfg = {"metadata": {"enforcement": "hard", "mandatory_fields": ["background", "changes", "self_test"]},
+               "large_change": validate_mr.DEFAULT_CONFIG["large_change"]}
+        problems = validate_mr.validate(self._mr_desc(), cfg, None)
+        ai_problems = [p for p in problems if "AI-Usage" in p]
+        self.assertEqual([], ai_problems)
+
+    def test_ai_usage_still_checked_when_in_mandatory_fields(self) -> None:
+        """显式在 mandatory_fields 里加回 ai_usage 时仍然校验。"""
+        cfg = {"metadata": {
+                   "enforcement": "hard",
+                   "mandatory_fields": ["background", "changes", "self_test", "ai_usage"],
+               },
+               "large_change": validate_mr.DEFAULT_CONFIG["large_change"]}
+        with mock.patch.object(validate_mr, "find_ai_usage_in_commits", return_value=(False, None)):
+            problems = validate_mr.validate(self._mr_desc(), cfg, None)
+        ai_problems = [p for p in problems if "AI-Usage" in p or "ai_usage" in p.lower()]
+        self.assertTrue(ai_problems, "显式加回 ai_usage 后应当校验")
+
+
+class WarnJobSummaryTests(unittest.TestCase):
+    """warn 命中写入 GITHUB_STEP_SUMMARY, block 为零时不写失败表格。"""
+
+    def setUp(self) -> None:
+        self.cfg = json.loads(json.dumps(scan_risks.DEFAULT_CONFIG))
+        self.cfg["risk_annotations"]["enforcement"] = "hard"
+
+    def _run_scan_with_summary(self, diff: str, cfg: dict) -> tuple[list[dict], str]:
+        """运行 scan 并捕获写入 GITHUB_STEP_SUMMARY 的内容。"""
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8") as f:
+            summary_path = f.name
+        try:
+            with mock.patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": summary_path}):
+                violations = scan_risks.scan(diff, cfg)
+                blocking = [v for v in violations if v.get("mode") != "warn"]
+                warn_only = [v for v in violations if v.get("mode") == "warn"]
+                scan_risks._write_summary(blocking, warn_only)
+            with open(summary_path, encoding="utf-8") as f:
+                summary = f.read()
+        finally:
+            os.unlink(summary_path)
+        return violations, summary
+
+    def test_pass_writes_green_summary(self) -> None:
+        diff = "+++ b/pkg/foo/foo.go\n@@ -0,0 +1 @@\n+func Hello() {}\n"
+        _, summary = self._run_scan_with_summary(diff, self.cfg)
+        self.assertIn("✅", summary)
+        self.assertNotIn("❌", summary)
+        self.assertNotIn("⚠️", summary)
+
+    def test_warn_violation_appears_in_summary(self) -> None:
+        """mode:warn 规则的命中出现在 Job Summary 中, 门禁不阻断。"""
+        yml = (
+            "patterns:\n"
+            "  - type: sensitive-log\n"
+            '    regex: \'\\bpassword\\b\'\n'
+            "    desc: 敏感字段进日志\n"
+            "    exts: [\".go\"]\n"
+            "    mode: warn\n"
+        )
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            pat_path = os.path.join(tmp, "go.yml")
+            with open(pat_path, "w", encoding="utf-8") as f:
+                f.write(yml)
+            src = Path(tmp) / "service.go"
+            src.write_text('log.Info("password=" + pwd)\n', encoding="utf-8")
+            diff = (
+                f"+++ b/{src.as_posix()}\n"
+                "@@ -0,0 +1 @@\n"
+                '+log.Info("password=" + pwd)\n'
+            )
+            cfg = json.loads(json.dumps(self.cfg))
+            cfg["risk_annotations"]["pattern_includes"] = [pat_path]
+            scan_risks._load_pattern_includes(cfg, None)
+            _, summary = self._run_scan_with_summary(diff, cfg)
+
+        self.assertIn("⚠️", summary)
+        self.assertNotIn("❌", summary)
+        self.assertIn("warn", summary.lower())
+
+    def test_no_summary_file_when_env_not_set(self) -> None:
+        """未设置 GITHUB_STEP_SUMMARY 时, _write_summary 静默跳过不报错。"""
+        env = {k: v for k, v in os.environ.items() if k != "GITHUB_STEP_SUMMARY"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            try:
+                scan_risks._write_summary([], [])
+            except Exception as exc:
+                self.fail(f"不应抛异常: {exc}")
+
+
 if __name__ == "__main__":
     unittest.main()
