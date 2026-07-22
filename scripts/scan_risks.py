@@ -88,6 +88,13 @@ _TEST_FILE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# 行内豁免标记: // scan:ignore reason:"..." 或 # scan:ignore reason:"..."
+# 出现在命中行同行或上方 1 行内即豁免该行所有模式
+_SCAN_IGNORE_RE = re.compile(
+    r'scan:ignore\b.*?reason:\s*"(?P<reason>[^"]{5,})"',
+    re.IGNORECASE,
+)
+
 # 测试文件中仍然需要检查的模式 (skipped-test 的检测对象就是测试代码本身)
 _TEST_FILE_PATTERNS = {"skipped-test"}
 
@@ -622,6 +629,14 @@ def scan(diff_text: str, cfg: dict) -> list[dict]:
                 if match and match.start() <= len(content):
                     hits.append((rtype, desc, pmode))
             if not hits:
+                continue
+
+            # 行内豁免: 命中行同行或上一行有 scan:ignore reason:"..." 则整行跳过
+            ignore_window = [content]
+            prev = added_by_line.get(lineno - 1)
+            if prev is not None:
+                ignore_window.append(prev)
+            if any(_SCAN_IGNORE_RE.search(l) for l in ignore_window):
                 continue
 
             hit_types = {t for t, _, _ in hits}
