@@ -204,7 +204,7 @@ def _build_patterns() -> list[tuple[str, re.Pattern, str, frozenset, str]]:
     # 8. todo-no-context: 通用
     p.append((
         "todo-no-context",
-        re.compile(r'(?i)\b(TODO|FIXME|HACK)\b(?!\s*\(\s*@?\w+\s*,\s*\d{4}-\d{2}-\d{2})'),
+        re.compile(r'(?i)\b(TODO|FIXME|HACK)(?![-\w])(?!\s*\(\s*@?\w+\s*,\s*\d{4}-\d{2}-\d{2})'),
         "TODO/FIXME/HACK 缺少 (owner, 日期)",
         frozenset(),
         "block",

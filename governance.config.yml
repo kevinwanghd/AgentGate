@@ -20,6 +20,7 @@ risk_annotations:
     - "**/*.generated.*"
     - "**/dist/**"
     - "**/build/**"
+    - "tests/**"          # AgentGate 自身测试文件含规则模式字面量, 同 scripts/ 豁免原因
   registered_types:
     - auth-bypass
     - magic-id
