@@ -195,3 +195,28 @@ jobs:
             --config governance.config.yml \
             --output gate-result.json
           echo "GateResult:"; cat gate-result.json
+
+  # Merge Bot：只在 GateResult 成功后启用平台自动合并。
+  # 开发 agent、测试 runner 和 Gate Controller 均不直接获得该权限。
+  auto-merge:
+    needs: [gate-decision]
+    if: >-
+      needs.gate-decision.result == 'success' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: enable squash auto-merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          gh pr merge "$PR_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            --auto \
+            --squash \
+            --delete-branch
