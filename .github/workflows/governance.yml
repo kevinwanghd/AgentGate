@@ -156,7 +156,7 @@ jobs:
         run: bash scripts/selftest.sh
 
   # GateResult 汇总器（只读阶段）。
-  # Merge Bot 接入需要独立的 write 权限，待仓库管理员显式启用后再加合并动作。
+  # 只有该 job 成功后，后续独立 Merge Bot 才能申请平台自动合并。
   gate-decision:
     needs: [risk-scan, secret-scan, mr-validate, test-check, go-test, selftest]
     if: github.event.pull_request.draft == false
