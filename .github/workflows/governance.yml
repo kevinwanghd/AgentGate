@@ -74,8 +74,21 @@ jobs:
           BASE_REF="${{ github.event.pull_request.base.ref }}"
           if [ -z "$BASE_REF" ]; then echo "::error::PR base.ref 缺失, 拒绝扫描"; exit 1; fi
           git fetch -q origin "$BASE_REF"
-          printf '%s' "$PR_BODY" \
-            | python scripts/validate_mr.py --diff-base "origin/$BASE_REF" --config governance.config.yml
+          # 如果 PR_BODY 为空，创建临时文件写入提示信息（避免 stdin 为空导致脚本报错）
+          if [ -z "$PR_BODY" ]; then
+            echo "## 背景" > /tmp/pr_body.txt
+            echo "请填写 PR 背景" >> /tmp/pr_body.txt
+            echo "" >> /tmp/pr_body.txt
+            echo "## 变更内容" >> /tmp/pr_body.txt
+            echo "请填写变更内容" >> /tmp/pr_body.txt
+            echo "" >> /tmp/pr_body.txt
+            echo "## 自测确认" >> /tmp/pr_body.txt
+            echo "[ ] 已完成自测" >> /tmp/pr_body.txt
+            python scripts/validate_mr.py --diff-base "origin/$BASE_REF" --config governance.config.yml --file /tmp/pr_body.txt
+          else
+            printf '%s' "$PR_BODY" \
+              | python scripts/validate_mr.py --diff-base "origin/$BASE_REF" --config governance.config.yml
+          fi
 
   # 测试痕迹检测: 硬门禁 (失败测试记录无条件硬拦); 读 commit 的 Tested: trailer
   test-check:

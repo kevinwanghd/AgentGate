@@ -1,0 +1,67 @@
+# C# / .NET 专项风险规则包 (mode: warn — 新规则先观察误报率, 不直接硬阻断)
+#
+# 接入方式: 在消费仓库的 governance.config.yml 中添加:
+#
+#   risk_annotations:
+#     pattern_includes:
+#       - governance/patterns/csharp.yml
+#     registered_types:
+#       - appsettings-secret
+#       - ef-rawsql
+#       - dapper-concat
+#       - abp-filter-bypass
+#       - cors-allow-all
+#       - sensitive-log-cs
+#
+# 所有规则默认 mode: warn (仅警告), 观察几周误报率后可逐条改为 mode: block。
+
+patterns:
+
+  # ── appsettings.json 硬编码密钥 ──────────────────────────────────────────
+  # 覆盖: ConnectionString / Password / Secret / ApiKey 等字段含非空字面值
+  # 误报说明: 值为空字符串/占位符 (如 "YOUR_KEY_HERE") 不匹配
+  - type: appsettings-secret
+    regex: '"(?:ConnectionString|Password|Pwd|Secret|ApiKey|AccessKey|Token|PrivateKey)"\s*:\s*"(?!\s*")[^"]{4,}'
+    desc: "appsettings.json 疑似硬编码密钥或连接串"
+    exts: [".json"]
+    mode: warn
+
+  # ── EF Core 原生 SQL 拼接 ────────────────────────────────────────────────
+  # 覆盖: FromSqlRaw / ExecuteSqlRaw 里用 + 或 $"" 拼接用户输入
+  - type: ef-rawsql
+    regex: '(?:FromSqlRaw|ExecuteSqlRaw|FromSql)\s*\(\s*(?:\$"|[^)]*\+)'
+    desc: "EF Core 原生 SQL 拼接, 应改用参数化查询或 FormattableString"
+    exts: [".cs"]
+    mode: warn
+
+  # ── Dapper 原生 SQL 拼接 ─────────────────────────────────────────────────
+  # 覆盖: Query<T>/Execute 第一个参数含字符串拼接
+  - type: dapper-concat
+    regex: '\.(?:Query|Execute|QueryFirst|QuerySingle)(?:<[^>]+>)?\s*\(\s*(?:\$"|sql\s*\+|"[^"]*"\s*\+)'
+    desc: "Dapper SQL 字符串拼接风险, 应使用 DynamicParameters"
+    exts: [".cs"]
+    mode: warn
+
+  # ── ABP Framework 多租户过滤禁用 ─────────────────────────────────────────
+  # 禁用后当前操作可跨租户读写, 需审查是否有意为之
+  - type: abp-filter-bypass
+    regex: '(?:DisableFilter|IgnoreMultiTenancy|SuppressMultiTenancy)\s*[(<]'
+    desc: "ABP 多租户过滤禁用, 可能导致租户数据泄露"
+    exts: [".cs"]
+    mode: warn
+
+  # ── ASP.NET Core CORS 全放行 ──────────────────────────────────────────────
+  # AllowAnyOrigin + AllowCredentials 同时出现是安全错误配置
+  - type: cors-allow-all
+    regex: '(?:AllowAnyOrigin|SetIsOriginAllowed\s*\(\s*_\s*=>\s*true\s*\))'
+    desc: "CORS AllowAnyOrigin 在生产环境中应限制为白名单域名"
+    exts: [".cs"]
+    mode: warn
+
+  # ── 敏感字段写入日志 ──────────────────────────────────────────────────────
+  # 匹配 _logger.LogXxx(...) / Log.xxx(...) 行中含敏感字段名
+  - type: sensitive-log-cs
+    regex: '(?i)\b(?:_?logger?|Log)\b.*\b(?:password|passwd|token|secret|apikey|connectionstring|idcard|mobile|phone|cvv|pin)\b'
+    desc: "敏感字段疑似写入日志"
+    exts: [".cs"]
+    mode: warn
