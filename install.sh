@@ -248,6 +248,30 @@ large_change:
     - "migrations/**"
     - "*.proto"
 
+auto_merge:
+  enabled: true
+  strategy: squash
+  delete_branch_after_merge: true
+  require_up_to_date_branch: true
+  require_all_required_checks: true
+  required_checks:
+    - risk-scan
+    - secret-scan
+    - mr-validate
+    - test-check
+    - go-test
+  protected_paths:
+    - governance.config.yml
+    - .github/workflows/**
+    - .gitlab-ci.yml
+    - ci/**
+    - governance/**
+    - CODEOWNERS
+    - scripts/scan_risks.py
+    - scripts/check_tested.py
+    - scripts/validate_mr.py
+    - scripts/gate_decision.py
+
 testing:
   enforcement: soft           # v1 软启动: 未测代码仅警告; soft_deadline 后转硬
   soft_deadline: ${SOFT_DEADLINE}
@@ -304,6 +328,7 @@ fetch_or_local "scripts/report_expired.py"  | write_file "governance/scripts/rep
 fetch_or_local "scripts/collect_ai_usage.py" | write_file "governance/scripts/collect_ai_usage.py"
 fetch_or_local "scripts/record_test_run.py" | write_file "governance/scripts/record_test_run.py"
 fetch_or_local "scripts/check_tested.py"    | write_file "governance/scripts/check_tested.py"
+fetch_or_local "scripts/gate_decision.py"   | write_file "governance/scripts/gate_decision.py"
 fetch_or_local "scripts/create_mr.py"       | write_file "governance/scripts/create_mr.py"
 fetch_or_local "scripts/run_affected_tests.py" | write_file "governance/scripts/run_affected_tests.py"
 fetch_or_local "scripts/install-hooks.sh"   | write_file "governance/scripts/install-hooks.sh"
@@ -339,6 +364,7 @@ cat > "$CI_SNIPPET" <<'EOF'
 #   - local: '/governance/ci-snippet.yml'
 #
 # governance job 在 test 阶段之前运行, diff-only, 秒级返回。
+# 如需自动合并, 在 GitLab CI/CD Variables 配置受保护/Masked 的 GOVERNANCE_MERGE_BOT_TOKEN。
 
 stages:
   - governance
@@ -479,6 +505,107 @@ governance:go-test:
         --diff-base "origin/$TB" \
         --timeout "${GOVERNANCE_GO_TEST_TIMEOUT:-120}"
   allow_failure: false
+
+# GateResult 决策: 汇总 CI 独立证据, 不直接合并
+governance:gate-decision:
+  stage: test
+  image: python:3.11-slim
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  variables:
+    GIT_DEPTH: 0
+  needs:
+    - job: governance:risk-scan
+    - job: governance:secret-scan
+    - job: governance:mr-validate
+    - job: governance:test-check
+    - job: governance:go-test
+      optional: true
+  before_script:
+    - pip install -q pyyaml==6.0.3
+  script:
+    - |
+      TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
+      git fetch -q origin "$TB"
+      SOURCE_SHA="${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA:-$CI_COMMIT_SHA}"
+      TARGET_SHA="${CI_MERGE_REQUEST_TARGET_BRANCH_SHA:-$(git rev-parse "origin/$TB")}"
+      CONFIG_PATH="${GOVERNANCE_CONFIG_PATH:-governance.config.yml}"
+      [ -f "$CONFIG_PATH" ] || CONFIG_PATH="governance/governance.config.yml"
+      POLICY_SHA="$(git rev-parse "${SOURCE_SHA}:${CONFIG_PATH}" 2>/dev/null || echo "$SOURCE_SHA")"
+      python - <<'PY' > gate-evidence.json
+      import json
+      checks = {
+          "risk-scan": "pass",
+          "secret-scan": "pass",
+          "mr-validate": "pass",
+          "test-check": "pass",
+          "go-test": "pass",
+      }
+      print(json.dumps({"checks": checks}, ensure_ascii=False))
+      PY
+      set +e
+      python governance/scripts/gate_decision.py \
+        --evidence gate-evidence.json \
+        --source-sha "$SOURCE_SHA" \
+        --target-sha "$TARGET_SHA" \
+        --policy-sha "$POLICY_SHA" \
+        --diff-base "origin/$TB" \
+        --config "$CONFIG_PATH" \
+        --output gate-result.json
+      DECISION_EXIT=$?
+      set -e
+      if [ "$DECISION_EXIT" -gt 1 ]; then
+        exit "$DECISION_EXIT"
+      fi
+      python - <<'PY' > gate.env
+      import json
+      with open("gate-result.json", encoding="utf-8") as f:
+          gate = json.load(f)
+      print(f"GATE_MERGE_ACTION={gate.get('merge_action', 'BLOCK')}")
+      print(f"GATE_RESULT={gate.get('result', 'FAIL')}")
+      PY
+      cat gate.env
+  artifacts:
+    reports:
+      dotenv: gate.env
+    paths:
+      - gate-result.json
+    expire_in: 30 days
+  allow_failure: false
+
+# Merge Bot: 仅消费 GateResult, 使用独立 token 设置 GitLab 自动合并
+governance:auto-merge:
+  stage: test
+  image: curlimages/curl:8.10.1
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  needs:
+    - job: governance:gate-decision
+      artifacts: true
+  script:
+    - |
+      if [ "${GATE_MERGE_ACTION:-BLOCK}" != "AUTO_MERGE" ]; then
+        echo "[auto-merge] GateResult=${GATE_RESULT:-unknown}, action=${GATE_MERGE_ACTION:-BLOCK}; skip."
+        exit 0
+      fi
+      if [ "${CI_MERGE_REQUEST_SOURCE_PROJECT_ID:-$CI_PROJECT_ID}" != "$CI_PROJECT_ID" ]; then
+        echo "[auto-merge] fork/source-project MR is not eligible for bot merge."
+        exit 0
+      fi
+      if [ -z "${GOVERNANCE_MERGE_BOT_TOKEN:-}" ]; then
+        echo "[auto-merge] GOVERNANCE_MERGE_BOT_TOKEN is required for GitLab auto merge." >&2
+        exit 1
+      fi
+      SHA="${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA:-$CI_COMMIT_SHA}"
+      API="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests/${CI_MERGE_REQUEST_IID}/merge"
+      curl --fail --silent --show-error --request PUT \
+        --header "PRIVATE-TOKEN: ${GOVERNANCE_MERGE_BOT_TOKEN}" \
+        --data-urlencode "merge_when_pipeline_succeeds=true" \
+        --data-urlencode "squash=true" \
+        --data-urlencode "should_remove_source_branch=true" \
+        --data-urlencode "sha=${SHA}" \
+        "$API"
+  allow_failure: false
 EOF
 ok "生成 CI 片段 governance/ci-snippet.yml (已接入真实扫描脚本)"
 
@@ -501,6 +628,7 @@ cat <<EOF
   governance/scripts/collect_ai_usage.py (AI 使用自动采集 -> commit trailer)
   governance/scripts/record_test_run.py (测试运行记录器 -> 留痕)
   governance/scripts/check_tested.py    (测试痕迹检测, 软门禁)
+  governance/scripts/gate_decision.py   (GateResult 决策 -> 自动合并/等待审批/阻断)
   governance/scripts/create_mr.py       (自动生成并提交 MR)
   governance/scripts/run_affected_tests.py (Go 受影响包测试 + 反向依赖)
   governance/scripts/install-hooks.sh   (安装 prepare-commit-msg hook)

@@ -1007,5 +1007,24 @@ class GateDecisionTests(unittest.TestCase):
             self.assertEqual(json.loads(output.read_text(encoding="utf-8"))["result"], "PASS")
 
 
+class GitLabAutoMergeTemplateTests(unittest.TestCase):
+    def test_central_gitlab_template_has_gate_and_merge_bot_guards(self) -> None:
+        template = (ROOT / "ci" / "governance-ci.yml").read_text(encoding="utf-8")
+        self.assertIn("governance:gate-decision:", template)
+        self.assertIn("governance:auto-merge:", template)
+        self.assertIn("GOVERNANCE_MERGE_BOT_TOKEN", template)
+        self.assertIn("CI_MERGE_REQUEST_SOURCE_PROJECT_ID", template)
+        self.assertIn('--data-urlencode "sha=${SHA}"', template)
+        self.assertIn("merge_when_pipeline_succeeds=true", template)
+
+    def test_installer_ships_gate_decision_and_gitlab_auto_merge_jobs(self) -> None:
+        installer = (ROOT / "install.sh").read_text(encoding="utf-8")
+        self.assertIn('scripts/gate_decision.py"   | write_file "governance/scripts/gate_decision.py"', installer)
+        self.assertIn("governance:gate-decision:", installer)
+        self.assertIn("governance:auto-merge:", installer)
+        self.assertIn("GOVERNANCE_MERGE_BOT_TOKEN", installer)
+        self.assertIn("CI_MERGE_REQUEST_SOURCE_PROJECT_ID", installer)
+
+
 if __name__ == "__main__":
     unittest.main()

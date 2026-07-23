@@ -83,7 +83,12 @@ AgentGate 默认启用 CI 驱动的自动合并策略：
 - 治理配置、CI、门禁脚本和权限相关路径自动升级为 CRITICAL，保持 PR 打开并等待人工批准；
 - 本地 `Tested:` trailer 和 PR 描述只作审计上下文，不作为自动合并依据。
 
-自动合并权限应只授予独立 Merge Bot，开发 agent 不应拥有主干写权限或合并权限。
+GitLab 接入后会新增 `governance:gate-decision` 与 `governance:auto-merge`：
+
+- `gate-decision` 只生成 `gate-result.json` 和 `GATE_MERGE_ACTION`，不调用平台 API；
+- `auto-merge` 仅在 `AUTO_MERGE`、同项目 MR、当前 source SHA 匹配时调用 GitLab Merge API；
+- GitLab 自动合并 token 必须放在受保护/Masked 变量 `GOVERNANCE_MERGE_BOT_TOKEN` 中；
+- Merge Bot token 应来自独立 Bot/Project Access Token，开发 agent 不应拥有主干写权限或合并权限。
 
 ### 留痕与审计
 
@@ -123,13 +128,14 @@ if (req.Headers["X-Internal"] == "true") return true;
 
 ## 🛠️ 核心脚本
 
-AgentGate 包含 10 个 Python 脚本(在 `scripts/` 目录):
+AgentGate 包含 11 个 Python 脚本(在 `scripts/` 目录):
 
 | 脚本 | 功能 |
 |---|---|
 | `scan_risks.py` | 风险代码扫描(8 类内置 + 自定义规则；warn 命中写 Job Summary) |
 | `check_tested.py` | 测试覆盖检查 |
 | `validate_mr.py` | MR 描述校验；大 PR 写拆分建议到 Job Summary |
+| `gate_decision.py` | 生成 GateResult v2，决定自动合并/等待审批/阻断 |
 | `run_affected_tests.py` | Go 受影响包测试 + 反向依赖一跳扩展 |
 | `collect_ai_usage.py` | AI 用量统计(读证据,算占比,盖 trailer) |
 | `record_test_run.py` | 记录测试运行(盖 Tested trailer) |
@@ -228,7 +234,7 @@ testing:
 │   │   ├── javascript.yml     # JavaScript/TypeScript (8条)
 │   │   ├── java.yml           # Java (10条)
 │   │   └── dart.yml           # Dart/Flutter (10条)
-│   └── scripts/               # 9 个检查脚本
+│   └── scripts/               # 治理检查与 GateResult 脚本
 │       ├── scan_risks.py
 │       ├── check_tested.py
 │       └── ...
