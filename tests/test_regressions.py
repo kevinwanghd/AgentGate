@@ -913,6 +913,22 @@ class LargeDiffSummaryTests(unittest.TestCase):
         self.assertFalse(is_large)
 
 
+class MRDescriptionEncodingTests(unittest.TestCase):
+    def test_stdin_description_strips_utf8_bom_before_heading_match(self) -> None:
+        text = "\ufeff## 背景\n测试背景\n\n## 变更内容\n测试变更\n\n## 自测确认\n已测试\n"
+        with mock.patch.object(sys, "stdin", mock.Mock(isatty=lambda: False, read=lambda: text)):
+            self.assertTrue(validate_mr._has_section(validate_mr.read_description(None), "背景"))
+
+    def test_file_description_accepts_utf8_bom(self) -> None:
+        with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8-sig") as f:
+            f.write("## 背景\n测试背景\n")
+            path = f.name
+        try:
+            self.assertTrue(validate_mr._has_section(validate_mr.read_description(path), "背景"))
+        finally:
+            os.unlink(path)
+
+
 class GateDecisionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.config = json.loads(json.dumps(gate_decision.DEFAULT_CONFIG))
