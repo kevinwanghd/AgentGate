@@ -36,13 +36,15 @@ class CIPlatformCompatTests(unittest.TestCase):
                 env=env,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 cwd=str(REPO_ROOT),
             )
 
             # warn 模式不阻断，返回 0
             self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
 
-            with open(summary_path) as f:
+            with open(summary_path, encoding="utf-8", errors="replace") as f:
                 content = f.read()
 
             # GitHub 环境下应该写入内容
@@ -67,6 +69,8 @@ class CIPlatformCompatTests(unittest.TestCase):
             env=env,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
 
         # 没有 summary path 时应该静默跳过，不报错
@@ -87,6 +91,8 @@ class CIPlatformCompatTests(unittest.TestCase):
             env=env,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
 
         # validate_mr.py 对空描述会失败，但这里测试的是 summary 机制
@@ -109,6 +115,8 @@ class CIPlatformCompatTests(unittest.TestCase):
             env=env,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
 
         # 没有 summary path 时应该静默跳过，不报错

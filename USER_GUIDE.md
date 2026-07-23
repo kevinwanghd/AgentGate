@@ -237,6 +237,9 @@ risk_annotations:
   # 门禁强度(可独立于 metadata.enforcement)
   enforcement: soft
   soft_deadline: 90
+  # 可选: 接入语言专项规则包。Go 规则包默认全部 mode: warn。
+  pattern_includes:
+    - governance/patterns/go.yml
   # 允许的风险类型(不在列表里的注解 = 无效)
   registered_types:
     - auth-bypass        # 认证/权限绕过
@@ -247,6 +250,17 @@ risk_annotations:
     - global-state       # 全局可变状态
     - test-sleep         # 测试用 sleep
     - empty-except       # 空异常处理
+    # pattern_includes 会自动注册 Go 规则类型；旧配置可显式列出:
+    # - swallowed-error
+    # - context-background
+    # - sensitive-log
+    # - go-sql-concat
+    # - go-hardcoded-secret
+    # - go-cmd-inject
+    # - go-tls-skip-verify
+    # - go-ssrf
+    # - go-panic-in-handler
+    # - go-weak-random
   # 注解过期时间(天,reviewed 字段多久后失效)
   reviewed_max_age_days: 90
   # reason 黑名单词(出现这些词 = 敷衍,拒绝)
@@ -314,7 +328,7 @@ risk_annotations:
 
 ### 1. risk-scan(风险代码扫描)
 
-**扫什么**:8 类内置风险模式 + 公司自定义规则
+**扫什么**:8 类内置风险模式 + 语言专项规则包 + 公司自定义规则
 
 | 类型 | 正则示例 | 为什么危险 |
 |---|---|---|
@@ -326,6 +340,15 @@ risk_annotations:
 | `global-state` | `static int counter` | 全局可变状态 |
 | `test-sleep` | `Thread.Sleep(1000)` | 测试用 sleep 不稳定 |
 | `empty-except` | `catch { }` | 空异常吞错误 |
+| `go-sql-concat` | `fmt.Sprintf("SELECT ... %s", id)` | Go SQL 文本拼接易注入 |
+| `go-hardcoded-secret` | `password := "placeholder-secret-value"` | Go 敏感值硬编码 |
+| `go-cmd-inject` | `exec.Command("sh", "-c", "echo " + input)` | 命令参数拼接可能注入 |
+| `go-tls-skip-verify` | `InsecureSkipVerify: true` | 跳过 TLS 证书验证 |
+| `go-ssrf` | `http.Get(baseURL + path)` | 动态 URL 请求可能 SSRF |
+| `go-panic-in-handler` | `panic("bad state")` | 非测试业务代码 panic 难恢复 |
+| `go-weak-random` | `token := rand.Intn(1000000)` | 安全 token/nonce 应使用 crypto/rand |
+
+Go 规则包的 10 条规则默认都是 `mode: warn`。建议先观察几周命中样例，再把低误报、高风险的规则逐条升级为 `block`；不要一口气全硬拦。当前 Go 规则仍是正则 + 新增行窗口模型，能覆盖多行 `exec.Command`、`http.NewRequest` 动态 URL、常见 SQL 拼接和硬编码敏感值，但不声称覆盖跨函数污点流或完整 Go AST 语义。
 
 **怎么过**:
 - 改掉风险代码,或

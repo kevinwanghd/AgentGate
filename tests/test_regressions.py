@@ -363,6 +363,41 @@ class PatternIncludesTests(unittest.TestCase):
                 rc = scan_risks.main()
         self.assertEqual(0, rc, "warn-only 违规不应阻断 (exit 0)")
 
+    def test_mixed_warn_and_block_patterns_result_in_block(self) -> None:
+        """同一行同时命中 warn 和 block 时, 最终模式应为 block。"""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "service.go"
+            src.write_text("Danger()\n", encoding="utf-8")
+            cfg = json.loads(json.dumps(self.cfg))
+            cfg["risk_annotations"]["registered_types"].extend(
+                ["danger-warn", "danger-block"]
+            )
+            cfg["risk_annotations"]["custom_patterns"] = [
+                {
+                    "type": "danger-warn",
+                    "regex": r"Danger\(",
+                    "desc": "warn-only dangerous call",
+                    "exts": [".go"],
+                    "mode": "warn",
+                },
+                {
+                    "type": "danger-block",
+                    "regex": r"Danger\(",
+                    "desc": "blocking dangerous call",
+                    "exts": [".go"],
+                    "mode": "block",
+                },
+            ]
+            diff = (
+                f"+++ b/{src.as_posix()}\n"
+                "@@ -0,0 +1 @@\n"
+                "+Danger()\n"
+            )
+            violations = scan_risks.scan(diff, cfg)
+        self.assertEqual("block", violations[0]["mode"])
+        self.assertEqual("danger-block/danger-warn", violations[0]["type"])
+
     def test_go_pattern_not_triggered_on_cs_file(self) -> None:
         """Go 专属规则 (exts:[.go]) 不对 .cs 文件触发。"""
         yml = (
@@ -400,6 +435,147 @@ class PatternIncludesTests(unittest.TestCase):
             scan_risks._load_pattern_includes(cfg, None)
         except Exception as exc:
             self.fail(f"不应抛异常: {exc}")
+
+
+class GoPatternHardeningTests(unittest.TestCase):
+    """Regression coverage for the Go rule pack shipped in patterns/go.yml."""
+
+    def setUp(self) -> None:
+        self.cfg = json.loads(json.dumps(scan_risks.DEFAULT_CONFIG))
+        self.cfg["risk_annotations"]["enforcement"] = "hard"
+        self.cfg["risk_annotations"]["pattern_includes"] = [
+            str(ROOT / "patterns" / "go.yml")
+        ]
+        scan_risks._load_pattern_includes(self.cfg, None)
+
+    def _scan_go(self, source: str, filename: str = "service.go") -> list[dict]:
+        code = source.strip("\n")
+        lines = code.splitlines()
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / filename
+            src.write_text(code + "\n", encoding="utf-8")
+            diff_lines = [
+                f"+++ b/{src.as_posix()}",
+                f"@@ -0,0 +1,{len(lines)} @@",
+                *[f"+{line}" for line in lines],
+            ]
+            return scan_risks.scan("\n".join(diff_lines) + "\n", self.cfg)
+
+    @staticmethod
+    def _types(violations: list[dict]) -> set[str]:
+        out: set[str] = set()
+        for item in violations:
+            out.update(item["type"].split("/"))
+        return out
+
+    def assertHits(self, risk_type: str, source: str) -> None:
+        violations = self._scan_go(source)
+        self.assertIn(risk_type, self._types(violations), violations)
+        matched = [v for v in violations if risk_type in v["type"].split("/")]
+        self.assertTrue(all(v["mode"] == "warn" for v in matched), matched)
+
+    def assertDoesNotHit(self, risk_type: str, source: str) -> None:
+        violations = self._scan_go(source)
+        self.assertNotIn(risk_type, self._types(violations), violations)
+
+    def test_go_cmd_inject_multiline_hits(self) -> None:
+        self.assertHits(
+            "go-cmd-inject",
+            '''
+cmd := exec.Command(
+    "sh",
+    "-c",
+    "echo " + userInput,
+)
+''',
+        )
+
+    def test_go_cmd_inject_constant_args_do_not_hit(self) -> None:
+        self.assertDoesNotHit(
+            "go-cmd-inject",
+            'cmd := exec.Command("tool", "--version")',
+        )
+
+    def test_go_ssrf_new_request_multiline_hits(self) -> None:
+        self.assertHits(
+            "go-ssrf",
+            '''
+req, _ := http.NewRequest(
+    "GET",
+    "https://api.example.test/" + userPath,
+    nil,
+)
+client.Do(req)
+''',
+        )
+
+    def test_go_ssrf_constant_url_does_not_hit(self) -> None:
+        self.assertDoesNotHit(
+            "go-ssrf",
+            'resp, _ := http.Get("https://api.example.test/health")',
+        )
+
+    def test_go_sql_concat_common_forms_hit(self) -> None:
+        samples = [
+            'query := fmt.Sprintf("SELECT * FROM users WHERE id = %s", userID)',
+            'query := "SELECT * FROM users WHERE id = " + userID',
+            '''
+query := "SELECT * FROM users WHERE name = '" +
+    userName + "'"
+''',
+        ]
+        for sample in samples:
+            with self.subTest(sample=sample):
+                self.assertHits("go-sql-concat", sample)
+
+    def test_go_sql_parameterized_query_does_not_hit(self) -> None:
+        self.assertDoesNotHit(
+            "go-sql-concat",
+            'rows, _ := db.Query("SELECT * FROM users WHERE id = ?", userID)',
+        )
+
+    def test_go_hardcoded_secret_literals_hit(self) -> None:
+        samples = [
+            'password := "placeholder-secret-value"',
+            "cfg := Config{ClientSecret: `placeholder-secret-value`}",
+        ]
+        for sample in samples:
+            with self.subTest(sample=sample):
+                self.assertHits("go-hardcoded-secret", sample)
+
+    def test_go_hardcoded_secret_non_literals_do_not_hit(self) -> None:
+        samples = [
+            'token := os.Getenv("TOKEN")',
+            'tokenCount := 3',
+            'token := "short"',
+        ]
+        for sample in samples:
+            with self.subTest(sample=sample):
+                self.assertDoesNotHit("go-hardcoded-secret", sample)
+
+    def test_go_tls_skip_verify_hits(self) -> None:
+        self.assertHits(
+            "go-tls-skip-verify",
+            "cfg := &tls.Config{InsecureSkipVerify: true}",
+        )
+
+    def test_go_tls_normal_config_does_not_hit(self) -> None:
+        self.assertDoesNotHit(
+            "go-tls-skip-verify",
+            "cfg := &tls.Config{MinVersion: tls.VersionTLS12}",
+        )
+
+    def test_go_panic_hits_business_file(self) -> None:
+        self.assertHits("go-panic-in-handler", 'panic("unexpected state")')
+
+    def test_go_panic_absent_does_not_hit(self) -> None:
+        self.assertDoesNotHit("go-panic-in-handler", "return fmt.Errorf(\"bad state\")")
+
+    def test_go_weak_random_security_context_hits(self) -> None:
+        self.assertHits("go-weak-random", "token := rand.Intn(1000000)")
+
+    def test_go_weak_random_sampling_context_does_not_hit(self) -> None:
+        self.assertDoesNotHit("go-weak-random", "sample := rand.Intn(10)")
 
 
 class RunAffectedTestsTests(unittest.TestCase):

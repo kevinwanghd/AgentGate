@@ -60,7 +60,7 @@ git add . && git commit -m "chore: 接入 AgentGate 治理" && git push
 
 | 检查 | 做什么 | 拦什么 |
 |---|---|---|
-| **risk-scan** | 扫描 8 类风险模式 + 6 种语言专属规则 + 自定义规则；warn 命中写 Job Summary | 硬编码 ID/密钥、SQL 拼接、认证绕过等 |
+| **risk-scan** | 扫描 8 类内置风险模式 + 语言专属规则包(Go 为 10 条 warn 规则) + 自定义规则；warn 命中写 Job Summary | 硬编码 ID/密钥、SQL 拼接、认证绕过等 |
 | **secret-scan** | gitleaks 检测密钥泄露 | 私钥、API token、数据库连接串 |
 | **test-check** | 验证测试覆盖 | 改了生产代码但没测试痕迹 |
 | **mr-validate** | 校验 MR 描述格式；大 PR 写拆分建议到 Job Summary | 缺背景/变更内容/自测确认段落 |
@@ -173,9 +173,12 @@ metadata:
 
 risk_annotations:
   enforcement: soft
+  pattern_includes:
+    - governance/patterns/go.yml   # 可选: 接入 Go 专项风险规则包
   registered_types:
     - auth-bypass
     - magic-id
+    # Go 规则包会通过 pattern_includes 自动注册 10 个 go-* / Go 基础类型
     - my-unsafe-api       # 公司自定义类型
   reviewed_max_age_days: 90
   reason_blacklist: [临时, hack]
@@ -207,7 +210,7 @@ testing:
 │   ├── mr-spec.md             # MR 规范说明
 │   ├── risk-types.md          # 风险类型清单
 │   ├── patterns/              # 语言专属风险规则包(可选 include)
-│   │   ├── go.yml             # Go (3条 warn 规则)
+│   │   ├── go.yml             # Go (10条 warn 规则)
 │   │   ├── csharp.yml         # C# / .NET (6条)
 │   │   ├── python.yml         # Python (8条)
 │   │   ├── javascript.yml     # JavaScript/TypeScript (8条)
