@@ -963,6 +963,16 @@ class GateDecisionTests(unittest.TestCase):
         self.assertEqual(result["result"], "FAIL")
         self.assertIn("required_check_missing", result["blocking_reasons"])
 
+    def test_non_pass_check_status_is_blocking(self) -> None:
+        result = gate_decision.build_gate_result(
+            source_sha="head", target_sha="base", policy_sha="policy",
+            changed_paths=["src/orders/service.py"],
+            checks={"lint": "queued", "unit": "pass"},
+            config=self.config,
+        )
+        self.assertEqual(result["result"], "FAIL")
+        self.assertEqual(result["merge_action"], "BLOCK")
+
     def test_disabled_auto_merge_waits_even_when_checks_pass(self) -> None:
         config = json.loads(json.dumps(self.config))
         config["auto_merge"]["enabled"] = False
