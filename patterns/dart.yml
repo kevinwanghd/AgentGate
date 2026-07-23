@@ -1,0 +1,74 @@
+# Dart / Flutter 风险检测规则
+# 适用范围: Dart 2.x+ / Flutter 2.x+
+# 更新: 2026-07-23
+
+patterns:
+  # 1. 硬编码密钥
+  - type: hardcoded-secret
+    regex: '(?i)(?:password|passwd|secret|apiKey|api_key|token|accessKey|access_key)\s*[:=]\s*["\'][^"\']{8,}'
+    desc: "敏感信息硬编码，应使用 flutter_dotenv 或 flutter_secure_storage"
+    exts: [".dart"]
+    mode: warn
+
+  # 2. HTTP 明文传输
+  - type: insecure-http
+    regex: '(?:http\.get|http\.post|Dio\(\)).*["\']http://(?!localhost|127\.0\.0\.1)'
+    desc: "使用 HTTP 明文传输敏感数据，应使用 HTTPS"
+    exts: [".dart"]
+    mode: warn
+
+  # 3. 证书校验禁用
+  - type: disabled-cert-validation
+    regex: 'badCertificateCallback.*true|allowBadCertificates.*true'
+    desc: "禁用证书校验存在中间人攻击风险，生产环境不应禁用"
+    exts: [".dart"]
+    mode: warn
+
+  # 4. SQL 注入 (sqflite)
+  - type: sql-injection
+    regex: 'rawQuery\s*\([^)]*\$\{|\.rawInsert\s*\([^)]*\$\{|\.rawUpdate\s*\([^)]*\$\{'
+    desc: "SQL 语句拼接存在注入风险，应使用参数化查询"
+    exts: [".dart"]
+    mode: warn
+
+  # 5. SharedPreferences 存储敏感信息
+  - type: sensitive-storage
+    regex: '(?i)prefs\.set(?:String|Int|Bool)\s*\([^)]*(?:token|password|secret|session)'
+    desc: "SharedPreferences 明文存储敏感信息，应使用 flutter_secure_storage"
+    exts: [".dart"]
+    mode: warn
+
+  # 6. print 语句泄露
+  - type: debug-print
+    regex: '\bprint\s*\('
+    desc: "print 在生产环境会输出到系统日志，可能泄露敏感信息，应使用 debugPrint 或日志框架"
+    exts: [".dart"]
+    mode: warn
+
+  # 7. 动态代码执行 (dart:mirrors)
+  - type: dangerous-reflection
+    regex: 'import\s+["\']dart:mirrors["\']'
+    desc: "dart:mirrors 允许动态反射，可能绕过类型检查，应谨慎使用"
+    exts: [".dart"]
+    mode: warn
+
+  # 8. WebView JavaScript 启用
+  - type: webview-javascript
+    regex: 'javascriptMode:\s*JavascriptMode\.unrestricted'
+    desc: "WebView 启用不受限 JavaScript 存在 XSS 风险，应验证内容来源"
+    exts: [".dart"]
+    mode: warn
+
+  # 9. 异常吞没
+  - type: swallowed-exception
+    regex: 'catch\s*\([^)]+\)\s*\{\s*(?://.*)?(?:\n\s*)?(?://.*)?(?:\n\s*)?\}'
+    desc: "异常被吞没，应至少记录日志"
+    exts: [".dart"]
+    mode: warn
+
+  # 10. 敏感信息日志
+  - type: sensitive-log
+    regex: '(?i)\b(?:log|debugPrint|print)\s*\([^)]*(?:password|passwd|token|secret|ssn|creditCard|idCard)'
+    desc: "敏感字段可能被写入日志，应脱敏处理"
+    exts: [".dart"]
+    mode: warn

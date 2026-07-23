@@ -18,7 +18,7 @@
 
 | 规则 | 触发条件 | CI 行为 |
 |---|---|---|
-| 风险注解契约 | `docs/governance/risk-types.md` 8 类模式命中 | 上方 5 行内缺结构化注解 / 字段不全 / 理由含黑名单词 / `reviewed:` 过 6 个月 → fail |
+| 风险注解契约 | `docs/governance/risk-types.md` 8 类模式命中 | 上方 5 行内缺结构化注解 / 字段不全 / 理由含黑名单词 / `reviewed:` 过 3 个月 → fail |
 | 密钥扫描 | gitleaks 命中 | 直接 fail |
 | 测试删除保护 | diff 删除 `[Fact]` / `[Test]` / `it(` / `test(` 等 | 缺 `risk:test-removal` 注解 → fail |
 
@@ -109,7 +109,7 @@ metadata:
   soft_deadline: 2026-09-30   # 距今最多 90 天
 risk_annotations:
   enforcement: hard           # 第一天起就硬
-  reviewed_max_age_days: 180  # 6 个月
+  reviewed_max_age_days: 90   # 3 个月
 ```
 
 约束：

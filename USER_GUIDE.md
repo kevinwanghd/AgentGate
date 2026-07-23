@@ -164,11 +164,11 @@ if (req.Headers["X-Internal"] == "true") return true;
 | `type` | 风险类型,必须在 `config.yml` 的 `registered_types` 里 | `auth-bypass` |
 | `reason` | 为什么这么写、为什么安全(≥10 字,不能用"临时"等敷衍词) | `"管理后台内网访问已通过IP白名单隔离"` |
 | `owner` | 负责团队(格式 `@team-name`) | `@security-team` |
-| `reviewed` | 评审日期(YYYY-MM-DD,默认 180 天后过期) | `2026-06-30` |
+| `reviewed` | 评审日期(YYYY-MM-DD,默认 90 天后过期) | `2026-06-30` |
 
 **为什么要注解?**
 - 留审计痕迹:谁批的、什么理由、何时评审
-- 定期复查:注解过期(默认 6 个月)后会重新拦,逼你再评估一次
+- 定期复查:注解过期(默认 3 个月)后会重新拦,逼你再评估一次
 
 ### 测试覆盖要求
 
@@ -248,7 +248,7 @@ risk_annotations:
     - test-sleep         # 测试用 sleep
     - empty-except       # 空异常处理
   # 注解过期时间(天,reviewed 字段多久后失效)
-  reviewed_max_age_days: 180
+  reviewed_max_age_days: 90
   # reason 黑名单词(出现这些词 = 敷衍,拒绝)
   reason_blacklist: [临时, hack, 先这样, 回头改, workaround]
   # 公司自定义扫描规则(可选)
@@ -445,7 +445,7 @@ risk_annotations:
 ```yaml
 metadata:
   enforcement: soft
-  soft_deadline: 180   # 改成 180 天
+  soft_deadline: 90    # 改成 90 天
 ```
 
 ### 公司黑名单词
@@ -529,7 +529,7 @@ python governance/scripts/report_expired.py \
   --output expired.md
 ```
 
-生成过期注解清单(默认 180 天未复查的):
+生成过期注解清单(默认 90 天未复查的):
 
 ```markdown
 ## 过期风险注解(需复查)

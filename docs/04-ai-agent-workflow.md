@@ -101,7 +101,7 @@ if (adminUserId == "626786582b50ab8ec08b0fa0" || adminUserId == "64918ccaeb21944
 | `risk:<type>` | 必须是 8 类已注册类型之一（或 `test-removal`） |
 | `reason:"..."` | ≥ 10 字，说明业务/安全权衡 |
 | `owner:@xxx` | 该豁免的负责团队或个人 |
-| `reviewed:YYYY-MM-DD` | 填今天日期，有效期 6 个月 |
+| `reviewed:YYYY-MM-DD` | 填今天日期，有效期 3 个月 |
 
 ### reason 禁止用的词（用了视为无效，CI 仍拦）
 
@@ -206,7 +206,7 @@ python governance/scripts/create_mr.py --why "..." --link REQ-1234   # 补关联
 | `risk annotation missing for auth-bypass at file:line` | 命中风险模式但没加注解 | 在该行上方加 `risk:` 注解 |
 | `risk annotation invalid: reason too short` | reason 少于 10 字 | 把理由写充分 |
 | `risk annotation invalid: blacklisted word "临时"` | 理由用了黑名单词 | 换成实质性说明 |
-| `risk annotation expired (reviewed > 180d)` | 注解超过 6 个月 | 把 `reviewed:` 更新到今天 |
+| `risk annotation expired (reviewed > 90d)` | 注解超过 3 个月 | 把 `reviewed:` 更新到今天 |
 | `test removed without risk:test-removal` | 删了测试没注解 | 加 `risk:test-removal` 或恢复测试 |
 | `secret detected by gitleaks` | 提交了密钥 | 移除密钥，改用 CI variables |
 | `[warn] MR description missing ## 自测确认` | 软门禁警告 | v1 不拦，但建议补上（到期会拦） |
@@ -215,7 +215,7 @@ python governance/scripts/create_mr.py --why "..." --link REQ-1234   # 补关联
 
 ## 注解会过期，怎么处理
 
-- `reviewed:` 日期超过 6 个月后，该注解标记为"过期"。
+- `reviewed:` 日期超过 3 个月后，该注解标记为"过期"。
 - 过期本身**不立即拦你**——只进每周的 `governance/reports/expired-annotations.md`。
 - 但只要你的 MR **触碰了**含过期注解的文件，CI 就要求你把 `reviewed:` 更新到当天。
 - 这意味着：你不需要专门去维护这些注解，自然会在改到相关代码时顺手刷新。

@@ -1,0 +1,60 @@
+# Python 风险检测规则
+# 适用范围: Python 2.7+ / Python 3.x
+# 更新: 2026-07-23
+
+patterns:
+  # 1. SQL 注入风险
+  - type: sql-injection
+    regex: '(?:execute|executemany|raw)\s*\([^)]*[%+]|\.format\s*\(|f["\'].*\{.*SELECT|INSERT|UPDATE|DELETE'
+    desc: "SQL 语句拼接存在注入风险，应使用参数化查询"
+    exts: [".py"]
+    mode: warn
+
+  # 2. 命令注入风险
+  - type: command-injection
+    regex: '(?:os\.system|subprocess\.call|subprocess\.run|subprocess\.Popen|eval|exec)\s*\([^)]*(?:%|\.format|f["\'])'
+    desc: "命令拼接存在注入风险，应使用参数列表或 shlex.quote"
+    exts: [".py"]
+    mode: warn
+
+  # 3. 敏感信息硬编码
+  - type: hardcoded-secret
+    regex: '(?i)(?:password|passwd|secret|api[_-]?key|token|access[_-]?key)\s*=\s*["\'][^"\']{8,}'
+    desc: "敏感信息硬编码，应使用环境变量或密钥管理服务"
+    exts: [".py"]
+    mode: warn
+
+  # 4. 异常吞没
+  - type: swallowed-exception
+    regex: 'except\s+\w+:\s*(?:pass|\.\.\.)\s*(?:#|$)'
+    desc: "异常被吞没，应至少记录日志或重新抛出"
+    exts: [".py"]
+    mode: warn
+
+  # 5. eval/exec 动态执行
+  - type: dangerous-eval
+    regex: '\b(?:eval|exec|compile|__import__)\s*\('
+    desc: "动态代码执行存在安全风险，应限制输入来源或使用 ast.literal_eval"
+    exts: [".py"]
+    mode: warn
+
+  # 6. pickle 反序列化
+  - type: unsafe-deserialization
+    regex: '\bpickle\.loads?\s*\('
+    desc: "pickle 反序列化不可信数据存在 RCE 风险，应验证来源或使用 JSON"
+    exts: [".py"]
+    mode: warn
+
+  # 7. 敏感信息日志
+  - type: sensitive-log
+    regex: '(?i)\b(?:log|logger|logging)\b.*\b(?:password|passwd|token|secret|ssn|credit[_-]?card|id[_-]?card)\b'
+    desc: "敏感字段可能被写入日志，应脱敏处理"
+    exts: [".py"]
+    mode: warn
+
+  # 8. Flask/Django DEBUG 模式
+  - type: debug-mode-production
+    regex: '(?:DEBUG|FLASK_DEBUG)\s*=\s*True'
+    desc: "生产环境不应启用 DEBUG 模式，会泄露堆栈和环境信息"
+    exts: [".py"]
+    mode: warn

@@ -1,6 +1,6 @@
 # 风险注解契约
 
-CI 扫描到下表任一模式时，要求**该代码上方 5 行内**有结构化注解；缺失、字段不全、理由含黑名单词、或 `reviewed:` 距今超 6 个月 → 拒合。
+CI 扫描到下表任一模式时，要求**该代码上方 5 行内**有结构化注解；缺失、字段不全、理由含黑名单词、或 `reviewed:` 距今超 3 个月 → 拒合。
 
 > 这份文档是 AI agent 提交前的**唯一参考**。新增风险类型 → 改本文档 → 走 MR 评审进目录。
 
@@ -38,7 +38,7 @@ if (adminUserId == "626786582b50ab8ec08b0fa0" || adminUserId == "64918ccaeb21944
 | `risk:<type>` | 是 | 必须命中下表"已注册类型"，未注册视为无效 |
 | `reason:"..."` | 是 | ≥ 10 个字符，说明业务/安全权衡，禁用黑名单词 |
 | `owner:@person` 或 `@team` | 是 | 该豁免的负责人 |
-| `reviewed:YYYY-MM-DD` | 是 | 上次确认仍合理的日期，距今 ≤ 180 天 |
+| `reviewed:YYYY-MM-DD` | 是 | 上次确认仍合理的日期，距今 ≤ 90 天 |
 | `review-cycle:6m\|12m` | 否 | 自定义复审周期（默认 6m） |
 
 **reason 黑名单词**（出现即视为无效理由）：
@@ -172,7 +172,7 @@ risk:test-removal reason:"用例已合并到 IntegrationTests.A" owner:@team rev
 // risk:untested reason:"纯数据传输对象无业务逻辑，由集成测试间接覆盖" owner:@team reviewed:2026-06-26
 ```
 
-字段要求与其他风险注解一致（reason ≥10 字、不含黑名单词、reviewed 6 个月有效期）。
+字段要求与其他风险注解一致（reason ≥10 字、不含黑名单词、reviewed 3 个月有效期）。
 
 更优先的放行方式是真正写测试：用 `record_test_run.py` 跑单元测试 + 本次 MR 改动测试文件。整目录免检（DTO/迁移/生成代码）配在 `governance.config.yml` 的 `testing.exclude_paths`。
 
@@ -182,7 +182,7 @@ risk:test-removal reason:"用例已合并到 IntegrationTests.A" owner:@team rev
 
 ## 注解过期机制
 
-- `reviewed:` 自带 6 个月有效期（`reviewed_max_age_days: 180`，可在 `governance.config.yml` 调整）。
+- `reviewed:` 自带 3 个月有效期（`reviewed_max_age_days: 90`，可在 `governance.config.yml` 调整）。
 - **过期不立即阻断**：每周 CI 跑全仓扫描，把"30 天内将过期"和"已过期"的注解列入 `governance/reports/expired-annotations.md`。
 - **触碰即触发**：过期注解所在文件被任何 MR 修改时，CI 强制要求把 `reviewed:` 更新到当天，否则拒合。
 
