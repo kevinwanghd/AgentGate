@@ -15,7 +15,6 @@
 patterns:
 
   # ── 吞错: _ = err 或空错误处理块 ──────────────────────────────────────────
-  # 覆盖: `_ = someFunc()` 显式丢弃 error 返回值
   - type: swallowed-error
     regex: '\b_\s*=\s*\w[\w.]*\('
     desc: "显式丢弃 error 返回值 (_ = func(...))"
@@ -23,7 +22,6 @@ patterns:
     mode: warn
 
   # ── context.Background/TODO 在请求链路中使用 ──────────────────────────────
-  # 请求处理代码里应透传上游 ctx, 而不是新建根 context
   - type: context-background
     regex: 'context\.(Background|TODO)\(\)'
     desc: "context.Background()/TODO() 可能截断请求链路的 ctx 传递"
@@ -31,9 +29,61 @@ patterns:
     mode: warn
 
   # ── 敏感字段写入日志 ──────────────────────────────────────────────────────
-  # 匹配 log.Xxx(...) 或 logger.Xxx(...) 行中含敏感字段名
   - type: sensitive-log
     regex: '(?i)\b(?:log|logger|zap|zerolog)\b.*\b(?:password|passwd|token|secret|id_?card|mobile|phone|card_?no|cvv|pin)\b'
     desc: "敏感字段疑似写入日志"
+    exts: [".go"]
+    mode: warn
+
+  # ── SQL 拼接 ──────────────────────────────────────────────────────────────
+  # fmt.Sprintf/+ 拼接 SQL 字符串，应用 ? 占位符或 sqlx.Named
+  - type: go-sql-concat
+    regex: '(?i)fmt\.Sprintf\s*\(\s*"[^"]*(?:SELECT|INSERT|UPDATE|DELETE|WHERE)[^"]*%'
+    desc: "fmt.Sprintf 拼接 SQL，存在注入风险，改用参数化查询"
+    exts: [".go"]
+    mode: warn
+
+  # ── 硬编码密钥/密码 ──────────────────────────────────────────────────────
+  # 字符串变量名含 key/secret/password/token 且直接赋字面量
+  - type: go-hardcoded-secret
+    regex: '(?i)(?:password|passwd|secret|api_?key|access_?key|token)\s*(?::=|=)\s*"[^"]{6,}"'
+    desc: "疑似硬编码密钥，应从环境变量或配置中心读取"
+    exts: [".go"]
+    mode: warn
+
+  # ── 命令注入: exec.Command 拼接用户输入 ───────────────────────────────────
+  - type: go-cmd-inject
+    regex: 'exec\.Command\s*\([^)]*\+[^)]*\)'
+    desc: "exec.Command 参数含字符串拼接，存在命令注入风险"
+    exts: [".go"]
+    mode: warn
+
+  # ── 不安全的 HTTP 客户端 (跳过 TLS 验证) ────────────────────────────────
+  - type: go-tls-skip-verify
+    regex: 'InsecureSkipVerify\s*:\s*true'
+    desc: "InsecureSkipVerify:true 跳过 TLS 证书验证，生产环境禁用"
+    exts: [".go"]
+    mode: warn
+
+  # ── SSRF: url 拼接后直接请求 ─────────────────────────────────────────────
+  - type: go-ssrf
+    regex: 'http\.(?:Get|Post|Do)\s*\([^)]*\+[^)]*\)'
+    desc: "HTTP 请求 URL 含字符串拼接，存在 SSRF 风险"
+    exts: [".go"]
+    mode: warn
+
+  # ── panic 在业务处理函数中 ───────────────────────────────────────────────
+  # Handler/Service 层直接 panic 会导致进程崩溃，应返回 error
+  - type: go-panic-in-handler
+    regex: '\bpanic\s*\('
+    desc: "业务代码中使用 panic，应改为返回 error"
+    exts: [".go"]
+    mode: warn
+
+  # ── math/rand 用于安全场景 ───────────────────────────────────────────────
+  # 伪随机数不适合 token/nonce 生成，应用 crypto/rand
+  - type: go-weak-random
+    regex: 'math/rand'
+    desc: "math/rand 是伪随机数，安全相关场景应使用 crypto/rand"
     exts: [".go"]
     mode: warn
