@@ -73,6 +73,18 @@ git add . && git commit -m "chore: 接入 AgentGate 治理" && git push
 - ✅ **自动盖 Tested trailer**(记录测试运行结果)
 - ✅ **本地预检**(提交前手动跑同样的扫描)
 
+### CI 驱动自动合并
+
+AgentGate 默认启用 CI 驱动的自动合并策略：
+
+- `scripts/gate_decision.py` 汇总当前提交的必需检查，生成 GateResult v2；
+- GateResult 绑定 source SHA、target SHA 和 policy SHA，旧提交证据不能复用；
+- 普通 LOW/MEDIUM 变更在所有 required checks 通过后可由 Merge Bot 自动合并；
+- 治理配置、CI、门禁脚本和权限相关路径自动升级为 CRITICAL，保持 PR 打开并等待人工批准；
+- 本地 `Tested:` trailer 和 PR 描述只作审计上下文，不作为自动合并依据。
+
+自动合并权限应只授予独立 Merge Bot，开发 agent 不应拥有主干写权限或合并权限。
+
 ### 留痕与审计
 
 每次提交自动记录:

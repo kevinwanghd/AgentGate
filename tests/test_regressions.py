@@ -19,6 +19,7 @@ check_tested = importlib.import_module("check_tested")
 create_mr = importlib.import_module("create_mr")
 scan_risks = importlib.import_module("scan_risks")
 validate_mr = importlib.import_module("validate_mr")
+gate_decision = importlib.import_module("gate_decision")
 
 
 class ConfigFailureTests(unittest.TestCase):
@@ -910,6 +911,90 @@ class LargeDiffSummaryTests(unittest.TestCase):
         ):
             is_large, _ = validate_mr.detect_large_change(cfg, "origin/main")
         self.assertFalse(is_large)
+
+
+class GateDecisionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.config = json.loads(json.dumps(gate_decision.DEFAULT_CONFIG))
+
+    def test_clean_checks_are_auto_mergeable_by_default(self) -> None:
+        result = gate_decision.build_gate_result(
+            source_sha="head", target_sha="base", policy_sha="policy",
+            changed_paths=["src/orders/service.py"],
+            checks={"lint": "pass", "unit": "pass"},
+            config=self.config,
+        )
+        self.assertEqual(result["result"], "PASS")
+        self.assertEqual(result["merge_action"], "AUTO_MERGE")
+        self.assertEqual(result["risk_level"], "medium")
+
+    def test_protected_path_requires_human_approval(self) -> None:
+        result = gate_decision.build_gate_result(
+            source_sha="head", target_sha="base", policy_sha="policy",
+            changed_paths=["scripts/scan_risks.py"],
+            checks={"lint": "pass", "unit": "pass"},
+            config=self.config,
+        )
+        self.assertEqual(result["risk_level"], "critical")
+        self.assertEqual(result["result"], "WAITING_APPROVAL")
+        self.assertEqual(result["merge_action"], "WAIT")
+        self.assertIn("protected_paths_changed", result["blocking_reasons"])
+
+    def test_failed_check_blocks_and_is_not_retried_as_green(self) -> None:
+        result = gate_decision.build_gate_result(
+            source_sha="head", target_sha="base", policy_sha="policy",
+            changed_paths=["src/orders/service.py"],
+            checks={"lint": "fail", "unit": "pass"},
+            config=self.config,
+        )
+        self.assertEqual(result["result"], "FAIL")
+        self.assertEqual(result["merge_action"], "BLOCK")
+        self.assertIn("required_check_failed", result["blocking_reasons"])
+
+    def test_missing_required_check_is_blocking(self) -> None:
+        config = json.loads(json.dumps(self.config))
+        config["auto_merge"]["required_checks"] = ["lint", "unit"]
+        result = gate_decision.build_gate_result(
+            source_sha="head", target_sha="base", policy_sha="policy",
+            changed_paths=["src/orders/service.py"],
+            checks={"lint": "pass"},
+            config=config,
+        )
+        self.assertEqual(result["result"], "FAIL")
+        self.assertIn("required_check_missing", result["blocking_reasons"])
+
+    def test_disabled_auto_merge_waits_even_when_checks_pass(self) -> None:
+        config = json.loads(json.dumps(self.config))
+        config["auto_merge"]["enabled"] = False
+        result = gate_decision.build_gate_result(
+            source_sha="head", target_sha="base", policy_sha="policy",
+            changed_paths=["src/orders/service.py"],
+            checks={"lint": "pass", "unit": "pass"},
+            config=config,
+        )
+        self.assertEqual(result["result"], "WAITING_APPROVAL")
+        self.assertEqual(result["merge_action"], "WAIT")
+        self.assertIn("auto_merge_disabled", result["blocking_reasons"])
+
+    def test_cli_accepts_utf8_bom_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = Path(directory) / "evidence.json"
+            output = Path(directory) / "gate.json"
+            evidence.write_text(
+                '{"checks":{"risk-scan":"pass","secret-scan":"pass",'
+                '"mr-validate":"pass","test-check":"pass","go-test":"pass",'
+                '"selftest":"pass"}}',
+                encoding="utf-8-sig",
+            )
+            with mock.patch.object(gate_decision, "_changed_paths", return_value=[]):
+                with mock.patch.object(sys, "argv", [
+                    "gate_decision.py", "--evidence", str(evidence),
+                    "--source-sha", "head", "--target-sha", "base",
+                    "--policy-sha", "policy", "--diff-base", "base",
+                    "--output", str(output),
+                ]):
+                    self.assertEqual(gate_decision.main(), 0)
+            self.assertEqual(json.loads(output.read_text(encoding="utf-8"))["result"], "PASS")
 
 
 if __name__ == "__main__":

@@ -154,3 +154,44 @@ jobs:
       - run: pip install -q pyyaml==6.0.3
       - name: run selftest
         run: bash scripts/selftest.sh
+
+  # GateResult 汇总器（只读阶段）。
+  # Merge Bot 接入需要独立的 write 权限，待仓库管理员显式启用后再加合并动作。
+  gate-decision:
+    needs: [risk-scan, secret-scan, mr-validate, test-check, go-test, selftest]
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -q pyyaml==6.0.3
+      - name: compute GateResult v2
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git fetch -q origin "$BASE_REF"
+          git cat-file -e "$HEAD_SHA^{commit}"
+          SOURCE_SHA="$HEAD_SHA"
+          POLICY_SHA="$(git rev-parse "${SOURCE_SHA}:governance.config.yml")"
+          cat > /tmp/agentgate-evidence.json <<'JSON'
+          {"schema_version":"v1","checks":{"risk-scan":"pass","secret-scan":"pass","mr-validate":"pass","test-check":"pass","go-test":"pass","selftest":"pass"}}
+          JSON
+          python scripts/gate_decision.py \
+            --evidence /tmp/agentgate-evidence.json \
+            --source-sha "$SOURCE_SHA" \
+            --target-sha "$BASE_SHA" \
+            --policy-sha "$POLICY_SHA" \
+            --diff-base "origin/$BASE_REF" \
+            --config governance.config.yml \
+            --output gate-result.json
+          echo "GateResult:"; cat gate-result.json

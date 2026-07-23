@@ -2,6 +2,31 @@
 # 注意: 本仓库脚本在根级 scripts/, 与消费仓库的 governance/scripts/ 不同。
 version: v1.2.1
 
+auto_merge:
+  enabled: true
+  strategy: squash
+  delete_branch_after_merge: true
+  require_up_to_date_branch: true
+  require_all_required_checks: true
+  required_checks:
+    - risk-scan
+    - secret-scan
+    - mr-validate
+    - test-check
+    - go-test
+    - selftest
+  protected_paths:
+    - governance.config.yml
+    - .github/workflows/**
+    - .gitlab-ci.yml
+    - ci/**
+    - governance/**
+    - CODEOWNERS
+    - scripts/scan_risks.py
+    - scripts/check_tested.py
+    - scripts/validate_mr.py
+    - scripts/gate_decision.py
+
 metadata:
   enforcement: hard           # 自举: 新仓库无历史包袱, 直接硬启动
   soft_deadline: 2026-09-27   # (已被 enforcement:hard 覆盖, 保留供参考)
