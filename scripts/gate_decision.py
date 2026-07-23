@@ -27,6 +27,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "require_up_to_date_branch": True,
         "require_all_required_checks": True,
         "required_checks": [],
+        # 保护分支: 只能通过 MR 合并，禁止直接推送
+        "protected_branches": [
+            "master",
+            "main",
+            "release/*",
+        ],
         "protected_paths": [
             "governance.config.yml",
             ".github/workflows/**",
@@ -68,14 +74,21 @@ def build_gate_result(
     checks: dict[str, str],
     config: dict[str, Any],
     valid_approvals: int = 0,
+    target_branch: str = "",
 ) -> dict[str, Any]:
     auto = config.get("auto_merge", {})
     protected = [str(item) for item in auto.get("protected_paths", [])]
     critical_paths = [path for path in changed_paths if _is_protected(path, protected)]
+    protected_branches = [str(item) for item in auto.get("protected_branches", [])]
+    is_protected_branch = bool(target_branch) and any(
+        fnmatch.fnmatch(target_branch, pattern) for pattern in protected_branches
+    )
     risk_level = "critical" if critical_paths else "medium"
     reasons: list[str] = []
     if critical_paths:
         reasons.append("protected_paths_changed")
+    if is_protected_branch:
+        reasons.append("protected_branch_direct_push")
 
     required = [str(item) for item in auto.get("required_checks", [])]
     if not required:
@@ -94,13 +107,18 @@ def build_gate_result(
         reasons.append("approval_missing")
 
     checks_pass = not missing and not failed
-    pass_result = checks_pass and not critical_paths and valid_approvals >= required_approvals
+    pass_result = checks_pass and not critical_paths and not is_protected_branch and valid_approvals >= required_approvals
     enabled = bool(auto.get("enabled", True))
     if not enabled:
         reasons.append("auto_merge_disabled")
     if not enabled:
         result = "WAITING_APPROVAL"
         action = "WAIT"
+    elif is_protected_branch:
+        # 受保护分支必须通过 MR 才能合并，禁止直接推送合并
+        result = "FAIL"
+        action = "BLOCK"
+        reasons.append("protected_branch_requires_mr")
     elif not pass_result:
         result = "WAITING_APPROVAL" if critical_paths and checks_pass else "FAIL"
         action = "WAIT" if critical_paths or "approval_missing" in reasons else "BLOCK"
@@ -141,6 +159,7 @@ def main() -> int:
     parser.add_argument("--config", default=None)
     parser.add_argument("--output", required=True)
     parser.add_argument("--valid-approvals", type=int, default=0)
+    parser.add_argument("--target-branch", default="", help="目标分支名，用于检查分支保护")
     args = parser.parse_args()
 
     try:
@@ -159,6 +178,7 @@ def main() -> int:
             checks={str(k): str(v) for k, v in checks.items()},
             config=config,
             valid_approvals=args.valid_approvals,
+            target_branch=args.target_branch,
         )
         Path(args.output).write_text(json.dumps(gate, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         print(json.dumps(gate, ensure_ascii=False))

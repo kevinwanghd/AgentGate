@@ -211,6 +211,7 @@ governance:gate-decision:
         --target-sha "$TARGET_SHA" \
         --policy-sha "$POLICY_SHA" \
         --diff-base "origin/$TB" \
+        --target-branch "$TB" \
         --config "$CONFIG_PATH" \
         --output gate-result.json
       DECISION_EXIT=$?

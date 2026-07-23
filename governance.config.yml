@@ -15,6 +15,11 @@ auto_merge:
     - test-check
     - go-test
     - selftest
+  # 保护分支: 只能通过 MR 合并，禁止直接推送
+  protected_branches:
+    - master
+    - main
+    - release/*
   protected_paths:
     - governance.config.yml
     - .github/workflows/**
