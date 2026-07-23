@@ -517,6 +517,29 @@ testing:
 
 配置后,红的 MR/PR 无法合入。
 
+### 配置 GitLab 自动合并
+
+AgentGate 的 GitLab 自动合并由两段组成:
+
+| Job | 作用 |
+|---|---|
+| `governance:gate-decision` | 汇总 CI 证据,生成 `gate-result.json` |
+| `governance:auto-merge` | 只在 GateResult 为 `AUTO_MERGE` 时调用 GitLab Merge API |
+
+管理员需要在 GitLab → Settings → CI/CD → Variables 增加:
+
+| 变量 | 要求 |
+|---|---|
+| `GOVERNANCE_MERGE_BOT_TOKEN` | Protected + Masked, 使用独立 Merge Bot/Project Access Token |
+
+推荐权限边界:
+
+- token 只给 Merge Bot,不要给开发 agent；
+- 目标分支保持 protected,开发者不能直接 push；
+- `auto-merge` 只处理同项目 MR, fork/source-project MR 会跳过；
+- 调 GitLab Merge API 时会携带当前 source SHA,避免旧 pipeline 合并新代码；
+- CRITICAL 变更(治理配置、CI、门禁脚本、权限相关路径)会保持 MR 打开,等待人工批准。
+
 ### 查看 AI 用量报告
 
 每周跑一次,生成 AI 用量统计:

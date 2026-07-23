@@ -82,13 +82,13 @@ def load_config(path: str | None) -> dict:
 # ============================================================
 def read_description(file_arg: str | None) -> str:
     if file_arg:
-        with open(file_arg, "r", encoding="utf-8") as f:
+        with open(file_arg, "r", encoding="utf-8-sig") as f:
             return f.read()
     env = os.environ.get("CI_MERGE_REQUEST_DESCRIPTION")
     if env:
-        return env
+        return env.lstrip("\ufeff")
     if not sys.stdin.isatty():
-        return sys.stdin.read()
+        return sys.stdin.read().lstrip("\ufeff")
     return ""
 
 

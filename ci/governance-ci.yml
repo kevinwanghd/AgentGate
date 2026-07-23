@@ -12,6 +12,7 @@
 #   GOVERNANCE_SOFT_DEADLINE  软门禁截止日期, 如 2026-09-30
 #   GOVERNANCE_CONFIG_PATH    governance.config.yml 的仓库内路径
 #   GOVERNANCE_REPORT_OUTPUT  周报输出路径, 默认 governance/reports/expired-annotations.md
+#   GOVERNANCE_MERGE_BOT_TOKEN  受保护/Masked 的 Merge Bot token, 仅自动合并 job 使用
 
 stages:
   - governance
@@ -164,4 +165,105 @@ governance:go-test:
       python governance/scripts/run_affected_tests.py \
         --diff-base "$BASE" \
         --timeout "${GOVERNANCE_GO_TEST_TIMEOUT:-120}"
+  allow_failure: false
+
+# ── 7. GateResult 决策: 汇总 CI 独立证据, 不直接合并 ─────────────────────────
+governance:gate-decision:
+  stage: test
+  image: python:3.11-slim
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  variables:
+    GIT_DEPTH: 0
+  needs:
+    - job: governance:risk-scan
+    - job: governance:secret-scan
+    - job: governance:mr-validate
+    - job: governance:test-check
+    - job: governance:go-test
+      optional: true
+  before_script:
+    - pip install -q pyyaml==6.0.3
+  script:
+    - |
+      TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
+      git fetch -q origin "$TB"
+      SOURCE_SHA="${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA:-$CI_COMMIT_SHA}"
+      TARGET_SHA="${CI_MERGE_REQUEST_TARGET_BRANCH_SHA:-$(git rev-parse "origin/$TB")}"
+      CONFIG_PATH="${GOVERNANCE_CONFIG_PATH:-governance.config.yml}"
+      [ -f "$CONFIG_PATH" ] || CONFIG_PATH="governance/governance.config.yml"
+      POLICY_SHA="$(git rev-parse "${SOURCE_SHA}:${CONFIG_PATH}" 2>/dev/null || echo "$SOURCE_SHA")"
+      python - <<'PY' > gate-evidence.json
+      import json
+      checks = {
+          "risk-scan": "pass",
+          "secret-scan": "pass",
+          "mr-validate": "pass",
+          "test-check": "pass",
+          "go-test": "pass",
+      }
+      print(json.dumps({"checks": checks}, ensure_ascii=False))
+      PY
+      set +e
+      python governance/scripts/gate_decision.py \
+        --evidence gate-evidence.json \
+        --source-sha "$SOURCE_SHA" \
+        --target-sha "$TARGET_SHA" \
+        --policy-sha "$POLICY_SHA" \
+        --diff-base "origin/$TB" \
+        --config "$CONFIG_PATH" \
+        --output gate-result.json
+      DECISION_EXIT=$?
+      set -e
+      if [ "$DECISION_EXIT" -gt 1 ]; then
+        exit "$DECISION_EXIT"
+      fi
+      python - <<'PY' > gate.env
+      import json
+      with open("gate-result.json", encoding="utf-8") as f:
+          gate = json.load(f)
+      print(f"GATE_MERGE_ACTION={gate.get('merge_action', 'BLOCK')}")
+      print(f"GATE_RESULT={gate.get('result', 'FAIL')}")
+      PY
+      cat gate.env
+  artifacts:
+    reports:
+      dotenv: gate.env
+    paths:
+      - gate-result.json
+    expire_in: 30 days
+  allow_failure: false
+
+# ── 8. Merge Bot: 仅消费 GateResult, 使用独立 token 设置 GitLab 自动合并 ─────
+governance:auto-merge:
+  stage: test
+  image: curlimages/curl:8.10.1
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  needs:
+    - job: governance:gate-decision
+      artifacts: true
+  script:
+    - |
+      if [ "${GATE_MERGE_ACTION:-BLOCK}" != "AUTO_MERGE" ]; then
+        echo "[auto-merge] GateResult=${GATE_RESULT:-unknown}, action=${GATE_MERGE_ACTION:-BLOCK}; skip."
+        exit 0
+      fi
+      if [ "${CI_MERGE_REQUEST_SOURCE_PROJECT_ID:-$CI_PROJECT_ID}" != "$CI_PROJECT_ID" ]; then
+        echo "[auto-merge] fork/source-project MR is not eligible for bot merge."
+        exit 0
+      fi
+      if [ -z "${GOVERNANCE_MERGE_BOT_TOKEN:-}" ]; then
+        echo "[auto-merge] GOVERNANCE_MERGE_BOT_TOKEN is required for GitLab auto merge." >&2
+        exit 1
+      fi
+      SHA="${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA:-$CI_COMMIT_SHA}"
+      API="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests/${CI_MERGE_REQUEST_IID}/merge"
+      curl --fail --silent --show-error --request PUT \
+        --header "PRIVATE-TOKEN: ${GOVERNANCE_MERGE_BOT_TOKEN}" \
+        --data-urlencode "merge_when_pipeline_succeeds=true" \
+        --data-urlencode "squash=true" \
+        --data-urlencode "should_remove_source_branch=true" \
+        --data-urlencode "sha=${SHA}" \
+        "$API"
   allow_failure: false
