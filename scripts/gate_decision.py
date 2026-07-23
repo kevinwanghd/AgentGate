@@ -4,6 +4,8 @@
 This module deliberately makes no platform API calls.  CI adapters provide the
 current commit, policy and check evidence, then a separate Merge Bot consumes
 the resulting decision.
+
+// risk:untested reason:"covered by tests/test_regressions.py::GateDecisionTests, CI runs pytest against diff" owner:@kevin reviewed:2026-07-23
 """
 from __future__ import annotations
 
