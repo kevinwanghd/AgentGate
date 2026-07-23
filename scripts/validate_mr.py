@@ -220,6 +220,16 @@ def detect_large_change(cfg: dict, diff_base: str | None) -> tuple[bool, list[st
     return (len(reasons) > 0, reasons)
 
 
+def _get_ci_summary_path() -> str | None:
+    """获取 CI 平台的 Job Summary 路径。
+    GitHub Actions: $GITHUB_STEP_SUMMARY
+    GitLab CI: 暂无原生 Job Summary (未来可扩展写入 artifacts)
+    """
+    if path := os.environ.get("GITHUB_STEP_SUMMARY"):
+        return path
+    return None
+
+
 def _write_large_diff_summary(
     total: int,
     threshold: int,
@@ -227,8 +237,8 @@ def _write_large_diff_summary(
     diff_base: str | None,
     excluded: list[str],
 ) -> None:
-    """当 PR 超过行阈值时，向 GITHUB_STEP_SUMMARY 写拆分建议（含 Top 目录分布）。"""
-    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    """当 PR 超过行阈值时，向 CI Job Summary 写拆分建议（含 Top 目录分布）。"""
+    summary_path = _get_ci_summary_path()
     if not summary_path:
         return
     import collections

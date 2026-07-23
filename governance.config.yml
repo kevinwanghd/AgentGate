@@ -12,7 +12,7 @@ metadata:
 
 risk_annotations:
   enforcement: hard           # 自举展示严格模式 (消费仓库默认 soft)
-  reviewed_max_age_days: 180
+  reviewed_max_age_days: 90
   scan_exclude_paths:
     - "**/vendor/**"
     - "**/node_modules/**"
@@ -63,7 +63,7 @@ large_change:
 testing:
   enforcement: hard           # 自举: 直接硬启动
   soft_deadline: 2026-09-27   # (已被 enforcement:hard 覆盖)
-  untested_max_age_days: 180
+  untested_max_age_days: 90
   # 本仓库是工具包: 脚本目录是被测主体, 文档/模板/指令文件不要求测试
   exclude_paths:
     - "docs/**"

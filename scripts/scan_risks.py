@@ -679,10 +679,23 @@ def scan(diff_text: str, cfg: dict) -> list[dict]:
     return violations
 
 
+def _get_ci_summary_path() -> str | None:
+    """获取 CI 平台的 Job Summary 路径。
+    GitHub Actions: $GITHUB_STEP_SUMMARY
+    GitLab CI: $CI_JOB_LOG_SECTIONS (自定义实现) 或 None
+    """
+    # GitHub Actions
+    if path := os.environ.get("GITHUB_STEP_SUMMARY"):
+        return path
+    # GitLab CI: 暂无原生 Job Summary, 只在 job log 显示 (future: 可写到 artifacts)
+    # 本地: 静默跳过
+    return None
+
+
 def _write_summary(blocking: list[dict], warn_only: list[dict]) -> None:
-    """写入 GitHub Actions Job Summary ($GITHUB_STEP_SUMMARY)。
+    """写入 CI Job Summary (GitHub Actions / GitLab CI)。
     无 CI 环境时静默跳过。warn_only 命中即使绿色 job 也会显示, 为观察期提供可见性。"""
-    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    summary_path = _get_ci_summary_path()
     if not summary_path:
         return
     lines = []

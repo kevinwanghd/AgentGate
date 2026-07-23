@@ -189,7 +189,7 @@ metadata:
 
 risk_annotations:
   enforcement: soft           # 默认软启动(只警告); 团队稳定后显式改 hard
-  reviewed_max_age_days: 180  # 6 个月
+  reviewed_max_age_days: 90   # 3 个月 (推荐: 与季度 review 节奏对齐)
   # 路径豁免: 生成/引入/第三方代码不扫 (开发者不为这些代码负责)
   scan_exclude_paths:
     - "**/governance/scripts/**"   # 扫描器自身不扫自己(含风险模式字面示例)
@@ -251,7 +251,7 @@ large_change:
 testing:
   enforcement: soft           # v1 软启动: 未测代码仅警告; soft_deadline 后转硬
   soft_deadline: ${SOFT_DEADLINE}
-  untested_max_age_days: 180  # risk:untested 注解有效期, 同风险注解
+  untested_max_age_days: 90   # risk:untested 注解有效期 (推荐: 与季度 review 节奏对齐)
   exclude_paths:              # 整目录/模式免测试检查 (DTO/迁移/生成代码/启动引导)
     - "**/Migrations/**"
     - "**/*.Designer.cs"
@@ -315,6 +315,10 @@ chmod +x "${TARGET_DIR}/governance/scripts/selftest.sh" \
 log "安装语言风险规则包 -> governance/patterns/"
 fetch_or_local "patterns/go.yml" | write_file "governance/patterns/go.yml"
 fetch_or_local "patterns/csharp.yml" | write_file "governance/patterns/csharp.yml"
+fetch_or_local "patterns/python.yml" | write_file "governance/patterns/python.yml"
+fetch_or_local "patterns/javascript.yml" | write_file "governance/patterns/javascript.yml"
+fetch_or_local "patterns/java.yml" | write_file "governance/patterns/java.yml"
+fetch_or_local "patterns/dart.yml" | write_file "governance/patterns/dart.yml"
 
 # 自动安装 AI-Usage 采集 git hook (提交时自动写 trailer, 无需人工填)
 if [[ -d "${TARGET_DIR}/.git" ]]; then
@@ -503,6 +507,10 @@ cat <<EOF
   governance/scripts/selftest.sh        (脚本自测)
   governance/patterns/go.yml            (Go 专属风险规则包: warn 模式)
   governance/patterns/csharp.yml        (C# / .NET 专属风险规则包: warn 模式)
+  governance/patterns/python.yml        (Python 专属风险规则包: warn 模式)
+  governance/patterns/javascript.yml    (JavaScript/TypeScript 专属风险规则包: warn 模式)
+  governance/patterns/java.yml          (Java 专属风险规则包: warn 模式)
+  governance/patterns/dart.yml          (Dart/Flutter 专属风险规则包: warn 模式)
   CLAUDE.md                     (Claude Code / Kiro)
   .hermes.md                    (Hermes Agent v0.17.0)
   AGENTS.md                     (OpenAI Codex CLI + Hermes fallback)

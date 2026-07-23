@@ -1,0 +1,74 @@
+# Java 风险检测规则
+# 适用范围: Java 8+ / Spring Boot / Jakarta EE
+# 更新: 2026-07-23
+
+patterns:
+  # 1. SQL 注入
+  - type: sql-injection
+    regex: '(?:createQuery|createNativeQuery|prepareStatement|executeQuery|executeUpdate)\s*\([^)]*\+|String\.format\s*\([^)]*SELECT|INSERT|UPDATE|DELETE'
+    desc: "SQL 语句拼接存在注入风险，应使用 PreparedStatement 或参数化查询"
+    exts: [".java"]
+    mode: warn
+
+  # 2. 硬编码密钥
+  - type: hardcoded-secret
+    regex: '(?i)(?:password|passwd|secret|apiKey|api_key|token|accessKey|access_key)\s*=\s*"[^"]{8,}"'
+    desc: "敏感信息硬编码，应使用配置中心或环境变量"
+    exts: [".java"]
+    mode: warn
+
+  # 3. 反序列化漏洞
+  - type: unsafe-deserialization
+    regex: '\bnew\s+ObjectInputStream\s*\(|\.readObject\s*\(\)'
+    desc: "反序列化不可信数据存在 RCE 风险，应验证来源或使用白名单"
+    exts: [".java"]
+    mode: warn
+
+  # 4. 命令注入
+  - type: command-injection
+    regex: 'Runtime\.getRuntime\s*\(\s*\)\.exec\s*\([^)]*\+|ProcessBuilder\s*\([^)]*\+'
+    desc: "命令拼接存在注入风险，应使用参数数组或验证输入"
+    exts: [".java"]
+    mode: warn
+
+  # 5. XSS 漏洞 (Spring MVC)
+  - type: xss-injection
+    regex: '@ResponseBody.*\+|response\.getWriter\s*\(\s*\)\.write\s*\([^)]*\+'
+    desc: "未转义的用户输入写入响应，存在 XSS 风险，应使用模板引擎或手动转义"
+    exts: [".java"]
+    mode: warn
+
+  # 6. 异常吞没
+  - type: swallowed-exception
+    regex: 'catch\s*\([^)]+\)\s*\{\s*(?://.*)?(?:\n\s*)?(?://.*)?(?:\n\s*)?\}'
+    desc: "异常被吞没，应至少记录日志"
+    exts: [".java"]
+    mode: warn
+
+  # 7. 弱加密算法
+  - type: weak-crypto
+    regex: '\b(?:DES|MD5|SHA1|RC4)(?:"|\.getInstance)'
+    desc: "使用已弃用的弱加密算法，应使用 AES-256、SHA-256 或更高"
+    exts: [".java"]
+    mode: warn
+
+  # 8. 路径遍历
+  - type: path-traversal
+    regex: 'new\s+File\s*\([^)]*\+|Paths\.get\s*\([^)]*\+|\.getResourceAsStream\s*\([^)]*\+'
+    desc: "文件路径拼接存在遍历风险，应验证或规范化路径"
+    exts: [".java"]
+    mode: warn
+
+  # 9. SSRF 风险
+  - type: ssrf
+    regex: 'new\s+URL\s*\([^)]*\+|HttpClient.*\.execute\s*\([^)]*\+|RestTemplate.*\.(?:getForObject|postForObject)\s*\([^)]*\+'
+    desc: "URL 拼接存在 SSRF 风险，应验证或限制目标域名"
+    exts: [".java"]
+    mode: warn
+
+  # 10. 敏感信息日志
+  - type: sensitive-log
+    regex: '(?i)(?:log|logger)\.(?:info|debug|warn|error)\s*\([^)]*(?:password|passwd|token|secret|ssn|creditCard|idCard)'
+    desc: "敏感字段可能被写入日志，应脱敏处理"
+    exts: [".java"]
+    mode: warn
