@@ -96,11 +96,11 @@ def read_description(file_arg: str | None) -> str:
 # 字段检查
 # ============================================================
 def _has_section(text: str, *titles: str) -> bool:
-    """是否存在某 ## 段落且其下有非空内容。"""
+    """是否存在某二级标题段落且其下有非空内容。"""
     for title in titles:
         # 匹配 "## 标题" 后到下一个 "## " 或文末之间的内容
         pat = re.compile(
-            r'^#{1,4}\s*' + re.escape(title) + r'\s*$(?P<body>.*?)(?=^#{1,4}\s|\Z)',
+            r'^##\s+' + re.escape(title) + r'\s*$(?P<body>.*?)(?=^##\s|\Z)',
             re.MULTILINE | re.DOTALL,
         )
         m = pat.search(text)

@@ -78,15 +78,25 @@ Tested: pass (42/42)
 
 ### 第四步：自动创建 MR（不要手填描述）
 
-提交完后用一条命令自动生成并提交 MR，你只需提供任务背景：
+提交完后先自动生成 MR 描述，再用门禁校验通过后提交，你只需提供任务背景：
 
 ```bash
-python governance/scripts/create_mr.py --why "<从用户原始需求提取的背景>"
+python governance/scripts/create_mr.py \
+  --dry-run \
+  --target-branch master \
+  --why "<从用户原始需求提取的背景>" \
+  > .governance/mr.md
+
+sed '1,2d' .governance/mr.md \
+  | python governance/scripts/validate_mr.py \
+      --diff-base origin/master \
+      --config governance.config.yml
 ```
 
 脚本自动拼装：背景(--why)、变更内容(从 diff)、自测确认(从测试证据)、风险(自动评估)、AI 元数据(从 commit trailer，放折叠块)。加 `--dry-run` 可先预览。
 
 > **MR 描述不靠人/AI 手填**。背景以外的段落全部从 git/trailer/测试证据自动推断。
+> 原始 Markdown 必须保留 `## 背景`、`## 变更内容`、`## 自测确认`、`## 风险与回滚` 二级标题；普通文本标题不合规。
 
 ---
 

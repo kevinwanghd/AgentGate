@@ -13,7 +13,7 @@
 3. **风险扫描**：对照 `docs/governance/risk-types.md` 扫描自己的 diff
 4. **补注解**：命中风险模式的代码，在上方加 `risk:*` 注解
 5. **提交**：`AI-Usage` 和 `Tested` trailer 由 git hook 自动写入，**你不需要手填**
-6. **创建 MR**：调 `create_mr.py --why "<任务背景>"` 自动生成并提交（见下方"自动创建 MR"），**不要手填 MR 描述**
+6. **创建 MR**：调 `create_mr.py --why "<任务背景>"` 自动生成 MR 描述（见下方"自动创建 MR"），用 `validate_mr.py` 校验通过后再提交。**不要手填 MR 描述，不要用单行描述，不要省略 `##` 标题**
 
 ---
 
@@ -32,7 +32,22 @@ python governance/scripts/create_mr.py --why "<从用户原始需求提取的任
 - **## 风险与回滚** ← 自动判断大变更/敏感路径/schema
 - **治理元数据**（AI-Usage / Tested 等）← 从 commit trailer 读，放折叠块
 
-提交前可加 `--dry-run` 预览描述。你**只需提供 `--why`**，其余全自动。
+提交前必须先用 `--dry-run` 预览描述，再把正文交给 `validate_mr.py` 校验。你**只需提供 `--why`**，其余全自动。
+
+```bash
+python governance/scripts/create_mr.py \
+  --dry-run \
+  --target-branch master \
+  --why "<从用户原始需求提取的任务背景>" \
+  > .governance/mr.md
+
+sed '1,2d' .governance/mr.md \
+  | python governance/scripts/validate_mr.py \
+      --diff-base origin/master \
+      --config governance.config.yml
+```
+
+校验通过后，使用 `.governance/mr.md` 中的正文创建 MR。MR 正文必须保留二级标题，例如 `## 背景`、`## 变更内容`、`## 自测确认`、`## 风险与回滚`。GitLab 页面渲染后可能只显示"背景"，但原始 Markdown 里必须有 `##`。
 
 ---
 
@@ -136,9 +151,9 @@ if (adminUserId == "626786582b50ab8ec08b0fa0" || adminUserId == "64918ccaeb21944
 
 ---
 
-## MR 描述结构（软规则，90 天后转硬）
+## MR 描述结构（硬规则，缺失即阻断）
 
-MR 描述必须包含以下段落，缺少任一段落 CI 会警告：
+MR 描述必须包含以下段落，缺少任一段落 CI 会阻断 MR：
 
 ```markdown
 ## 背景

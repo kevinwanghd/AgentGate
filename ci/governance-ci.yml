@@ -18,6 +18,7 @@ stages:
   - governance
   - test
   - build
+  - merge
 
 # ── 1. 风险扫描: 硬阻断 ──────────────────────────────────────────────────────
 governance:risk-scan:
@@ -175,13 +176,12 @@ governance:gate-decision:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
   variables:
     GIT_DEPTH: 0
-  needs:
-    - job: governance:risk-scan
-    - job: governance:secret-scan
-    - job: governance:mr-validate
-    - job: governance:test-check
-    - job: governance:go-test
-      optional: true
+  dependencies:
+    - governance:risk-scan
+    - governance:secret-scan
+    - governance:mr-validate
+    - governance:test-check
+    - governance:go-test
   before_script:
     - pip install -q pyyaml==6.0.3
   script:
@@ -219,17 +219,7 @@ governance:gate-decision:
       if [ "$DECISION_EXIT" -gt 1 ]; then
         exit "$DECISION_EXIT"
       fi
-      python - <<'PY' > gate.env
-      import json
-      with open("gate-result.json", encoding="utf-8") as f:
-          gate = json.load(f)
-      print(f"GATE_MERGE_ACTION={gate.get('merge_action', 'BLOCK')}")
-      print(f"GATE_RESULT={gate.get('result', 'FAIL')}")
-      PY
-      cat gate.env
   artifacts:
-    reports:
-      dotenv: gate.env
     paths:
       - gate-result.json
     expire_in: 30 days
@@ -237,34 +227,52 @@ governance:gate-decision:
 
 # ── 8. Merge Bot: 仅消费 GateResult, 使用独立 token 设置 GitLab 自动合并 ─────
 governance:auto-merge:
-  stage: test
-  image: curlimages/curl:8.10.1
+  stage: merge
+  image: python:3.11-slim
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-  needs:
-    - job: governance:gate-decision
-      artifacts: true
+  dependencies:
+    - governance:gate-decision
   script:
     - |
-      if [ "${GATE_MERGE_ACTION:-BLOCK}" != "AUTO_MERGE" ]; then
-        echo "[auto-merge] GateResult=${GATE_RESULT:-unknown}, action=${GATE_MERGE_ACTION:-BLOCK}; skip."
-        exit 0
-      fi
-      if [ "${CI_MERGE_REQUEST_SOURCE_PROJECT_ID:-$CI_PROJECT_ID}" != "$CI_PROJECT_ID" ]; then
-        echo "[auto-merge] fork/source-project MR is not eligible for bot merge."
-        exit 0
-      fi
-      if [ -z "${GOVERNANCE_MERGE_BOT_TOKEN:-}" ]; then
-        echo "[auto-merge] GOVERNANCE_MERGE_BOT_TOKEN is required for GitLab auto merge." >&2
-        exit 1
-      fi
-      SHA="${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA:-$CI_COMMIT_SHA}"
-      API="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests/${CI_MERGE_REQUEST_IID}/merge"
-      curl --fail --silent --show-error --request PUT \
-        --header "PRIVATE-TOKEN: ${GOVERNANCE_MERGE_BOT_TOKEN}" \
-        --data-urlencode "merge_when_pipeline_succeeds=true" \
-        --data-urlencode "squash=true" \
-        --data-urlencode "should_remove_source_branch=true" \
-        --data-urlencode "sha=${SHA}" \
-        "$API"
+      python - <<'PY'
+      import json
+      import os
+      import sys
+      import urllib.parse
+      import urllib.request
+
+      with open("gate-result.json", encoding="utf-8") as f:
+          gate = json.load(f)
+
+      action = gate.get("merge_action", "BLOCK")
+      result = gate.get("result", "FAIL")
+      if action != "AUTO_MERGE":
+          print(f"[auto-merge] GateResult={result}, action={action}; skip.")
+          raise SystemExit(0)
+
+      if os.getenv("CI_MERGE_REQUEST_SOURCE_PROJECT_ID", os.getenv("CI_PROJECT_ID")) != os.getenv("CI_PROJECT_ID"):
+          print("[auto-merge] fork/source-project MR is not eligible for bot merge.")
+          raise SystemExit(0)
+
+      token = os.getenv("GOVERNANCE_MERGE_BOT_TOKEN")
+      if not token:
+          print("[auto-merge] GOVERNANCE_MERGE_BOT_TOKEN is required for GitLab auto merge.", file=sys.stderr)
+          raise SystemExit(1)
+
+      api = "{}/projects/{}/merge_requests/{}/merge".format(
+          os.environ["CI_API_V4_URL"].rstrip("/"),
+          os.environ["CI_PROJECT_ID"],
+          os.environ["CI_MERGE_REQUEST_IID"],
+      )
+      data = urllib.parse.urlencode({
+          "merge_when_pipeline_succeeds": "true",
+          "squash": "true",
+          "should_remove_source_branch": "true",
+          "sha": os.getenv("CI_MERGE_REQUEST_SOURCE_BRANCH_SHA", os.getenv("CI_COMMIT_SHA", "")),
+      }).encode()
+      req = urllib.request.Request(api, data=data, method="PUT", headers={"PRIVATE-TOKEN": token})
+      with urllib.request.urlopen(req, timeout=30) as resp:
+          print(resp.read().decode("utf-8", errors="replace"))
+      PY
   allow_failure: false
