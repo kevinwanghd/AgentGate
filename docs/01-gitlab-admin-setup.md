@@ -140,7 +140,7 @@ agentgate-bot
 - Personal Access Token 只授予 `api` scope；
 - token 只保存在 AgentGate Controller 或受控运维环境，不写入业务仓库。
 
-### 2. 验证 API v4 可访问
+### 2. 验证 P0 前置条件
 
 在能访问 GitLab 内网的机器上执行：
 
@@ -149,24 +149,39 @@ export AGENTGATE_GITLAB_URL="https://gitlab.example.com"
 export AGENTGATE_GITLAB_PROJECT_ID="group/project"
 export AGENTGATE_GITLAB_TOKEN="<agentgate-bot-pat>"
 
-python scripts/create_mr.py --gitlab-preflight
+python scripts/gitlab_controller.py preflight \
+  --target-branch master \
+  --policy-path governance.config.yml
 ```
 
-预期输出：
+预期 JSON：
 
-```text
-[create-mr] GitLab API 预检通过: group/project
+```json
+{
+  "status": "pass",
+  "policy_source": "target_branch",
+  "checks": [
+    {"name": "gitlab_project_access", "status": "pass"},
+    {"name": "gitlab_bot_identity", "status": "pass"},
+    {"name": "target_branch_exists", "status": "pass"},
+    {"name": "target_branch_protected", "status": "pass"},
+    {"name": "target_policy_digest", "status": "pass"}
+  ]
+}
 ```
 
-如果返回 `403`，先修复 nginx、反向代理、GitLab API 路由或 Bot 项目权限。这个问题不解决时，不要继续配置自动 MR/自动合并。
+如果项目访问返回 `403`，先修复 nginx、反向代理、GitLab API 路由或 Bot 项目权限。这个问题不解决时，不要继续配置自动 MR/自动合并。
+
+如果 `target_branch_protected` 失败，先在 `Settings → Repository → Protected branches` 配置目标分支保护，禁止普通开发者直接 push。
+
+如果 `target_policy_digest` 失败，说明 Controller 不能从目标分支读取不可变策略。自动门禁不得改为读取 source branch 的策略。
 
 ### 3. 验证自动创建或更新 MR
 
 在测试分支上执行：
 
 ```bash
-python scripts/create_mr.py \
-  --gitlab-api \
+python scripts/gitlab_controller.py submit \
   --target-branch master \
   --why "验证 AgentGate Bot 可以自动创建 MR" \
   --remove-source-branch
@@ -180,6 +195,14 @@ python scripts/create_mr.py \
 - `--remove-source-branch` 会设置“合并后删除源分支”。
 
 这一步只验证自动 MR 最小闭环，不代表已经完成风险自动合并。自动合并必须等可信 runner、GateResult、保护分支和审批策略到位后再开启。
+
+### 4. 保留低级 API 预检命令
+
+排查 API/token 问题时，也可以只检查 GitLab API v4 项目访问：
+
+```bash
+python scripts/create_mr.py --gitlab-preflight
+```
 
 ---
 

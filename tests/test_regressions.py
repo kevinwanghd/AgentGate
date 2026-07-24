@@ -20,6 +20,7 @@ create_mr = importlib.import_module("create_mr")
 scan_risks = importlib.import_module("scan_risks")
 validate_mr = importlib.import_module("validate_mr")
 gate_decision = importlib.import_module("gate_decision")
+gitlab_controller = importlib.import_module("gitlab_controller")
 
 
 class ConfigFailureTests(unittest.TestCase):
@@ -230,6 +231,92 @@ class CreateMrGitLabApiTests(unittest.TestCase):
         self.assertEqual("PUT", calls[1][0])
         self.assertEqual("/projects/123/merge_requests/7", calls[1][3])
         self.assertEqual("true", calls[1][4]["remove_source_branch"])
+
+
+class GitLabControllerTests(unittest.TestCase):
+    def _args(self) -> mock.Mock:
+        return mock.Mock(
+            gitlab_url="https://gitlab.example.com",
+            gitlab_project_id="group/project",
+            gitlab_token="token",
+            target_branch="master",
+            source_branch=None,
+            policy_path="governance.config.yml",
+        )
+
+    def test_p0_readiness_passes_with_bot_protection_and_target_policy(self) -> None:
+        def fake_api(method, args, path, payload=None, query=None):
+            if path == "/projects/group%2Fproject":
+                return {"path_with_namespace": "group/project"}
+            if path == "/user":
+                return {"username": "agentgate-bot"}
+            if path.endswith("/repository/branches/master"):
+                return {"commit": {"id": "target-sha"}}
+            if path.endswith("/protected_branches/master"):
+                return {"push_access_levels": [{"access_level": 0}]}
+            if path.endswith("/repository/files/governance.config.yml"):
+                import base64
+                return {
+                    "content": base64.b64encode(b"auto_merge:\n  enabled: true\n").decode()
+                }
+            raise AssertionError(path)
+
+        with mock.patch.object(gitlab_controller, "_api", side_effect=fake_api):
+            result = gitlab_controller.build_readiness(self._args())
+
+        self.assertEqual("pass", result["status"])
+        self.assertEqual("target_branch", result["policy_source"])
+        self.assertEqual("target-sha", result["target_sha"])
+        self.assertTrue(result["policy_digest"].startswith("sha256:"))
+        self.assertTrue(all(item["status"] == "pass" for item in result["checks"]))
+
+    def test_p0_readiness_fails_when_target_branch_is_not_protected(self) -> None:
+        def fake_api(method, args, path, payload=None, query=None):
+            if path == "/projects/group%2Fproject":
+                return {"path_with_namespace": "group/project"}
+            if path == "/user":
+                return {"username": "agentgate-bot"}
+            if path.endswith("/repository/branches/master"):
+                return {"commit": {"id": "target-sha"}}
+            if path.endswith("/protected_branches/master"):
+                raise RuntimeError("GitLab API GET protected branch 返回 404")
+            if path.endswith("/repository/files/governance.config.yml"):
+                import base64
+                return {"content": base64.b64encode(b"version: v1\n").decode()}
+            raise AssertionError(path)
+
+        with mock.patch.object(gitlab_controller, "_api", side_effect=fake_api):
+            result = gitlab_controller.build_readiness(self._args())
+
+        self.assertEqual("fail", result["status"])
+        failed = [item for item in result["checks"] if item["status"] == "fail"]
+        self.assertEqual(["target_branch_protected"], [item["name"] for item in failed])
+
+    def test_submit_stops_before_mr_when_p0_readiness_fails(self) -> None:
+        args = self._args()
+        args.why = "验证 MR"
+        args.requirement_id = None
+        args.what = None
+        args.tested = None
+        args.risks = None
+        args.excludes = None
+        args.link = None
+        args.title = None
+        args.config = None
+        args.evidence = create_mr.EVIDENCE_PATH
+        args.meta_style = "details"
+        args.remove_source_branch = True
+        args.output = None
+
+        with mock.patch.object(
+            gitlab_controller,
+            "build_readiness",
+            return_value={"status": "fail", "checks": []},
+        ), mock.patch.object(create_mr, "submit_gitlab_api") as submit_api:
+            rc = gitlab_controller.submit(args)
+
+        self.assertEqual(1, rc)
+        submit_api.assert_not_called()
 
 
 class TestFileExemptionTests(unittest.TestCase):
@@ -1132,6 +1219,7 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
     def test_installer_ships_gate_decision_and_gitlab_auto_merge_jobs(self) -> None:
         installer = (ROOT / "install.sh").read_text(encoding="utf-8")
         self.assertIn('scripts/gate_decision.py"   | write_file "governance/scripts/gate_decision.py"', installer)
+        self.assertIn("scripts/gitlab_controller.py", installer)
         self.assertIn("governance:gate-decision:", installer)
         self.assertIn("governance:auto-merge:", installer)
         self.assertIn("GOVERNANCE_MERGE_BOT_TOKEN", installer)
