@@ -128,7 +128,7 @@ if (req.Headers["X-Internal"] == "true") return true;
 
 ## 🛠️ 核心脚本
 
-AgentGate 包含 13 个 Python 脚本(在 `scripts/` 目录):
+AgentGate 包含 14 个 Python 脚本(在 `scripts/` 目录):
 
 | 脚本 | 功能 |
 |---|---|
@@ -142,6 +142,7 @@ AgentGate 包含 13 个 Python 脚本(在 `scripts/` 目录):
 | `create_mr.py` | 自动生成 MR(从 commit 提取信息)，支持 GitLab API v4 预检和创建/更新 MR |
 | `gitlab_controller.py` | GitLab 11.4 外部 Controller 最小版，检查 Bot/API/保护分支/目标策略并创建 MR |
 | `evidence_bundle.py` | 生成 Evidence Plan/Bundle v2，校验证据与 source/target/merge/policy/profile 绑定 |
+| `risk_merge_decision.py` | 基于证据包做风险分级、审批校验、自动合并动作和审计记录 |
 | `report_expired.py` | 过期注解周报(找 90 天未复查的风险注解) |
 | `install-hooks.sh` | 安装 git hook |
 | `selftest.sh` | 工具自检(48 个用例) |
