@@ -139,7 +139,7 @@ AgentGate 包含 11 个 Python 脚本(在 `scripts/` 目录):
 | `run_affected_tests.py` | Go 受影响包测试 + 反向依赖一跳扩展 |
 | `collect_ai_usage.py` | AI 用量统计(读证据,算占比,盖 trailer) |
 | `record_test_run.py` | 记录测试运行(盖 Tested trailer) |
-| `create_mr.py` | 自动生成 MR(从 commit 提取信息) |
+| `create_mr.py` | 自动生成 MR(从 commit 提取信息)，支持 GitLab API v4 预检和创建/更新 MR |
 | `report_expired.py` | 过期注解周报(找 90 天未复查的风险注解) |
 | `install-hooks.sh` | 安装 git hook |
 | `selftest.sh` | 工具自检(48 个用例) |

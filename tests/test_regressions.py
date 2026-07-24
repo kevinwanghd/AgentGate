@@ -171,6 +171,67 @@ class EvidenceBindingTests(unittest.TestCase):
             os.unlink(path)
 
 
+class CreateMrGitLabApiTests(unittest.TestCase):
+    def test_gitlab_preflight_checks_project_access(self) -> None:
+        args = mock.Mock(
+            gitlab_url="https://gitlab.example.com",
+            gitlab_project_id="group/project",
+            gitlab_token="token",
+        )
+        with mock.patch.object(
+            create_mr,
+            "_gitlab_api_request",
+            return_value={"path_with_namespace": "group/project"},
+        ) as request:
+            rc = create_mr.gitlab_api_preflight(args)
+
+        self.assertEqual(0, rc)
+        request.assert_called_once_with(
+            "GET",
+            "https://gitlab.example.com",
+            "token",
+            "/projects/group%2Fproject",
+        )
+
+    def test_gitlab_api_submit_updates_existing_mr(self) -> None:
+        args = mock.Mock(
+            gitlab_url="https://gitlab.example.com",
+            gitlab_project_id="123",
+            gitlab_token="token",
+            source_branch=None,
+            remove_source_branch=True,
+        )
+
+        calls = []
+
+        def fake_request(method, base_url, token, path, payload=None, query=None):
+            calls.append((method, base_url, token, path, payload, query))
+            if method == "GET" and path.endswith("/merge_requests"):
+                return [{"iid": 7}]
+            return {
+                "iid": 7,
+                "web_url": "https://gitlab.example.com/group/project/-/merge_requests/7",
+            }
+
+        with mock.patch.object(create_mr, "current_branch", return_value="feature/a"), \
+                mock.patch.object(create_mr, "_gitlab_api_request", side_effect=fake_request):
+            rc = create_mr.submit_gitlab_api("title", "body", "master", args)
+
+        self.assertEqual(0, rc)
+        self.assertEqual("GET", calls[0][0])
+        self.assertEqual(
+            {
+                "state": "opened",
+                "source_branch": "feature/a",
+                "target_branch": "master",
+            },
+            calls[0][5],
+        )
+        self.assertEqual("PUT", calls[1][0])
+        self.assertEqual("/projects/123/merge_requests/7", calls[1][3])
+        self.assertEqual("true", calls[1][4]["remove_source_branch"])
+
+
 class TestFileExemptionTests(unittest.TestCase):
     """P0-1: 测试文件对大多数内置规则豁免, 只保留 skipped-test。"""
 
