@@ -195,6 +195,17 @@ cat > bad_mr.md <<'EOF'
 改了点东西。
 EOF
 
+cat > plain_heading_mr.md <<'EOF'
+背景
+机器人投放任务偶发重复, 需要加幂等。
+变更内容
+- 加分布式锁
+- 执行前查重
+AI-Usage: heavy
+自测确认
+- [x] dotnet test
+EOF
+
 python3 "$VAL" --file good_mr.md --config soft.yml >/dev/null 2>&1
 expect "合规描述软模式应通过" 0 $?
 
@@ -205,6 +216,9 @@ if [[ "$HAS_YAML" == "1" ]]; then
   python3 "$VAL" --file bad_mr.md --config hard.yml >/dev/null 2>&1
   expect "缺字段deadline已过应阻断" 1 $?
 
+  python3 "$VAL" --file plain_heading_mr.md --config hard.yml >/dev/null 2>&1
+  expect "普通文本标题不能通过硬门禁" 1 $?
+
   # 空模板的占位符不算填写 → 硬模式 FAIL
   TPL="${SCRIPT_DIR}/../templates/merge_request_default.md"
   if [[ -f "$TPL" ]]; then
@@ -213,6 +227,7 @@ if [[ "$HAS_YAML" == "1" ]]; then
   fi
 else
   skip "缺字段deadline已过应阻断"
+  skip "普通文本标题不能通过硬门禁"
   skip "空模板占位符不算填写"
 fi
 

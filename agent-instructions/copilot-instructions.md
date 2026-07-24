@@ -13,9 +13,23 @@ applyTo: "**"
 3. 扫描 diff，对照 `docs/governance/risk-types.md` 检查 8 类风险模式
 4. 命中的代码上方加 `risk:*` 注解（单行格式）
 5. 提交时 `AI-Usage` 和 `Tested` trailer 由 git hook 自动写入，无需手填
-6. 创建 MR：`python governance/scripts/create_mr.py --why "<任务背景>"` 自动生成并提交，**不手填描述**
+6. 创建 MR：用 `create_mr.py --dry-run` 自动生成描述，并用 `validate_mr.py` 校验通过后再提交，**不手填描述**
+
+```bash
+python governance/scripts/create_mr.py \
+  --dry-run \
+  --target-branch master \
+  --why "<任务背景>" \
+  > .governance/mr.md
+
+sed '1,2d' .governance/mr.md \
+  | python governance/scripts/validate_mr.py \
+      --diff-base origin/master \
+      --config governance.config.yml
+```
 
 > MR 描述自动拼装：背景(--why)、变更内容(从 diff)、自测(从测试证据)、风险(自动评估)、AI 元数据(从 trailer)。
+> 原始 Markdown 必须保留 `## 背景`、`## 变更内容`、`## 自测确认`、`## 风险与回滚` 二级标题；普通文本标题不合规。
 > 测试放行：有全绿记录且本次改了测试文件 / 加 `// risk:untested reason:"..." owner:@team reviewed:<今天>` / 命中 config 白名单。带失败测试（`Tested: fail`）一律拒合。
 
 ## AI 证据采集（自动算占比，不靠人工判断）
