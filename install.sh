@@ -330,6 +330,7 @@ fetch_or_local "scripts/record_test_run.py" | write_file "governance/scripts/rec
 fetch_or_local "scripts/check_tested.py"    | write_file "governance/scripts/check_tested.py"
 fetch_or_local "scripts/gate_decision.py"   | write_file "governance/scripts/gate_decision.py"
 fetch_or_local "scripts/gitlab_controller.py" | write_file "governance/scripts/gitlab_controller.py"
+fetch_or_local "scripts/evidence_bundle.py" | write_file "governance/scripts/evidence_bundle.py"
 fetch_or_local "scripts/create_mr.py"       | write_file "governance/scripts/create_mr.py"
 fetch_or_local "scripts/run_affected_tests.py" | write_file "governance/scripts/run_affected_tests.py"
 fetch_or_local "scripts/install-hooks.sh"   | write_file "governance/scripts/install-hooks.sh"
@@ -345,6 +346,10 @@ fetch_or_local "patterns/python.yml" | write_file "governance/patterns/python.ym
 fetch_or_local "patterns/javascript.yml" | write_file "governance/patterns/javascript.yml"
 fetch_or_local "patterns/java.yml" | write_file "governance/patterns/java.yml"
 fetch_or_local "patterns/dart.yml" | write_file "governance/patterns/dart.yml"
+
+# ---------- 4c. 语言验证 profile ----------
+log "安装语言验证 profile -> governance/profiles/"
+fetch_or_local "profiles/flutter-mobile.yml" | write_file "governance/profiles/flutter-mobile.yml"
 
 # 自动安装 AI-Usage 采集 git hook (提交时自动写 trailer, 无需人工填)
 if [[ -d "${TARGET_DIR}/.git" ]]; then
@@ -631,6 +636,7 @@ cat <<EOF
   governance/scripts/check_tested.py    (测试痕迹检测, 软门禁)
   governance/scripts/gate_decision.py   (GateResult 决策 -> 自动合并/等待审批/阻断)
   governance/scripts/gitlab_controller.py (GitLab 11.4 Bot/API/P0 预检 + 自动 MR)
+  governance/scripts/evidence_bundle.py (Evidence Plan/Bundle v2 生成与校验)
   governance/scripts/create_mr.py       (自动生成并提交 MR)
   governance/scripts/run_affected_tests.py (Go 受影响包测试 + 反向依赖)
   governance/scripts/install-hooks.sh   (安装 prepare-commit-msg hook)
@@ -641,6 +647,7 @@ cat <<EOF
   governance/patterns/javascript.yml    (JavaScript/TypeScript 专属风险规则包: warn 模式)
   governance/patterns/java.yml          (Java 专属风险规则包: warn 模式)
   governance/patterns/dart.yml          (Dart/Flutter 专属风险规则包: warn 模式)
+  governance/profiles/flutter-mobile.yml (Flutter 真实验证 profile)
   CLAUDE.md                     (Claude Code / Kiro)
   .hermes.md                    (Hermes Agent v0.17.0)
   AGENTS.md                     (OpenAI Codex CLI + Hermes fallback)

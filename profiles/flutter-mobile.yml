@@ -1,0 +1,102 @@
+api_version: agentgate.io/profile/v1
+kind: LanguageProfile
+name: flutter-mobile
+version: 1.0.0
+
+checks:
+  dart-format:
+    type: format
+    command:
+      - dart
+      - format
+      - --output=none
+      - --set-exit-if-changed
+      - .
+
+  flutter-analyze:
+    type: static-analysis
+    command:
+      - flutter
+      - analyze
+
+  flutter-test:
+    type: unit-test
+    command:
+      - flutter
+      - test
+      - --machine
+    report:
+      format: junit
+      path: build/agentgate/flutter-test.xml
+
+  flutter-coverage:
+    type: coverage
+    command:
+      - flutter
+      - test
+      - --coverage
+    report:
+      format: lcov
+      path: coverage/lcov.info
+
+  android-debug-build:
+    type: build
+    command:
+      - flutter
+      - build
+      - apk
+      - --debug
+
+  secret-scan:
+    type: secret-scan
+    command:
+      - gitleaks
+      - detect
+      - --redact
+      - --no-git
+
+plans:
+  low:
+    - dart-format
+    - flutter-analyze
+    - secret-scan
+
+  medium:
+    - dart-format
+    - flutter-analyze
+    - flutter-test
+    - secret-scan
+
+  high:
+    - dart-format
+    - flutter-analyze
+    - flutter-test
+    - flutter-coverage
+    - android-debug-build
+    - secret-scan
+
+  critical:
+    - dart-format
+    - flutter-analyze
+    - flutter-test
+    - flutter-coverage
+    - android-debug-build
+    - secret-scan
+
+risk_paths:
+  high:
+    - lib/**/auth/**
+    - lib/**/payment/**
+    - lib/**/account/**
+    - lib/**/database/**
+    - lib/**/drift/**
+    - android/**
+    - ios/**
+  critical:
+    - .github/workflows/**
+    - .gitlab-ci.yml
+    - governance/**
+    - governance.config.yml
+    - "**/*.jks"
+    - "**/*.keystore"
+    - "**/*secret*"
