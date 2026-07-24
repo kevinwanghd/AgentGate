@@ -956,6 +956,41 @@ class GateDecisionTests(unittest.TestCase):
         self.assertEqual(result["merge_action"], "WAIT")
         self.assertIn("protected_paths_changed", result["blocking_reasons"])
 
+    def test_protected_branch_blocks_direct_push(self) -> None:
+        result = gate_decision.build_gate_result(
+            source_sha="head", target_sha="base", policy_sha="policy",
+            changed_paths=["src/service.py"],
+            checks={"lint": "pass", "unit": "pass"},
+            config=self.config,
+            target_branch="master",
+        )
+        self.assertEqual(result["result"], "FAIL")
+        self.assertEqual(result["merge_action"], "BLOCK")
+        self.assertIn("protected_branch_requires_mr", result["blocking_reasons"])
+
+    def test_non_protected_branch_allows_auto_merge(self) -> None:
+        result = gate_decision.build_gate_result(
+            source_sha="head", target_sha="base", policy_sha="policy",
+            changed_paths=["src/service.py"],
+            checks={"lint": "pass", "unit": "pass"},
+            config=self.config,
+            target_branch="feature/my-feature",
+        )
+        self.assertEqual(result["result"], "PASS")
+        self.assertEqual(result["merge_action"], "AUTO_MERGE")
+
+    def test_protected_branch_pattern_wildcard(self) -> None:
+        result = gate_decision.build_gate_result(
+            source_sha="head", target_sha="base", policy_sha="policy",
+            changed_paths=["src/service.py"],
+            checks={"lint": "pass", "unit": "pass"},
+            config=self.config,
+            target_branch="release/v1.0.0",
+        )
+        self.assertEqual(result["result"], "FAIL")
+        self.assertEqual(result["merge_action"], "BLOCK")
+        self.assertIn("protected_branch_requires_mr", result["blocking_reasons"])
+
     def test_failed_check_blocks_and_is_not_retried_as_green(self) -> None:
         result = gate_decision.build_gate_result(
             source_sha="head", target_sha="base", policy_sha="policy",
