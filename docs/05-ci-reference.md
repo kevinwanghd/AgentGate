@@ -234,6 +234,61 @@ python governance/scripts/evidence_bundle.py verify \
 
 ---
 
+## P2/P3 风险自动合并与审计
+
+Evidence Bundle 生成后，使用风险合并决策器计算最终动作：
+
+```bash
+python governance/scripts/risk_merge_decision.py \
+  --bundle .governance/evidence-bundle.json \
+  --profile governance/profiles/flutter-mobile.yml \
+  --changed-paths .governance/changed-paths.json \
+  --declared-risk medium \
+  --approvals .governance/approvals.json \
+  --author "$GITLAB_USER_LOGIN" \
+  --source-sha "$SOURCE_SHA" \
+  --target-sha "$TARGET_SHA" \
+  --merge-sha "$MERGE_SHA" \
+  --policy-digest "$POLICY_DIGEST" \
+  --profile-digest "$PROFILE_DIGEST" \
+  --audit-log .governance/audit/merge-decisions.jsonl \
+  --output .governance/risk-decision.json
+```
+
+决策规则：
+
+| 风险 | 技术检查 | 审批 | 合并动作 |
+|---|---|---:|---|
+| LOW | 全部通过 | 0 | `AUTO_MERGE` |
+| MEDIUM | 全部通过 | 0 | `AUTO_MERGE` |
+| HIGH | 全部通过 | 1 名独立批准人 | `AUTO_MERGE` |
+| CRITICAL | 全部通过 | 2 名独立批准人 | `MANUAL_MERGE` |
+
+风险等级只会升高，不会因为提交者声明而降低。`profile` 的 `risk_paths` 命中 `high` 或 `critical` 路径时，以更高等级为准。
+
+审批记录示例：
+
+```json
+[
+  {
+    "approver": "alice",
+    "source_sha": "SOURCE_SHA",
+    "approved_at": "2026-07-24T08:00:00Z"
+  }
+]
+```
+
+有效审批必须满足：
+
+- 审批人不是提交作者；
+- 审批绑定当前 `source_sha`；
+- 同一审批人只计算一次；
+- source SHA 变化后旧审批自动失效。
+
+决策器会把每次结果追加到 `--audit-log` 指定的 JSONL 文件。该文件用于 Controller/Evidence Store 留痕，不建议提交进业务仓库。
+
+---
+
 ## v1 阶段的实现状态
 
 > ✅ **三个 job 全部就绪**：`risk-scan`（`scan_risks.py`，硬门禁）、`mr-validate`（`validate_mr.py`，软门禁）已实现并通过自测；`secret-scan` 用官方 `gitleaks` 镜像扫本次 MR 范围（硬门禁）。install.sh 生成的 `governance/ci-snippet.yml` 直接调用它们，不再是占位 echo。

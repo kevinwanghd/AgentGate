@@ -18,6 +18,7 @@ sys.path.insert(0, str(SCRIPTS))
 check_tested = importlib.import_module("check_tested")
 create_mr = importlib.import_module("create_mr")
 evidence_bundle = importlib.import_module("evidence_bundle")
+risk_merge_decision = importlib.import_module("risk_merge_decision")
 scan_risks = importlib.import_module("scan_risks")
 validate_mr = importlib.import_module("validate_mr")
 gate_decision = importlib.import_module("gate_decision")
@@ -403,6 +404,125 @@ class EvidenceBundleTests(unittest.TestCase):
         }
         problems = evidence_bundle.verify_bundle(bundle, {"source_sha": "other"})
         self.assertEqual(["source_sha_mismatch"], problems)
+
+
+class RiskMergeDecisionTests(unittest.TestCase):
+    def _bundle(self, status: str = "pass") -> dict:
+        return {
+            "schema_version": "agentgate.io/evidence/v2",
+            "source_sha": "source",
+            "target_sha": "target",
+            "merge_sha": "merge",
+            "policy_digest": "sha256:policy",
+            "profile_digest": "sha256:profile",
+            "checks": [
+                {"id": "flutter-analyze", "status": status},
+                {"id": "flutter-test", "status": "pass"},
+            ],
+        }
+
+    def _profile(self) -> dict:
+        return {
+            "risk_paths": {
+                "high": ["lib/**/auth/**"],
+                "critical": ["governance/**", ".gitlab-ci.yml"],
+            }
+        }
+
+    def test_medium_clean_change_auto_merges(self) -> None:
+        decision = risk_merge_decision.build_decision(
+            bundle=self._bundle(),
+            profile=self._profile(),
+            changed_paths=["lib/book/page.dart"],
+            declared_risk="low",
+        )
+
+        self.assertEqual("PASS", decision["status"])
+        self.assertEqual("AUTO_MERGE", decision["merge_action"])
+        self.assertEqual("medium", decision["risk"])
+
+    def test_high_risk_waits_without_independent_approval(self) -> None:
+        decision = risk_merge_decision.build_decision(
+            bundle=self._bundle(),
+            profile=self._profile(),
+            changed_paths=["lib/app/auth/login.dart"],
+            declared_risk="low",
+            approvals=[],
+            author="alice",
+        )
+
+        self.assertEqual("WAITING_APPROVAL", decision["status"])
+        self.assertEqual("WAIT", decision["merge_action"])
+        self.assertEqual("high", decision["risk"])
+        self.assertIn("approval_missing", decision["blocking_reasons"])
+
+    def test_high_risk_auto_merges_after_valid_approval(self) -> None:
+        decision = risk_merge_decision.build_decision(
+            bundle=self._bundle(),
+            profile=self._profile(),
+            changed_paths=["lib/app/auth/login.dart"],
+            declared_risk="medium",
+            approvals=[{"approver": "bob", "source_sha": "source"}],
+            author="alice",
+        )
+
+        self.assertEqual("PASS", decision["status"])
+        self.assertEqual("AUTO_MERGE", decision["merge_action"])
+        self.assertEqual(1, decision["approvals"]["valid"])
+
+    def test_self_and_stale_approvals_do_not_count(self) -> None:
+        approvals = [
+            {"approver": "alice", "source_sha": "source"},
+            {"approver": "bob", "source_sha": "old"},
+            {"approver": "carol", "source_sha": "source"},
+        ]
+
+        valid = risk_merge_decision.valid_approvals(
+            approvals,
+            source_sha="source",
+            author="alice",
+        )
+
+        self.assertEqual(["carol"], [item["approver"] for item in valid])
+
+    def test_critical_risk_requires_manual_merge_after_two_approvals(self) -> None:
+        decision = risk_merge_decision.build_decision(
+            bundle=self._bundle(),
+            profile=self._profile(),
+            changed_paths=["governance/config.yml"],
+            declared_risk="low",
+            approvals=[
+                {"approver": "bob", "source_sha": "source"},
+                {"approver": "carol", "source_sha": "source"},
+            ],
+            author="alice",
+        )
+
+        self.assertEqual("PASS", decision["status"])
+        self.assertEqual("MANUAL_MERGE", decision["merge_action"])
+        self.assertEqual("critical", decision["risk"])
+
+    def test_evidence_binding_mismatch_returns_error(self) -> None:
+        decision = risk_merge_decision.build_decision(
+            bundle=self._bundle(),
+            profile=self._profile(),
+            changed_paths=["lib/book/page.dart"],
+            expected={"source_sha": "other"},
+        )
+
+        self.assertEqual("ERROR", decision["status"])
+        self.assertEqual("BLOCK", decision["merge_action"])
+        self.assertIn("source_sha_mismatch", decision["blocking_reasons"])
+
+    def test_audit_log_appends_json_line(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "audit" / "merge-decisions.jsonl"
+            decision = {"status": "PASS", "source_sha": "source"}
+            risk_merge_decision.append_audit(str(path), decision)
+
+            lines = path.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(1, len(lines))
+        self.assertEqual("PASS", json.loads(lines[0])["status"])
 
 
 class TestFileExemptionTests(unittest.TestCase):
@@ -1307,6 +1427,7 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
         self.assertIn('scripts/gate_decision.py"   | write_file "governance/scripts/gate_decision.py"', installer)
         self.assertIn("scripts/gitlab_controller.py", installer)
         self.assertIn("scripts/evidence_bundle.py", installer)
+        self.assertIn("scripts/risk_merge_decision.py", installer)
         self.assertIn("profiles/flutter-mobile.yml", installer)
         self.assertIn("governance:gate-decision:", installer)
         self.assertIn("governance:auto-merge:", installer)

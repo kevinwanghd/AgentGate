@@ -331,6 +331,7 @@ fetch_or_local "scripts/check_tested.py"    | write_file "governance/scripts/che
 fetch_or_local "scripts/gate_decision.py"   | write_file "governance/scripts/gate_decision.py"
 fetch_or_local "scripts/gitlab_controller.py" | write_file "governance/scripts/gitlab_controller.py"
 fetch_or_local "scripts/evidence_bundle.py" | write_file "governance/scripts/evidence_bundle.py"
+fetch_or_local "scripts/risk_merge_decision.py" | write_file "governance/scripts/risk_merge_decision.py"
 fetch_or_local "scripts/create_mr.py"       | write_file "governance/scripts/create_mr.py"
 fetch_or_local "scripts/run_affected_tests.py" | write_file "governance/scripts/run_affected_tests.py"
 fetch_or_local "scripts/install-hooks.sh"   | write_file "governance/scripts/install-hooks.sh"
@@ -637,6 +638,7 @@ cat <<EOF
   governance/scripts/gate_decision.py   (GateResult 决策 -> 自动合并/等待审批/阻断)
   governance/scripts/gitlab_controller.py (GitLab 11.4 Bot/API/P0 预检 + 自动 MR)
   governance/scripts/evidence_bundle.py (Evidence Plan/Bundle v2 生成与校验)
+  governance/scripts/risk_merge_decision.py (风险分级/审批/自动合并决策 + 审计)
   governance/scripts/create_mr.py       (自动生成并提交 MR)
   governance/scripts/run_affected_tests.py (Go 受影响包测试 + 反向依赖)
   governance/scripts/install-hooks.sh   (安装 prepare-commit-msg hook)
