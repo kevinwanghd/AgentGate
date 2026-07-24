@@ -17,6 +17,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 check_tested = importlib.import_module("check_tested")
 create_mr = importlib.import_module("create_mr")
+evidence_bundle = importlib.import_module("evidence_bundle")
 scan_risks = importlib.import_module("scan_risks")
 validate_mr = importlib.import_module("validate_mr")
 gate_decision = importlib.import_module("gate_decision")
@@ -317,6 +318,91 @@ class GitLabControllerTests(unittest.TestCase):
 
         self.assertEqual(1, rc)
         submit_api.assert_not_called()
+
+
+class EvidenceBundleTests(unittest.TestCase):
+    def test_plan_uses_flutter_profile_and_binds_policy_profile_digests(self) -> None:
+        profile = ROOT / "profiles" / "flutter-mobile.yml"
+        policy = ROOT / "governance.config.yml"
+        args = mock.Mock(
+            repository="group/zhuishu-flutter",
+            profile=str(profile),
+            policy=str(policy),
+            risk="medium",
+            source_ref="HEAD",
+            target_ref="origin/main",
+            source_sha="source-sha",
+            target_sha="target-sha",
+            merge_sha="merge-sha",
+            create_synthetic_merge=False,
+            include_changed_paths=False,
+            policy_digest=None,
+        )
+
+        plan = evidence_bundle.build_plan(args)
+
+        self.assertEqual("agentgate.io/evidence-plan/v1", plan["schema_version"])
+        self.assertEqual("source-sha", plan["source_sha"])
+        self.assertEqual("target-sha", plan["target_sha"])
+        self.assertEqual("merge-sha", plan["merge_sha"])
+        self.assertTrue(plan["policy_digest"].startswith("sha256:"))
+        self.assertTrue(plan["profile_digest"].startswith("sha256:"))
+        self.assertEqual(
+            ["dart-format", "flutter-analyze", "flutter-test", "secret-scan"],
+            [item["id"] for item in plan["checks"]],
+        )
+
+    def test_bundle_normalizes_check_mapping_and_verifies_bindings(self) -> None:
+        with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as checks:
+            checks.write('{"checks":{"flutter-test":"pass","flutter-analyze":"pass"}}')
+            checks_path = checks.name
+        try:
+            args = mock.Mock(
+                execution_id="ag-exec-1",
+                repository="group/zhuishu-flutter",
+                source_sha="source",
+                target_sha="target",
+                merge_sha="merge",
+                policy_digest="sha256:policy",
+                profile_digest="sha256:profile",
+                runner_image_digest="sha256:runner",
+                started_at="2026-07-24T08:00:00Z",
+                finished_at="2026-07-24T08:01:00Z",
+                checks=checks_path,
+            )
+            bundle = evidence_bundle.build_bundle(args)
+        finally:
+            os.unlink(checks_path)
+
+        self.assertEqual("agentgate.io/evidence/v2", bundle["schema_version"])
+        self.assertEqual(
+            ["flutter-analyze", "flutter-test"],
+            [item["id"] for item in bundle["checks"]],
+        )
+        problems = evidence_bundle.verify_bundle(
+            bundle,
+            {
+                "source_sha": "source",
+                "target_sha": "target",
+                "merge_sha": "merge",
+                "policy_digest": "sha256:policy",
+                "profile_digest": "sha256:profile",
+            },
+        )
+        self.assertEqual([], problems)
+
+    def test_verify_bundle_reports_binding_mismatch(self) -> None:
+        bundle = {
+            "schema_version": "agentgate.io/evidence/v2",
+            "source_sha": "source",
+            "target_sha": "target",
+            "merge_sha": "merge",
+            "policy_digest": "sha256:policy",
+            "profile_digest": "sha256:profile",
+            "checks": [{"id": "unit", "status": "pass"}],
+        }
+        problems = evidence_bundle.verify_bundle(bundle, {"source_sha": "other"})
+        self.assertEqual(["source_sha_mismatch"], problems)
 
 
 class TestFileExemptionTests(unittest.TestCase):
@@ -1220,6 +1306,8 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
         installer = (ROOT / "install.sh").read_text(encoding="utf-8")
         self.assertIn('scripts/gate_decision.py"   | write_file "governance/scripts/gate_decision.py"', installer)
         self.assertIn("scripts/gitlab_controller.py", installer)
+        self.assertIn("scripts/evidence_bundle.py", installer)
+        self.assertIn("profiles/flutter-mobile.yml", installer)
         self.assertIn("governance:gate-decision:", installer)
         self.assertIn("governance:auto-merge:", installer)
         self.assertIn("GOVERNANCE_MERGE_BOT_TOKEN", installer)

@@ -184,6 +184,56 @@ python governance/scripts/report_expired.py --root . --output governance/reports
 
 ---
 
+## P1 证据包与语言 Profile
+
+P1 开始，AgentGate 增加标准 Evidence Plan / Evidence Bundle。它们用于可信 runner 或 GitLab 11.4 外部 Controller，不替代现有 v1 job。
+
+生成 Flutter 验证计划：
+
+```bash
+python governance/scripts/evidence_bundle.py plan \
+  --repository group/zhuishu-flutter \
+  --profile governance/profiles/flutter-mobile.yml \
+  --policy governance.config.yml \
+  --risk medium \
+  --source-ref HEAD \
+  --target-ref origin/master \
+  --create-synthetic-merge \
+  --output .governance/evidence-plan.json
+```
+
+将真实检查结果封装为 Evidence Bundle：
+
+```bash
+python governance/scripts/evidence_bundle.py bundle \
+  --execution-id ag-exec-001 \
+  --repository group/zhuishu-flutter \
+  --source-sha "$SOURCE_SHA" \
+  --target-sha "$TARGET_SHA" \
+  --merge-sha "$MERGE_SHA" \
+  --policy-digest "$POLICY_DIGEST" \
+  --profile-digest "$PROFILE_DIGEST" \
+  --runner-image-digest "$RUNNER_IMAGE_DIGEST" \
+  --checks checks.json \
+  --output .governance/evidence-bundle.json
+```
+
+合并前校验证据绑定：
+
+```bash
+python governance/scripts/evidence_bundle.py verify \
+  --bundle .governance/evidence-bundle.json \
+  --source-sha "$SOURCE_SHA" \
+  --target-sha "$TARGET_SHA" \
+  --merge-sha "$MERGE_SHA" \
+  --policy-digest "$POLICY_DIGEST" \
+  --profile-digest "$PROFILE_DIGEST"
+```
+
+校验失败时不能继续合并。常见失败包括 source/target/merge SHA 不匹配、策略 digest 不匹配、profile digest 不匹配、检查结果缺失。
+
+---
+
 ## v1 阶段的实现状态
 
 > ✅ **三个 job 全部就绪**：`risk-scan`（`scan_risks.py`，硬门禁）、`mr-validate`（`validate_mr.py`，软门禁）已实现并通过自测；`secret-scan` 用官方 `gitleaks` 镜像扫本次 MR 范围（硬门禁）。install.sh 生成的 `governance/ci-snippet.yml` 直接调用它们，不再是占位 echo。
