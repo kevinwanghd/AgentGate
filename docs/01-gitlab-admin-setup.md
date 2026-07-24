@@ -120,12 +120,76 @@ include:
 
 ---
 
+## GitLab 11.4 自动 MR 前置检查
+
+如果 GitLab 是 Community Edition 11.4.0，自动创建 MR 和自动合并不要依赖 MR Pipeline。先打通 Bot + API v4，这是后续 Controller 的硬前提。
+
+### 1. 创建 AgentGate Bot 用户
+
+在 GitLab 管理后台创建一个专用用户，例如：
+
+```text
+agentgate-bot
+```
+
+要求：
+
+- 不用于人工日常开发；
+- 只加入需要自动 MR/合并的项目；
+- 权限按项目最小化授予；
+- Personal Access Token 只授予 `api` scope；
+- token 只保存在 AgentGate Controller 或受控运维环境，不写入业务仓库。
+
+### 2. 验证 API v4 可访问
+
+在能访问 GitLab 内网的机器上执行：
+
+```bash
+export AGENTGATE_GITLAB_URL="https://gitlab.example.com"
+export AGENTGATE_GITLAB_PROJECT_ID="group/project"
+export AGENTGATE_GITLAB_TOKEN="<agentgate-bot-pat>"
+
+python scripts/create_mr.py --gitlab-preflight
+```
+
+预期输出：
+
+```text
+[create-mr] GitLab API 预检通过: group/project
+```
+
+如果返回 `403`，先修复 nginx、反向代理、GitLab API 路由或 Bot 项目权限。这个问题不解决时，不要继续配置自动 MR/自动合并。
+
+### 3. 验证自动创建或更新 MR
+
+在测试分支上执行：
+
+```bash
+python scripts/create_mr.py \
+  --gitlab-api \
+  --target-branch master \
+  --why "验证 AgentGate Bot 可以自动创建 MR" \
+  --remove-source-branch
+```
+
+行为：
+
+- 如果当前源分支没有打开的 MR，会创建 MR；
+- 如果同一源分支到同一目标分支已有打开的 MR，会更新原 MR；
+- MR 描述由脚本生成；
+- `--remove-source-branch` 会设置“合并后删除源分支”。
+
+这一步只验证自动 MR 最小闭环，不代表已经完成风险自动合并。自动合并必须等可信 runner、GateResult、保护分支和审批策略到位后再开启。
+
+---
+
 ## 完成标志
 
 - [ ] governance 仓库已建，Visibility = Internal
 - [ ] `git push` 成功，网页能看到所有文件
 - [ ] 克隆地址和 raw URL 已记录
 - [ ] raw URL 用 curl 验证可访问（或确认改用克隆方式）
+- [ ] GitLab 11.4 项目已完成 Bot/API v4 预检（如需自动 MR）
 - [ ] 已把这两个地址 + `02-repo-onboarding.md` 发给各事业部技术负责人
 
 到此中心配置完成。剩下的全部是各仓库自己的事。
