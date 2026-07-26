@@ -63,7 +63,7 @@ git add . && git commit -m "chore: 接入 AgentGate 治理" && git push
 | **risk-scan** | 扫描 8 类内置风险模式 + 语言专属规则包(Go 为 10 条 warn 规则) + 自定义规则；warn 命中写 Job Summary | 硬编码 ID/密钥、SQL 拼接、认证绕过等 |
 | **secret-scan** | gitleaks 检测密钥泄露 | 私钥、API token、数据库连接串 |
 | **test-check** | 验证测试覆盖 | 改了生产代码但没测试痕迹 |
-| **mr-validate** | 校验 MR 描述格式；大 PR 写拆分建议到 Job Summary | 缺背景/变更内容/自测确认段落 |
+| **mr-validate** | 校验 MR 描述格式（**必须使用中文**）；大 PR 写拆分建议到 Job Summary | 缺背景/变更内容/自测确认段落，或未使用中文撰写 |
 | **go-test** | 对受影响 Go 包（含反向依赖一跳）跑 `go test`；非 Go 仓库自动跳过 | 直接/间接受影响包测试失败 |
 | **selftest** | 工具自检 | 确保脚本本身没 bug(仅 AgentGate 仓库) |
 
@@ -122,7 +122,7 @@ if (req.Headers["X-Internal"] == "true") return true;
 | 不知道哪些代码是 AI 写的 | 自动记录 AI-Usage,可统计、可审计 |
 | 改了代码没跑测试 | test-check 要求测试痕迹 |
 | 提交了密钥到仓库 | secret-scan 立刻拦截 |
-| MR 描述写得太随意 | mr-validate 强制写背景/变更/自测 |
+| MR 描述写得太随意 | mr-validate 强制写背景/变更/自测，**且必须使用中文** |
 
 ---
 
