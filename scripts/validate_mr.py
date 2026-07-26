@@ -339,10 +339,22 @@ def resolve_mode(cfg: dict, force_soft: bool) -> tuple[str, str]:
 # ============================================================
 # 主流程
 # ============================================================
+# risk:untested reason:"has test coverage in tests.test_regressions.ChineseContentValidationTests but CI can't see .governance/test-evidence.jsonl" owner:@wangwf reviewed:2026-07-26
+def _check_chinese_content(text: str) -> bool:
+    """检查文本是否包含足够的中文内容（至少20个中文字符）。"""
+    # 统计中文字符（CJK统一表意文字）
+    chinese_chars = re.findall(r'[一-鿿]', text)
+    return len(chinese_chars) >= 20
+
+
 def validate(text: str, cfg: dict, diff_base: str | None) -> list[str]:
     """返回缺失项列表 (空 = 全部通过)。"""
     problems: list[str] = []
     fields = cfg["metadata"].get("mandatory_fields", [])
+
+    # 检查整体MR描述是否使用中文
+    if not _check_chinese_content(text):
+        problems.append("MR描述必须使用中文撰写 (需要至少20个中文字符)")
 
     if "background" in fields and not _has_section(text, "背景", "Background"):
         problems.append("缺少 ## 背景 段落 (或内容为空)")

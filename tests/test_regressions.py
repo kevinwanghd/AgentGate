@@ -1345,6 +1345,39 @@ class MRDescriptionEncodingTests(unittest.TestCase):
             os.unlink(path)
 
 
+class ChineseContentValidationTests(unittest.TestCase):
+    def test_chinese_content_validation_passes_with_sufficient_chinese(self) -> None:
+        """MR描述包含足够中文字符时通过验证"""
+        text = "## 背景\n这是一个测试背景，包含足够的中文内容来通过验证。\n\n## 变更内容\n修改了核心逻辑\n"
+        self.assertTrue(validate_mr._check_chinese_content(text))
+
+    def test_chinese_content_validation_fails_with_insufficient_chinese(self) -> None:
+        """MR描述中文字符不足时验证失败"""
+        text = "## Background\nThis is an English description without enough Chinese characters.\n"
+        self.assertFalse(validate_mr._check_chinese_content(text))
+
+    def test_chinese_content_validation_fails_with_mixed_but_insufficient(self) -> None:
+        """MR描述混合语言但中文不足时验证失败"""
+        text = "## 背景\nSome English text with only a few 中文字符 here.\n"
+        self.assertFalse(validate_mr._check_chinese_content(text))
+
+    def test_validate_includes_chinese_requirement(self) -> None:
+        """验证函数应包含中文内容检查"""
+        cfg = {
+            "metadata": {"mandatory_fields": ["background", "changes"]},
+            "large_change": {"enforcement": "soft"},
+        }
+        # 英文描述应该失败
+        english_text = "## Background\nThis is English only.\n\n## Changes\nSome changes here.\n"
+        problems = validate_mr.validate(english_text, cfg, None)
+        self.assertTrue(any("中文" in p for p in problems), f"Expected Chinese requirement error, got: {problems}")
+
+        # 中文描述应该通过
+        chinese_text = "## 背景\n这是一个包含足够中文内容的测试描述，用于验证中文要求是否正常工作。\n\n## 变更内容\n修改了核心功能模块\n"
+        problems = validate_mr.validate(chinese_text, cfg, None)
+        self.assertFalse(any("中文" in p for p in problems), f"Chinese text should pass, but got: {problems}")
+
+
 class GateDecisionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.config = json.loads(json.dumps(gate_decision.DEFAULT_CONFIG))

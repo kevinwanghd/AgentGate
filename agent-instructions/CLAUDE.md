@@ -19,20 +19,22 @@
 
 ## 自动创建 MR（核心：MR 描述是开发产物，不是事后填表）
 
+**重要：所有MR描述必须使用中文撰写。**
+
 你完成任务时已经知道"为什么改、改了什么、怎么测的"——这些信息开发时就有了，不该让你再对着空模板回忆手填。提交完 commit 后，用一条命令自动生成并提交 MR：
 
 ```bash
-python governance/scripts/create_mr.py --why "<从用户原始需求提取的任务背景>"
+python governance/scripts/create_mr.py --why "<从用户原始需求提取的任务背景，用中文描述>"
 ```
 
-脚本自动拼装 MR 描述：
-- **## 背景** ← 你传的 `--why`（从用户需求提取，这是唯一需要你提供的）
-- **## 变更内容** ← 从 git diff 自动生成文件清单 + 增删行数
-- **## 自测确认** ← 从 `.governance/test-evidence.jsonl` 读测试结果
-- **## 风险与回滚** ← 自动判断大变更/敏感路径/schema
+脚本自动拼装 MR 描述（所有内容均为中文）：
+- **## 背景** ← 你传的 `--why`（从用户需求提取，用中文描述，这是唯一需要你提供的）
+- **## 变更内容** ← 从 git diff 自动生成文件清单 + 增删行数（中文描述）
+- **## 自测确认** ← 从 `.governance/test-evidence.jsonl` 读测试结果（中文描述）
+- **## 风险与回滚** ← 自动判断大变更/敏感路径/schema（中文描述）
 - **治理元数据**（AI-Usage / Tested 等）← 从 commit trailer 读，放折叠块
 
-提交前必须先用 `--dry-run` 预览描述，再把正文交给 `validate_mr.py` 校验。你**只需提供 `--why`**，其余全自动。
+提交前必须先用 `--dry-run` 预览描述，再把正文交给 `validate_mr.py` 校验。你**只需提供 `--why`（中文）**，其余全自动。
 
 ```bash
 python governance/scripts/create_mr.py \
