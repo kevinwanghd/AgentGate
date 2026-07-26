@@ -27,7 +27,7 @@ install.sh 会往你的业务仓库写入这些文件（这就是"安装"的全�
 
 | 写入路径 | 是什么 | 给谁用 |
 |---|---|---|
-| `.gitlab/merge_request_templates/default.md` | MR 模板 | GitLab 创建 MR 时自动加载 |
+| `.gitlab/merge_request_templates/default.md` | MR 模板 | 手动创建 MR 时在描述框选择模板（GitLab 11.4 不自动加载，需手动选择或在 URL 加 `?issuable_template=default`） |
 | `docs/governance/mr-spec.md` | MR 规范正文 | 人查阅 |
 | `docs/governance/risk-types.md` | 8 类风险注解目录 | AI agent 提交前对照 |
 | `governance.config.yml` | 门禁参数（软/硬、阈值） | CI 读取 |

@@ -702,9 +702,33 @@ def main() -> int:
 
     cli = detect_cli()
     if not cli:
-        sys.stderr.write(
-            "[create-mr] 未找到 glab 或 gh CLI。已生成描述如下, 请手动创建 MR:\n\n"
-        )
+        # risk:untested reason:"fallback path for manual MR creation - needs env setup and browser interaction to test" owner:@wangwf reviewed:2026-07-26
+        # 尝试拼出带模板参数的 GitLab 创建 MR 链接（解决 GitLab 11.4 不自动加载模板的问题）
+        gitlab_url = getattr(args, "gitlab_url", None) or os.environ.get("AGENTGATE_GITLAB_URL") or os.environ.get("CI_SERVER_URL")
+        project_id = getattr(args, "gitlab_project_id", None) or os.environ.get("AGENTGATE_GITLAB_PROJECT_ID") or os.environ.get("CI_PROJECT_ID")
+        source = getattr(args, "source_branch", None) or current_branch()
+
+        if gitlab_url and project_id:
+            encoded_project = urllib.parse.quote(str(project_id), safe="")
+            encoded_source = urllib.parse.quote(source, safe="")
+            encoded_target = urllib.parse.quote(args.target_branch, safe="")
+            mr_url = (
+                f"{gitlab_url.rstrip('/')}/{project_id}/-/merge_requests/new"
+                f"?merge_request[source_branch]={encoded_source}"
+                f"&merge_request[target_branch]={encoded_target}"
+                f"&issuable_template=default"
+            )
+            sys.stderr.write(
+                "[create-mr] 未找到 glab 或 gh CLI。\n"
+                f"  请在浏览器中打开以下链接创建 MR（已预填模板）:\n"
+                f"  {mr_url}\n\n"
+                "  MR 描述已生成如下，复制粘贴到描述框后替换模板内容:\n\n"
+            )
+        else:
+            sys.stderr.write(
+                "[create-mr] 未找到 glab 或 gh CLI。已生成描述如下, 请手动创建 MR:\n"
+                "  提示: 若使用 GitLab 11.4，可在创建 MR 的 URL 末尾加 ?issuable_template=default 来加载模板。\n\n"
+            )
         print(f"标题: {title}\n")
         print(description)
         return 1
