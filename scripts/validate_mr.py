@@ -135,6 +135,29 @@ def _find_ai_usage(text: str) -> tuple[bool, str | None]:
     return (False, None)
 
 
+# risk:untested reason:"has test coverage in tests.test_regressions.TestedTrailerValidationTests but CI can't see .governance/test-evidence.jsonl" owner:@wangwf reviewed:2026-07-26
+def find_tested_trailer_in_commits(diff_base: str | None) -> str | None:
+    """从本次 MR 的 commit trailer 里读 Tested: (pass/fail/none)。"""
+    base = diff_base or "HEAD~1"
+    try:
+        out = subprocess.run(
+            ["git", "log", f"{base}..HEAD", "--format=%B"],
+            check=True, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
+        ).stdout
+    except Exception:
+        return None
+    vals = [m.group(1).lower() for m in re.finditer(r'(?im)^Tested:\s*(\S+)', out)]
+    if not vals:
+        return None
+    # 失败信号优先，与 check_tested.py 的语义一致
+    if any(v.startswith("fail") for v in vals):
+        return "fail"
+    if any(v.startswith("pass") for v in vals):
+        return "pass"
+    return vals[0]
+
+
 def find_ai_usage_in_commits(diff_base: str | None) -> tuple[bool, str | None]:
     """
     从本次 MR 的 commit trailer 里读 AI-Usage (自动采集的权威来源)。
@@ -343,6 +366,19 @@ def validate(text: str, cfg: dict, diff_base: str | None) -> list[str]:
             )
     if "self_test" in fields and not _has_section(text, "自测确认", "Self Test", "自测"):
         problems.append("缺少 ## 自测确认 段落 (或内容为空)")
+
+    if "tested" in fields:
+        # Tested: trailer 由 git hook 自动写入; CI 场景从 commit 读取
+        trailer = find_tested_trailer_in_commits(diff_base)
+        if trailer is None:
+            problems.append(
+                "未检测到 Tested: trailer (需先用 record_test_run.py 跑测试, "
+                "或安装 hook: bash governance/scripts/install-hooks.sh)"
+            )
+        elif trailer.startswith("fail"):
+            problems.append(
+                "Tested: fail — 存在失败测试, 禁止合并 (修复后重跑 record_test_run.py)"
+            )
 
     # 大变更 → 要求风险与回滚
     is_large, reasons = detect_large_change(cfg, diff_base)

@@ -1008,6 +1008,68 @@ class AiUsageNotMandatoryTests(unittest.TestCase):
         self.assertTrue(ai_problems, "显式加回 ai_usage 后应当校验")
 
 
+class TestedTrailerValidationTests(unittest.TestCase):
+    """validate_mr 应能从 commit trailer 检查 Tested: 字段。"""
+
+    def _base_cfg(self) -> dict:
+        return {
+            "metadata": {
+                "enforcement": "hard",
+                "mandatory_fields": ["background", "changes", "self_test", "tested"],
+            },
+            "large_change": validate_mr.DEFAULT_CONFIG["large_change"],
+        }
+
+    def _mr_desc(self) -> str:
+        return (
+            "## 背景\n\n修复支付超时问题。\n\n"
+            "## 变更内容\n\n- 增加重试逻辑\n\n"
+            "## 自测确认\n\n- [x] 本地测试通过\n"
+        )
+
+    def test_passes_when_tested_trailer_is_pass(self) -> None:
+        """commit 里有 Tested: pass 时不应报错。"""
+        cfg = self._base_cfg()
+        with mock.patch.object(validate_mr, "find_tested_trailer_in_commits", return_value="pass"):
+            problems = validate_mr.validate(self._mr_desc(), cfg, None)
+        tested_problems = [p for p in problems if "Tested" in p]
+        self.assertEqual([], tested_problems, f"不应有 Tested 问题: {tested_problems}")
+
+    def test_fails_when_no_tested_trailer(self) -> None:
+        """没有 Tested: trailer 时应报缺失错误。"""
+        cfg = self._base_cfg()
+        with mock.patch.object(validate_mr, "find_tested_trailer_in_commits", return_value=None):
+            problems = validate_mr.validate(self._mr_desc(), cfg, None)
+        self.assertTrue(
+            any("Tested" in p and "trailer" in p for p in problems),
+            f"应报 Tested trailer 缺失, 实际: {problems}",
+        )
+
+    def test_fails_when_tested_trailer_is_fail(self) -> None:
+        """Tested: fail 应硬拒，不允许合并失败的测试。"""
+        cfg = self._base_cfg()
+        with mock.patch.object(validate_mr, "find_tested_trailer_in_commits", return_value="fail"):
+            problems = validate_mr.validate(self._mr_desc(), cfg, None)
+        self.assertTrue(
+            any("fail" in p.lower() and "Tested" in p for p in problems),
+            f"应报 Tested: fail 问题, 实际: {problems}",
+        )
+
+    def test_not_checked_when_not_in_mandatory_fields(self) -> None:
+        """tested 不在 mandatory_fields 时不应检查。"""
+        cfg = {
+            "metadata": {
+                "enforcement": "hard",
+                "mandatory_fields": ["background", "changes", "self_test"],
+            },
+            "large_change": validate_mr.DEFAULT_CONFIG["large_change"],
+        }
+        with mock.patch.object(validate_mr, "find_tested_trailer_in_commits", return_value=None):
+            problems = validate_mr.validate(self._mr_desc(), cfg, None)
+        tested_problems = [p for p in problems if "Tested" in p]
+        self.assertEqual([], tested_problems, "mandatory_fields 无 tested 时不应检查")
+
+
 class WarnJobSummaryTests(unittest.TestCase):
     """warn 命中写入 GITHUB_STEP_SUMMARY, block 为零时不写失败表格。"""
 
