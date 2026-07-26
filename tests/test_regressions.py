@@ -1419,8 +1419,9 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
         self.assertIn("governance:auto-merge:", template)
         self.assertIn("GOVERNANCE_MERGE_BOT_TOKEN", template)
         self.assertIn("CI_MERGE_REQUEST_SOURCE_PROJECT_ID", template)
-        self.assertIn('--data-urlencode "sha=${SHA}"', template)
-        self.assertIn("merge_when_pipeline_succeeds=true", template)
+        # merge bot uses Python urllib, not curl --data-urlencode
+        self.assertIn('"merge_when_pipeline_succeeds": "true"', template)
+        self.assertIn("CI_MERGE_REQUEST_SOURCE_BRANCH_SHA", template)
 
     def test_installer_ships_gate_decision_and_gitlab_auto_merge_jobs(self) -> None:
         installer = (ROOT / "install.sh").read_text(encoding="utf-8")
