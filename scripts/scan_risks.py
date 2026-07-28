@@ -77,7 +77,7 @@ ANNOTATION_LOOKBACK = 5
 SCAN_EXTENSIONS = {
     ".cs", ".js", ".ts", ".jsx", ".tsx", ".java", ".go",
     ".py", ".rb", ".php", ".cpp", ".cc", ".c", ".h", ".hpp",
-    ".kt", ".rs", ".scala", ".swift",
+    ".kt", ".rs", ".scala", ".swift", ".dart",
 }
 
 # 测试文件判定 (与 check_tested.py 保持一致)
