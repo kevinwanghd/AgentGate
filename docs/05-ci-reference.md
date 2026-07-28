@@ -14,12 +14,53 @@
 | `governance:secret-scan` | gitleaks 密钥扫描 | **硬阻断** | `false` |
 | `governance:mr-validate` | 校验 MR 描述必填段落 + 读 AI-Usage trailer | **软警告** | `false`* |
 | `governance:test-check` | 改动的生产代码是否做过测试（读 Tested trailer） | **软警告** / 失败测试硬拦 | `false`* |
+| `governance:go-test` | 受影响 Go 包跑 `go test`；**无 go.mod 自动 skip** | **硬阻断** | `false` |
+| `governance:flutter-test` | 递归查找 `pubspec.yaml`，跑 `flutter test`；**无标记文件自动 skip** | **硬阻断** | `false` |
+| `governance:python-test` | 递归查找 `requirements.txt/pyproject.toml/setup.py`，跑 `pytest`；**无标记文件自动 skip** | **硬阻断** | `false` |
+| `governance:node-test` | 递归查找 `package.json`，跑 `npm test`；**无标记文件自动 skip** | **硬阻断** | `false` |
+| `governance:java-test` | 递归查找 `pom.xml/build.gradle`，跑 `mvn/gradle test`；**无标记文件自动 skip** | **硬阻断** | `false` |
+| `governance:dotnet-test` | 递归查找 `*.sln/*.csproj`，跑 `dotnet test`；**无标记文件自动 skip** | **硬阻断** | `false` |
+| `governance:rust-test` | 查找 `Cargo.toml`，跑 `cargo test`；**无标记文件自动 skip** | **硬阻断** | `false` |
+| `governance:gate-decision` | 汇总以上所有检查结果，生成 GateResult；决定是否可以自动合并 | **硬阻断** | `false` |
+| `governance:auto-merge` | GateResult=AUTO_MERGE 时自动合并 MR | — | — |
 | `governance:expired-report` | 过期注解周报（定时/手动） | 不阻断 | `true` |
 
 *`mr-validate` / `test-check` 设 `allow_failure: false`，但软模式期内脚本自身返回 0（仅警告），`soft_deadline` 后才返回非 0 真正阻断。`test-check` 的例外：只要测试记录里有失败用例（`Tested: fail`），任何时候都返回 1 硬拦。
 
 `allow_failure: false` = 这个 job 红了，MR 合不进去（前提：管理员开了 "Pipelines must succeed"）。
 `allow_failure: true` = 这个 job 红了只显示黄色警告，不阻断合并。
+
+### 语言特定 job 的 skip 机制
+
+所有语言测试 job 共用同一套逻辑：
+
+1. 用 `find -maxdepth 3` 递归查找标记文件
+2. 找不到 → 写 `{"status": "skip"}` → exit 0
+3. 找到 → 在每个目录里运行测试 → 写 `{"status": "pass/fail"}`
+4. `gate-decision` 将 `skip` 和 `missing`（job 未触发）均视为通过，`fail` 才阻断
+
+**Monorepo 支持**：同一仓库存在多个语言子目录时，对应 job 会逐一进入每个目录运行测试，任意子目录失败则整个 job 失败。
+
+```
+仓库根目录
+├── backend/requirements.txt   ← python-test 在此跑 pytest
+├── frontend/package.json      ← node-test 在此跑 npm test
+└── mobile/pubspec.yaml        ← flutter-test 在此跑 flutter test
+```
+
+**各语言标记文件一览**：
+
+| Job | 标记文件 | 测试命令 |
+|---|---|---|
+| go-test | `go.mod` | `go test ./...`（受影响包） |
+| flutter-test | `pubspec.yaml` | `flutter test` |
+| python-test | `requirements.txt` / `pyproject.toml` / `setup.py` | `pytest` |
+| node-test | `package.json` | `npm test` |
+| java-test | `pom.xml` / `build.gradle` / `build.gradle.kts` | `mvn test` / `gradle test` |
+| dotnet-test | `*.sln` / `*.csproj` | `dotnet test`（优先 .sln） |
+| rust-test | `Cargo.toml` | `cargo test`（根目录优先含 workspace） |
+
+每个 job 也支持 `GOVERNANCE_SKIP_*=true` 环境变量强制跳过（Bazel 等特殊构建场景）。
 
 ---
 
@@ -310,6 +351,42 @@ python governance/scripts/risk_merge_decision.py \
 
 ---
 
+## gate-decision 与自动合并
+
+`gate-decision` 读取所有 check job 的结果文件，生成 `gate-result.json`，输出三种结论：
+
+| GateResult | merge_action | 含义 |
+|---|---|---|
+| `PASS` | `AUTO_MERGE` | 所有检查通过，Merge Bot 自动合并 |
+| `WAITING_APPROVAL` | `WAIT` | 检查通过但触碰了受保护路径（CI、agent 指令等），等待人工 approve |
+| `FAIL` | `BLOCK` | 有检查失败，阻断合并 |
+
+**受保护路径**（改动这些文件时自动升为 CRITICAL，需要人工审批）：
+
+```
+governance.config.yml   .github/workflows/**   ci/**
+scripts/gate_decision.py   scripts/scan_risks.py   CODEOWNERS
+agent-instructions/**   ...
+```
+
+**`auto-merge` job 被 skip 是正常现象**：当 `merge_action != AUTO_MERGE` 时（等待审批或有失败），`auto-merge` 会显示 skipped，不是错误。
+
+**可配置项**（在 `governance.config.yml` 调整）：
+
+```yaml
+auto_merge:
+  critical_approvals: 1       # 受保护路径变更需要几个 approve，默认 1
+  required_checks:            # 哪些 job 必须通过
+    - risk-scan
+    - go-test
+    - ...
+  language_checks:            # 语言特定 job，missing/skip 均视为通过
+    - go-test
+    - flutter-test            # 非 Flutter 仓库不触发此 job 也不阻断
+```
+
+---
+
 ## 排查速查表
 
 | 现象 | 检查 |
@@ -318,6 +395,9 @@ python governance/scripts/risk_merge_decision.py \
 | secret-scan 报 `no commits found` 或漏扫 | 多半是 `GIT_DEPTH` 太浅；确认 job 里设了 `GIT_DEPTH: 0` |
 | risk-scan 报 `ModuleNotFoundError: yaml` | CI 镜像缺 pyyaml；脚本会退化用内置默认配置，但建议 `pip install pyyaml` |
 | risk-scan 该拦没拦 | 确认 diff-base 正确（看的是本次变更）；本地用 `selftest.sh` 验证脚本本身 |
+| go-test 在非 Go 仓库报错 | 正常情况应自动 skip；检查 `ci-snippet.yml` 里是否有 `if [ ! -f go.mod ]` 判断 |
+| gate-decision 报 `approval_missing` | 本次 MR 改了受保护路径，需要人工 approve；审批人数见 `critical_approvals` 配置 |
+| auto-merge 显示 skipped | 正常，说明 `merge_action` 不是 `AUTO_MERGE`；查看 gate-decision 日志确认原因 |
 | MR 合不了但 CI 全绿 | 管理员的分支保护 / approval 规则，不是 governance 问题 |
 | 改了 governance.config.yml 被要求 approve | 正常，CODEOWNERS 锁定，需治理负责人审批 |
 | 历史代码报风险但我没碰 | 不应发生，risk-scan 只扫 diff；若发生检查 diff-base 配置 |

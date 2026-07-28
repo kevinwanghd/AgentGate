@@ -8,13 +8,30 @@ auto_merge:
   delete_branch_after_merge: true
   require_up_to_date_branch: true
   require_all_required_checks: true
+  critical_approvals: 1       # critical 风险路径变更时需要的人工审批数
   required_checks:
     - risk-scan
     - secret-scan
     - mr-validate
     - test-check
     - go-test
+    - flutter-test
+    - python-test
+    - node-test
+    - java-test
+    - dotnet-test
+    - rust-test
     - selftest
+  # 语言特定 job：这些 check 未触发（missing）或返回 skip 时均视为通过
+  # 扩展其他语言时在此追加，并在 CI 配置里加对应 job（检测各自的标记文件）
+  language_checks:
+    - go-test
+    - flutter-test
+    - python-test
+    - node-test
+    - java-test
+    - dotnet-test
+    - rust-test
   # 保护分支: 只能通过 MR 合并，禁止直接推送
   protected_branches:
     - master
