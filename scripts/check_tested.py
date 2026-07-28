@@ -79,7 +79,7 @@ DEFAULT_CONFIG = {
 PROD_EXTENSIONS = {
     ".cs", ".js", ".ts", ".jsx", ".tsx", ".java", ".go",
     ".py", ".rb", ".php", ".cpp", ".cc", ".c", ".h", ".hpp",
-    ".kt", ".rs", ".scala", ".swift",
+    ".kt", ".rs", ".scala", ".swift", ".dart",
 }
 
 # 测试文件判定: 路径或文件名带这些标志
