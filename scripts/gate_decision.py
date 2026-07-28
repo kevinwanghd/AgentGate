@@ -29,6 +29,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "require_up_to_date_branch": True,
         "require_all_required_checks": True,
         "required_checks": [],
+        # critical 风险时需要的人工审批数（默认 1）
+        "critical_approvals": 1,
         # 保护分支: 只能通过 MR 合并，禁止直接推送
         "protected_branches": [
             "master",
@@ -102,7 +104,7 @@ def build_gate_result(
     if failed:
         reasons.append("required_check_failed")
 
-    required_approvals = 2 if risk_level == "critical" else 0
+    required_approvals = int(auto.get("critical_approvals", 1)) if risk_level == "critical" else 0
     if risk_level == "critical":
         reasons.append("critical_risk_requires_human_approval")
     if valid_approvals < required_approvals:
