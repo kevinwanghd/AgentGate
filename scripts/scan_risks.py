@@ -74,6 +74,7 @@ MIN_REASON_LEN = 10
 ANNOTATION_LOOKBACK = 5
 
 # 只扫描这些扩展名的源码文件 (其余跳过, 避免误报二进制/数据文件)
+# risk:untested reason:"纯数据常量，无分支逻辑，集成测试已覆盖" owner:@agentgate reviewed:2026-07-28
 SCAN_EXTENSIONS = {
     ".cs", ".js", ".ts", ".jsx", ".tsx", ".java", ".go",
     ".py", ".rb", ".php", ".cpp", ".cc", ".c", ".h", ".hpp",
