@@ -47,10 +47,42 @@ git add . && git commit -m "chore: 接入 AgentGate 治理" && git push
 - `--agents claude` — 只装 Claude(根目录只有 `CLAUDE.md`)
 - `--agents none` — 不装任何 AI 指令文件
 
-### GitHub 项目
+### GitHub 项目(中央自动更新)
 
-安装步骤同上,但需手动创建 GitHub Actions workflow。  
-详见 [INSTALL.md 场景 B](INSTALL.md#场景-bgithub-项目)。
+GitHub 仓库推荐使用 thin 模式: 业务仓库只保留一个很薄的 workflow 入口,
+真正的门禁脚本从 AgentGate 中央仓库读取。
+
+```bash
+bash ~/agentgate/install.sh . \
+  --platform github \
+  --mode thin \
+  --agentgate-repo kevinwanghd/AgentGate \
+  --agentgate-ref github-stable \
+  --agents claude
+```
+
+安装后业务仓库会调用:
+
+```yaml
+uses: kevinwanghd/AgentGate/.github/workflows/agentgate.yml@github-stable
+```
+
+以后只要推进 AgentGate 的 `github-stable` 分支, 所有引用该分支的 GitHub 仓库
+会在下一次 PR 检查时自动使用新版门禁。
+
+### GitLab 项目发布线
+
+GitLab 不跟随 `github-stable`。GitLab 仓库继续使用本地 pinned 安装, 或由平台管理员
+单独引用 `gitlab-stable` 发布线:
+
+```yaml
+include:
+  - project: 'platform/AgentGate'
+    ref: gitlab-stable
+    file: '/gitlab/ci-snippet.yml'
+```
+
+因此更新 GitHub 自动更新线不会影响 GitLab 上的其他仓库。
 
 ---
 

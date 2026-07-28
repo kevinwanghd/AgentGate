@@ -158,6 +158,18 @@ class EvidenceBindingTests(unittest.TestCase):
         evidence = [{"cmd": "pytest", "failed": 0, "git_state": "same"}]
         self.assertEqual(evidence, check_tested.filter_evidence_for_state(evidence, "same"))
 
+    def test_tested_trailer_can_be_disabled_as_release_evidence(self) -> None:
+        cfg = json.loads(json.dumps(check_tested.DEFAULT_CONFIG))
+        cfg["testing"]["enforcement"] = "hard"
+        cfg["testing"]["accept_tested_trailer"] = False
+        diff = (
+            "+++ b/src/app.py\n"
+            "@@ -0,0 +1 @@\n"
+            "+print('changed')\n"
+        )
+        _, violations = check_tested.check(diff, [], cfg, trailer="pass")
+        self.assertEqual(["src/app.py"], [v["file"] for v in violations])
+
     def test_create_mr_ignores_stale_evidence(self) -> None:
         with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as f:
             f.write(json.dumps({
@@ -1501,18 +1513,74 @@ class GateDecisionTests(unittest.TestCase):
         result = gate_decision.build_gate_result(
             source_sha="head", target_sha="base", policy_sha="policy",
             changed_paths=["src/orders/service.py"],
-            checks={"lint": "pass", "unit": "pass"},
+            checks={
+                "risk-scan": "pass",
+                "secret-scan": "pass",
+                "mr-validate": "pass",
+                "test-check": "pass",
+            },
             config=self.config,
         )
         self.assertEqual(result["result"], "PASS")
         self.assertEqual(result["merge_action"], "AUTO_MERGE")
         self.assertEqual(result["risk_level"], "medium")
 
+    def test_low_risk_uses_fast_ci_evidence_only(self) -> None:
+        cfg = json.loads(json.dumps(gate_decision.DEFAULT_CONFIG))
+        cfg["auto_merge"]["required_checks_by_risk"] = {
+            "low": ["risk-scan", "secret-scan", "mr-validate"],
+            "medium": ["risk-scan", "secret-scan", "mr-validate", "test-check"],
+        }
+        result = gate_decision.build_gate_result(
+            source_sha="head", target_sha="base", policy_sha="policy",
+            changed_paths=["docs/usage.md"],
+            checks={
+                "risk-scan": "pass",
+                "secret-scan": "pass",
+                "mr-validate": "pass",
+            },
+            config=cfg,
+        )
+        self.assertEqual(result["risk_level"], "low")
+        self.assertEqual(result["result"], "PASS")
+        self.assertEqual(result["merge_action"], "AUTO_MERGE")
+        self.assertEqual(
+            ["risk-scan", "secret-scan", "mr-validate"],
+            [item["name"] for item in result["required_checks"]],
+        )
+
+    def test_medium_risk_cannot_be_approved_by_tested_trailer_alone(self) -> None:
+        cfg = json.loads(json.dumps(gate_decision.DEFAULT_CONFIG))
+        cfg["auto_merge"]["required_checks_by_risk"] = {
+            "medium": ["risk-scan", "secret-scan", "mr-validate", "test-check", "unit-test"],
+        }
+        result = gate_decision.build_gate_result(
+            source_sha="head", target_sha="base", policy_sha="policy",
+            changed_paths=["src/orders/service.py"],
+            checks={
+                "risk-scan": "pass",
+                "secret-scan": "pass",
+                "mr-validate": "pass",
+                "test-check": "pass",
+                # 没有 unit-test 这份 CI 证据, commit message 里的 Tested: pass 不会参与 GateResult。
+            },
+            config=cfg,
+        )
+        self.assertEqual(result["risk_level"], "medium")
+        self.assertEqual(result["result"], "FAIL")
+        self.assertIn("required_check_missing", result["blocking_reasons"])
+
     def test_protected_path_requires_human_approval(self) -> None:
         result = gate_decision.build_gate_result(
             source_sha="head", target_sha="base", policy_sha="policy",
             changed_paths=["scripts/scan_risks.py"],
-            checks={"lint": "pass", "unit": "pass"},
+            checks={
+                "risk-scan": "pass",
+                "secret-scan": "pass",
+                "mr-validate": "pass",
+                "test-check": "pass",
+                "selftest": "pass",
+            },
             config=self.config,
         )
         self.assertEqual(result["risk_level"], "critical")
@@ -1520,11 +1588,39 @@ class GateDecisionTests(unittest.TestCase):
         self.assertEqual(result["merge_action"], "WAIT")
         self.assertIn("protected_paths_changed", result["blocking_reasons"])
 
+    def test_high_risk_uses_stronger_ci_plan_but_can_still_auto_merge(self) -> None:
+        cfg = json.loads(json.dumps(gate_decision.DEFAULT_CONFIG))
+        cfg["auto_merge"]["risk_paths"]["high"] = ["scripts/**"]
+        cfg["auto_merge"]["required_checks_by_risk"] = {
+            "high": ["risk-scan", "secret-scan", "mr-validate", "test-check", "python-test", "selftest"],
+        }
+        result = gate_decision.build_gate_result(
+            source_sha="head", target_sha="base", policy_sha="policy",
+            changed_paths=["scripts/report_expired.py"],
+            checks={
+                "risk-scan": "pass",
+                "secret-scan": "pass",
+                "mr-validate": "pass",
+                "test-check": "pass",
+                "python-test": "pass",
+                "selftest": "pass",
+            },
+            config=cfg,
+        )
+        self.assertEqual(result["risk_level"], "high")
+        self.assertEqual(result["result"], "PASS")
+        self.assertEqual(result["merge_action"], "AUTO_MERGE")
+
     def test_protected_branch_blocks_direct_push(self) -> None:
         result = gate_decision.build_gate_result(
             source_sha="head", target_sha="base", policy_sha="policy",
             changed_paths=["src/service.py"],
-            checks={"lint": "pass", "unit": "pass"},
+            checks={
+                "risk-scan": "pass",
+                "secret-scan": "pass",
+                "mr-validate": "pass",
+                "test-check": "pass",
+            },
             config=self.config,
             target_branch="master",
         )
@@ -1536,7 +1632,12 @@ class GateDecisionTests(unittest.TestCase):
         result = gate_decision.build_gate_result(
             source_sha="head", target_sha="base", policy_sha="policy",
             changed_paths=["src/service.py"],
-            checks={"lint": "pass", "unit": "pass"},
+            checks={
+                "risk-scan": "pass",
+                "secret-scan": "pass",
+                "mr-validate": "pass",
+                "test-check": "pass",
+            },
             config=self.config,
             target_branch="feature/my-feature",
         )
@@ -1547,6 +1648,7 @@ class GateDecisionTests(unittest.TestCase):
         """go-test 返回 skip 时（无 go.mod）应视为通过，不阻断合并"""
         cfg = json.loads(json.dumps(gate_decision.DEFAULT_CONFIG))
         cfg["auto_merge"]["required_checks"] = ["risk-scan", "go-test"]
+        cfg["auto_merge"]["required_checks_by_risk"] = {}
         cfg["auto_merge"]["language_checks"] = ["go-test"]
         result = gate_decision.build_gate_result(
             source_sha="head", target_sha="base", policy_sha="policy",
@@ -1561,6 +1663,7 @@ class GateDecisionTests(unittest.TestCase):
         """go-test 结果文件不存在（job 未触发）时，language_checks 中视为 skip，不阻断合并"""
         cfg = json.loads(json.dumps(gate_decision.DEFAULT_CONFIG))
         cfg["auto_merge"]["required_checks"] = ["risk-scan", "go-test"]
+        cfg["auto_merge"]["required_checks_by_risk"] = {}
         cfg["auto_merge"]["language_checks"] = ["go-test"]
         result = gate_decision.build_gate_result(
             source_sha="head", target_sha="base", policy_sha="policy",
@@ -1575,6 +1678,7 @@ class GateDecisionTests(unittest.TestCase):
         """go-test 返回 fail 时（测试真的挂了）必须阻断合并"""
         cfg = json.loads(json.dumps(gate_decision.DEFAULT_CONFIG))
         cfg["auto_merge"]["required_checks"] = ["risk-scan", "go-test"]
+        cfg["auto_merge"]["required_checks_by_risk"] = {}
         cfg["auto_merge"]["language_checks"] = ["go-test"]
         result = gate_decision.build_gate_result(
             source_sha="head", target_sha="base", policy_sha="policy",
@@ -1589,6 +1693,7 @@ class GateDecisionTests(unittest.TestCase):
         """非 language_checks 的 job 结果文件缺失时，仍然阻断合并"""
         cfg = json.loads(json.dumps(gate_decision.DEFAULT_CONFIG))
         cfg["auto_merge"]["required_checks"] = ["risk-scan", "mr-validate"]
+        cfg["auto_merge"]["required_checks_by_risk"] = {}
         cfg["auto_merge"]["language_checks"] = ["go-test"]
         result = gate_decision.build_gate_result(
             source_sha="head", target_sha="base", policy_sha="policy",
@@ -1603,6 +1708,7 @@ class GateDecisionTests(unittest.TestCase):
         """未来加入 flutter-test 时，非 Flutter 仓库（缺失结果文件）不阻断合并"""
         cfg = json.loads(json.dumps(gate_decision.DEFAULT_CONFIG))
         cfg["auto_merge"]["required_checks"] = ["risk-scan", "go-test", "flutter-test"]
+        cfg["auto_merge"]["required_checks_by_risk"] = {}
         cfg["auto_merge"]["language_checks"] = ["go-test", "flutter-test"]
         result = gate_decision.build_gate_result(
             source_sha="head", target_sha="base", policy_sha="policy",
@@ -1690,6 +1796,29 @@ class GateDecisionTests(unittest.TestCase):
                 ]):
                     self.assertEqual(gate_decision.main(), 0)
             self.assertEqual(json.loads(output.read_text(encoding="utf-8"))["result"], "PASS")
+
+    def test_cli_rejects_evidence_bound_to_other_source_sha(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = Path(directory) / "evidence.json"
+            output = Path(directory) / "gate.json"
+            evidence.write_text(
+                json.dumps({
+                    "schema_version": "agentgate.io/ci-evidence/v1",
+                    "source_sha": "other-head",
+                    "target_sha": "base",
+                    "policy_sha": "policy",
+                    "checks": {"risk-scan": "pass"},
+                }),
+                encoding="utf-8",
+            )
+            with mock.patch.object(gate_decision, "_changed_paths", return_value=[]):
+                with mock.patch.object(sys, "argv", [
+                    "gate_decision.py", "--evidence", str(evidence),
+                    "--source-sha", "head", "--target-sha", "base",
+                    "--policy-sha", "policy", "--diff-base", "base",
+                    "--output", str(output),
+                ]):
+                    self.assertEqual(gate_decision.main(), 2)
 
 
 class GitLabAutoMergeTemplateTests(unittest.TestCase):
