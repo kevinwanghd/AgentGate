@@ -33,7 +33,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # 适用于只在特定语言仓库触发的 job（如 go-test、flutter-test、dotnet-test）。
         # job 自身负责检测语言标记文件（go.mod/pubspec.yaml/.csproj 等）并在不适用时
         # 写入 {"status": "skip"}；若 job 根本未触发，missing 也视为 skip。
-        "language_checks": ["go-test"],
+        "language_checks": [
+            "go-test", "flutter-test", "python-test",
+            "node-test", "java-test", "dotnet-test", "rust-test",
+        ],
         # critical 风险时需要的人工审批数（默认 1）
         "critical_approvals": 1,
         # 保护分支: 只能通过 MR 合并，禁止直接推送

@@ -209,7 +209,166 @@ governance:go-test:
     expire_in: 1 day
   allow_failure: false
 
-# ── 7. GateResult 决策: 汇总 CI 独立证据, 不直接合并 ─────────────────────────
+# ── 7a. Flutter/Dart 测试: 无 pubspec.yaml 时自动跳过 ────────────────────────
+governance:flutter-test:
+  stage: test
+  image: ghcr.io/cirruslabs/flutter:stable
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $GOVERNANCE_SKIP_FLUTTER_TEST != "true"
+    - if: $CI_COMMIT_BRANCH && $GOVERNANCE_SKIP_FLUTTER_TEST != "true"
+  script:
+    - |
+      if [ ! -f pubspec.yaml ]; then
+        echo "[flutter-test] 未找到 pubspec.yaml, 跳过 Flutter 测试。"
+        echo "{\"status\": \"skip\"}" > governance-flutter-test-result.json
+        exit 0
+      fi
+      flutter pub get
+      flutter test
+      EXIT_CODE=$?
+      echo "{\"status\": \"$([ $EXIT_CODE -eq 0 ] && echo 'pass' || echo 'fail')\"}" \
+        > governance-flutter-test-result.json
+      exit $EXIT_CODE
+  artifacts:
+    paths:
+      - governance-flutter-test-result.json
+    expire_in: 1 day
+  allow_failure: false
+
+# ── 7b. Python 测试: 无 requirements.txt / pyproject.toml / setup.py 时跳过 ──
+governance:python-test:
+  stage: test
+  image: python:3.11
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $GOVERNANCE_SKIP_PYTHON_TEST != "true"
+    - if: $CI_COMMIT_BRANCH && $GOVERNANCE_SKIP_PYTHON_TEST != "true"
+  script:
+    - |
+      if [ ! -f requirements.txt ] && [ ! -f pyproject.toml ] && [ ! -f setup.py ]; then
+        echo "[python-test] 未找到 Python 项目标记文件, 跳过 Python 测试。"
+        echo "{\"status\": \"skip\"}" > governance-python-test-result.json
+        exit 0
+      fi
+      pip install -q pytest
+      [ -f requirements.txt ] && pip install -q -r requirements.txt
+      [ -f pyproject.toml ] && pip install -q -e ".[test]" 2>/dev/null || true
+      python -m pytest --tb=short -q
+      EXIT_CODE=$?
+      echo "{\"status\": \"$([ $EXIT_CODE -eq 0 ] && echo 'pass' || echo 'fail')\"}" \
+        > governance-python-test-result.json
+      exit $EXIT_CODE
+  artifacts:
+    paths:
+      - governance-python-test-result.json
+    expire_in: 1 day
+  allow_failure: false
+
+# ── 7c. Node.js/TypeScript 测试: 无 package.json 时跳过 ──────────────────────
+governance:node-test:
+  stage: test
+  image: node:20-slim
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $GOVERNANCE_SKIP_NODE_TEST != "true"
+    - if: $CI_COMMIT_BRANCH && $GOVERNANCE_SKIP_NODE_TEST != "true"
+  script:
+    - |
+      if [ ! -f package.json ]; then
+        echo "[node-test] 未找到 package.json, 跳过 Node.js 测试。"
+        echo "{\"status\": \"skip\"}" > governance-node-test-result.json
+        exit 0
+      fi
+      npm ci --prefer-offline --no-audit 2>/dev/null || npm install --no-audit
+      npm test
+      EXIT_CODE=$?
+      echo "{\"status\": \"$([ $EXIT_CODE -eq 0 ] && echo 'pass' || echo 'fail')\"}" \
+        > governance-node-test-result.json
+      exit $EXIT_CODE
+  artifacts:
+    paths:
+      - governance-node-test-result.json
+    expire_in: 1 day
+  allow_failure: false
+
+# ── 7d. Java 测试: 无 pom.xml / build.gradle 时跳过 ─────────────────────────
+governance:java-test:
+  stage: test
+  image: maven:3.9-eclipse-temurin-21
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $GOVERNANCE_SKIP_JAVA_TEST != "true"
+    - if: $CI_COMMIT_BRANCH && $GOVERNANCE_SKIP_JAVA_TEST != "true"
+  script:
+    - |
+      if [ ! -f pom.xml ] && [ ! -f build.gradle ] && [ ! -f build.gradle.kts ]; then
+        echo "[java-test] 未找到 pom.xml / build.gradle, 跳过 Java 测试。"
+        echo "{\"status\": \"skip\"}" > governance-java-test-result.json
+        exit 0
+      fi
+      if [ -f pom.xml ]; then
+        mvn -q test -Dsurefire.failIfNoSpecifiedTests=false
+      else
+        ./gradlew test --console=plain -q 2>/dev/null || gradle test --console=plain -q
+      fi
+      EXIT_CODE=$?
+      echo "{\"status\": \"$([ $EXIT_CODE -eq 0 ] && echo 'pass' || echo 'fail')\"}" \
+        > governance-java-test-result.json
+      exit $EXIT_CODE
+  artifacts:
+    paths:
+      - governance-java-test-result.json
+    expire_in: 1 day
+  allow_failure: false
+
+# ── 7e. .NET/C# 测试: 无 .sln / .csproj 时跳过 ──────────────────────────────
+governance:dotnet-test:
+  stage: test
+  image: mcr.microsoft.com/dotnet/sdk:8.0
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $GOVERNANCE_SKIP_DOTNET_TEST != "true"
+    - if: $CI_COMMIT_BRANCH && $GOVERNANCE_SKIP_DOTNET_TEST != "true"
+  script:
+    - |
+      if ! find . -maxdepth 3 -name "*.sln" -o -name "*.csproj" 2>/dev/null | grep -q .; then
+        echo "[dotnet-test] 未找到 .sln / .csproj, 跳过 .NET 测试。"
+        echo "{\"status\": \"skip\"}" > governance-dotnet-test-result.json
+        exit 0
+      fi
+      dotnet test --no-build --verbosity quiet 2>/dev/null || dotnet test --verbosity quiet
+      EXIT_CODE=$?
+      echo "{\"status\": \"$([ $EXIT_CODE -eq 0 ] && echo 'pass' || echo 'fail')\"}" \
+        > governance-dotnet-test-result.json
+      exit $EXIT_CODE
+  artifacts:
+    paths:
+      - governance-dotnet-test-result.json
+    expire_in: 1 day
+  allow_failure: false
+
+# ── 7f. Rust 测试: 无 Cargo.toml 时跳过 ─────────────────────────────────────
+governance:rust-test:
+  stage: test
+  image: rust:1.78-slim
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $GOVERNANCE_SKIP_RUST_TEST != "true"
+    - if: $CI_COMMIT_BRANCH && $GOVERNANCE_SKIP_RUST_TEST != "true"
+  script:
+    - |
+      if [ ! -f Cargo.toml ]; then
+        echo "[rust-test] 未找到 Cargo.toml, 跳过 Rust 测试。"
+        echo "{\"status\": \"skip\"}" > governance-rust-test-result.json
+        exit 0
+      fi
+      cargo test --quiet 2>&1
+      EXIT_CODE=$?
+      echo "{\"status\": \"$([ $EXIT_CODE -eq 0 ] && echo 'pass' || echo 'fail')\"}" \
+        > governance-rust-test-result.json
+      exit $EXIT_CODE
+  artifacts:
+    paths:
+      - governance-rust-test-result.json
+    expire_in: 1 day
+  allow_failure: false
+
+# ── 8. GateResult 决策: 汇总 CI 独立证据, 不直接合并 ─────────────────────────
 governance:gate-decision:
   stage: test
   image: python:3.11
@@ -223,6 +382,12 @@ governance:gate-decision:
     - governance:mr-validate
     - governance:test-check
     - governance:go-test
+    - governance:flutter-test
+    - governance:python-test
+    - governance:node-test
+    - governance:java-test
+    - governance:dotnet-test
+    - governance:rust-test
   before_script:
     - pip install -q pyyaml==6.0.3
   script:

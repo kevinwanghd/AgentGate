@@ -143,6 +143,127 @@ jobs:
             --diff-base "origin/$BASE_REF" \
             --timeout "${GOVERNANCE_GO_TEST_TIMEOUT:-120}"
 
+  # Flutter/Dart 测试: 无 pubspec.yaml 时自动跳过
+  flutter-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: run flutter tests
+        env:
+          GOVERNANCE_SKIP_FLUTTER_TEST: ${{ vars.GOVERNANCE_SKIP_FLUTTER_TEST }}
+        run: |
+          if [ "${GOVERNANCE_SKIP_FLUTTER_TEST}" = "true" ]; then exit 0; fi
+          if [ ! -f pubspec.yaml ]; then
+            echo "[flutter-test] 未找到 pubspec.yaml, 跳过。"
+            exit 0
+          fi
+          flutter pub get && flutter test
+
+  # Python 测试: 无 requirements.txt / pyproject.toml / setup.py 时跳过
+  python-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: run python tests
+        env:
+          GOVERNANCE_SKIP_PYTHON_TEST: ${{ vars.GOVERNANCE_SKIP_PYTHON_TEST }}
+        run: |
+          if [ "${GOVERNANCE_SKIP_PYTHON_TEST}" = "true" ]; then exit 0; fi
+          if [ ! -f requirements.txt ] && [ ! -f pyproject.toml ] && [ ! -f setup.py ]; then
+            echo "[python-test] 未找到 Python 项目标记文件, 跳过。"
+            exit 0
+          fi
+          pip install -q pytest
+          [ -f requirements.txt ] && pip install -q -r requirements.txt
+          [ -f pyproject.toml ] && pip install -q -e ".[test]" 2>/dev/null || true
+          python -m pytest --tb=short -q
+
+  # Node.js/TypeScript 测试: 无 package.json 时跳过
+  node-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: run node tests
+        env:
+          GOVERNANCE_SKIP_NODE_TEST: ${{ vars.GOVERNANCE_SKIP_NODE_TEST }}
+        run: |
+          if [ "${GOVERNANCE_SKIP_NODE_TEST}" = "true" ]; then exit 0; fi
+          if [ ! -f package.json ]; then
+            echo "[node-test] 未找到 package.json, 跳过。"
+            exit 0
+          fi
+          npm ci --prefer-offline --no-audit 2>/dev/null || npm install --no-audit
+          npm test
+
+  # Java 测试: 无 pom.xml / build.gradle 时跳过
+  java-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: temurin
+      - name: run java tests
+        env:
+          GOVERNANCE_SKIP_JAVA_TEST: ${{ vars.GOVERNANCE_SKIP_JAVA_TEST }}
+        run: |
+          if [ "${GOVERNANCE_SKIP_JAVA_TEST}" = "true" ]; then exit 0; fi
+          if [ ! -f pom.xml ] && [ ! -f build.gradle ] && [ ! -f build.gradle.kts ]; then
+            echo "[java-test] 未找到 pom.xml / build.gradle, 跳过。"
+            exit 0
+          fi
+          if [ -f pom.xml ]; then
+            mvn -q test -Dsurefire.failIfNoSpecifiedTests=false
+          else
+            ./gradlew test --console=plain -q 2>/dev/null || gradle test --console=plain -q
+          fi
+
+  # .NET/C# 测试: 无 .sln / .csproj 时跳过
+  dotnet-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0"
+      - name: run dotnet tests
+        env:
+          GOVERNANCE_SKIP_DOTNET_TEST: ${{ vars.GOVERNANCE_SKIP_DOTNET_TEST }}
+        run: |
+          if [ "${GOVERNANCE_SKIP_DOTNET_TEST}" = "true" ]; then exit 0; fi
+          if ! find . -maxdepth 3 \( -name "*.sln" -o -name "*.csproj" \) 2>/dev/null | grep -q .; then
+            echo "[dotnet-test] 未找到 .sln / .csproj, 跳过。"
+            exit 0
+          fi
+          dotnet test --no-build --verbosity quiet 2>/dev/null || dotnet test --verbosity quiet
+
+  # Rust 测试: 无 Cargo.toml 时跳过
+  rust-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: run rust tests
+        env:
+          GOVERNANCE_SKIP_RUST_TEST: ${{ vars.GOVERNANCE_SKIP_RUST_TEST }}
+        run: |
+          if [ "${GOVERNANCE_SKIP_RUST_TEST}" = "true" ]; then exit 0; fi
+          if [ ! -f Cargo.toml ]; then
+            echo "[rust-test] 未找到 Cargo.toml, 跳过。"
+            exit 0
+          fi
+          cargo test --quiet
+
   # 自测: 跑 governance 脚本自己的完整回归套件
   selftest:
     runs-on: ubuntu-latest
@@ -158,7 +279,7 @@ jobs:
   # GateResult 汇总器（只读阶段）。
   # 只有该 job 成功后，后续独立 Merge Bot 才能申请平台自动合并。
   gate-decision:
-    needs: [risk-scan, secret-scan, mr-validate, test-check, go-test, selftest]
+    needs: [risk-scan, secret-scan, mr-validate, test-check, go-test, flutter-test, python-test, node-test, java-test, dotnet-test, rust-test, selftest]
     if: github.event.pull_request.draft == false
     outputs:
       merge_action: ${{ steps.compute.outputs.merge_action }}
