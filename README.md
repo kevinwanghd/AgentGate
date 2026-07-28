@@ -185,7 +185,7 @@ if (user.Id == "bot_12345") return true;
 
 ## 📊 配置示例
 
-`governance/config.yml`(完整说明见 [USER_GUIDE.md](USER_GUIDE.md#配置参考)):
+`governance/config.yml`（完整说明见 [USER_GUIDE.md](USER_GUIDE.md#配置参考)）:
 
 ```yaml
 metadata:
@@ -199,7 +199,6 @@ risk_annotations:
   registered_types:
     - auth-bypass
     - magic-id
-    # Go 规则包会通过 pattern_includes 自动注册 10 个 go-* / Go 基础类型
     - my-unsafe-api       # 公司自定义类型
   reviewed_max_age_days: 90
   reason_blacklist: [临时, hack]
@@ -211,6 +210,18 @@ risk_annotations:
 testing:
   enforcement: soft
   exclude_paths: ["*.md", "docs/"]
+
+auto_merge:
+  enabled: true
+  critical_approvals: 1   # 改了 CI/受保护路径时需要的人工审批数
+  required_checks:        # 所有项目统一配置，语言特定 job 不适用时自动 skip
+    - risk-scan
+    - secret-scan
+    - mr-validate
+    - test-check
+    - go-test
+  language_checks:        # 这些 job 未触发（missing）或返回 skip 时均视为通过
+    - go-test             # 扩展其他语言：flutter-test/dotnet-test/rust-test 等
 ```
 
 ---
