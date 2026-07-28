@@ -16,6 +16,11 @@ auto_merge:
     - test-check
     - go-test
     - selftest
+  # 语言特定 job：job 未触发（missing）或返回 skip 时均视为通过
+  # 扩展其他语言时在此追加，并在 CI 配置里加对应 job（检测各自的标记文件）
+  # flutter-test 检测 pubspec.yaml，dotnet-test 检测 .csproj，以此类推
+  language_checks:
+    - go-test
   # 保护分支: 只能通过 MR 合并，禁止直接推送
   protected_branches:
     - master
