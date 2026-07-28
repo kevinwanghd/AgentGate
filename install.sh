@@ -448,9 +448,11 @@ fetch_or_local "scripts/record_test_run.py" | write_file "governance/scripts/rec
 fetch_or_local "scripts/check_tested.py"    | write_file "governance/scripts/check_tested.py"
 fetch_or_local "scripts/gate_decision.py"   | write_file "governance/scripts/gate_decision.py"
 fetch_or_local "scripts/gitlab_controller.py" | write_file "governance/scripts/gitlab_controller.py"
+fetch_or_local "scripts/gitlab_mr_compat.py" | write_file "governance/scripts/gitlab_mr_compat.py"
 fetch_or_local "scripts/evidence_bundle.py" | write_file "governance/scripts/evidence_bundle.py"
 fetch_or_local "scripts/risk_merge_decision.py" | write_file "governance/scripts/risk_merge_decision.py"
 fetch_or_local "scripts/create_mr.py"       | write_file "governance/scripts/create_mr.py"
+fetch_or_local "scripts/agentgate.py"       | write_file "governance/scripts/agentgate.py"
 fetch_or_local "scripts/run_affected_tests.py" | write_file "governance/scripts/run_affected_tests.py"
 fetch_or_local "scripts/install-hooks.sh"   | write_file "governance/scripts/install-hooks.sh"
 fetch_or_local "scripts/selftest.sh"        | write_file "governance/scripts/selftest.sh"
@@ -562,6 +564,35 @@ governance:mr-validate:
 
 # 测试痕迹检测: 改动的生产代码是否做过测试 (v1 软; 但失败测试记录无条件硬拦)
 # CI 看不到 .governance/ 证据 (gitignore), 退回读 commit 的 Tested: trailer。
+governance:mr-validate-compat:
+  stage: governance
+  image: python:3.11-slim
+  rules:
+    - if: $CI_COMMIT_BRANCH
+  variables:
+    GIT_DEPTH: 0
+  before_script:
+    - pip install -q pyyaml==6.0.3
+  script:
+    - |
+      TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
+      git fetch -q origin "$TB"
+      BASE="origin/$TB"
+      STRICT_ARGS=""
+      [ "${GOVERNANCE_MR_VALIDATE_STRICT:-}" = "true" ] \
+        && STRICT_ARGS="--fail-if-no-token --fail-if-no-mr"
+      python governance/scripts/gitlab_mr_compat.py \
+        --diff-base "$BASE" \
+        --target-branch "$TB" \
+        --output governance-mr-validate-result.json \
+        $STRICT_ARGS
+  artifacts:
+    when: always
+    paths:
+      - governance-mr-validate-result.json
+    expire_in: 1 day
+  allow_failure: false
+
 governance:test-check:
   stage: governance
   image: python:3.11-slim

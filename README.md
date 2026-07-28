@@ -180,6 +180,8 @@ AgentGate 包含 14 个 Python 脚本(在 `scripts/` 目录):
 | `collect_ai_usage.py` | AI 用量统计(读证据,算占比,盖 trailer) |
 | `record_test_run.py` | 记录测试运行(盖 Tested trailer) |
 | `create_mr.py` | 自动生成 MR(从 commit 提取信息)，支持 GitLab API v4 预检和创建/更新 MR |
+| `agentgate.py` | 统一 CLI 入口，推荐 AI agent 使用 `agentgate.py mr create` 创建 MR |
+| `gitlab_mr_compat.py` | GitLab CE 11.4 兼容校验：branch pipeline 反查 open MR 并校验描述 |
 | `gitlab_controller.py` | GitLab 11.4 外部 Controller 最小版，检查 Bot/API/保护分支/目标策略并创建 MR |
 | `evidence_bundle.py` | 生成 Evidence Plan/Bundle v2，校验证据与 source/target/merge/policy/profile 绑定 |
 | `risk_merge_decision.py` | 基于证据包做风险分级、审批校验、自动合并动作和审计记录 |

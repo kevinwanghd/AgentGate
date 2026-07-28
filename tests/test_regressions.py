@@ -18,6 +18,8 @@ sys.path.insert(0, str(SCRIPTS))
 check_tested = importlib.import_module("check_tested")
 create_mr = importlib.import_module("create_mr")
 evidence_bundle = importlib.import_module("evidence_bundle")
+agentgate = importlib.import_module("agentgate")
+gitlab_mr_compat = importlib.import_module("gitlab_mr_compat")
 risk_merge_decision = importlib.import_module("risk_merge_decision")
 scan_risks = importlib.import_module("scan_risks")
 validate_mr = importlib.import_module("validate_mr")
@@ -245,6 +247,86 @@ class CreateMrGitLabApiTests(unittest.TestCase):
         self.assertEqual("PUT", calls[1][0])
         self.assertEqual("/projects/123/merge_requests/7", calls[1][3])
         self.assertEqual("true", calls[1][4]["remove_source_branch"])
+
+
+class AgentGateCliTests(unittest.TestCase):
+    def test_mr_create_delegates_to_create_mr(self) -> None:
+        with mock.patch.object(create_mr, "main", return_value=0) as delegated:
+            rc = agentgate.main(["mr", "create", "--why", "修复广告生命周期问题"])
+
+        self.assertEqual(0, rc)
+        delegated.assert_called_once()
+
+    def test_create_mr_rejects_invalid_generated_description(self) -> None:
+        args = mock.Mock(config=None, target_branch="origin/master")
+        with mock.patch.object(validate_mr, "load_config", return_value={}), \
+                mock.patch.object(validate_mr, "validate", return_value=["缺少 ## 背景 段落"]):
+            rc = create_mr.validate_generated_description("Bug", args)
+
+        self.assertEqual(1, rc)
+
+
+class GitLabMrCompatTests(unittest.TestCase):
+    def test_branch_pipeline_validates_open_mr_from_gitlab_api(self) -> None:
+        output = tempfile.NamedTemporaryFile(delete=False)
+        output.close()
+        try:
+            mr = {
+                "iid": 25,
+                "description": "Bug",
+                "web_url": "https://gitlab.example.com/group/project/-/merge_requests/25",
+                "target_branch": "master",
+            }
+            env = {
+                "CI_COMMIT_REF_NAME": "fix/bug",
+                "CI_SERVER_URL": "https://gitlab.example.com",
+                "CI_PROJECT_ID": "123",
+                "GOVERNANCE_MR_VALIDATE_TOKEN": "token",
+            }
+            with mock.patch.dict(os.environ, env, clear=False), \
+                    mock.patch.object(create_mr, "_gitlab_api_request", return_value=[mr]) as api, \
+                    mock.patch.object(gitlab_mr_compat, "validate_description", return_value=["缺少 ## 背景 段落"]), \
+                    mock.patch.object(sys, "argv", [
+                        "gitlab_mr_compat.py",
+                        "--target-branch", "master",
+                        "--diff-base", "origin/master",
+                        "--output", output.name,
+                    ]):
+                rc = gitlab_mr_compat.main()
+
+            self.assertEqual(1, rc)
+            payload = json.loads(Path(output.name).read_text(encoding="utf-8"))
+            self.assertEqual("fail", payload["status"])
+            self.assertEqual(25, payload["iid"])
+            api.assert_called_once()
+        finally:
+            os.unlink(output.name)
+
+    def test_branch_pipeline_skips_without_token_by_default(self) -> None:
+        output = tempfile.NamedTemporaryFile(delete=False)
+        output.close()
+        try:
+            env = {
+                "CI_COMMIT_REF_NAME": "fix/bug",
+                "CI_SERVER_URL": "https://gitlab.example.com",
+                "CI_PROJECT_ID": "123",
+                "GOVERNANCE_MR_VALIDATE_TOKEN": "",
+                "AGENTGATE_GITLAB_TOKEN": "",
+                "GOVERNANCE_MERGE_BOT_TOKEN": "",
+            }
+            with mock.patch.dict(os.environ, env, clear=False), \
+                    mock.patch.object(sys, "argv", [
+                        "gitlab_mr_compat.py",
+                        "--target-branch", "master",
+                        "--output", output.name,
+                    ]):
+                rc = gitlab_mr_compat.main()
+
+            self.assertEqual(0, rc)
+            payload = json.loads(Path(output.name).read_text(encoding="utf-8"))
+            self.assertEqual("skip", payload["status"])
+        finally:
+            os.unlink(output.name)
 
 
 class CreateMrSubmitFallbackTests(unittest.TestCase):
@@ -1836,10 +1918,13 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
         installer = (ROOT / "install.sh").read_text(encoding="utf-8")
         self.assertIn('scripts/gate_decision.py"   | write_file "governance/scripts/gate_decision.py"', installer)
         self.assertIn("scripts/gitlab_controller.py", installer)
+        self.assertIn("scripts/gitlab_mr_compat.py", installer)
+        self.assertIn("scripts/agentgate.py", installer)
         self.assertIn("scripts/evidence_bundle.py", installer)
         self.assertIn("scripts/risk_merge_decision.py", installer)
         self.assertIn("profiles/flutter-mobile.yml", installer)
         self.assertIn("governance:gate-decision:", installer)
+        self.assertIn("governance:mr-validate-compat:", installer)
         self.assertIn("governance:auto-merge:", installer)
         self.assertIn("GOVERNANCE_MERGE_BOT_TOKEN", installer)
         self.assertIn("CI_MERGE_REQUEST_SOURCE_PROJECT_ID", installer)
