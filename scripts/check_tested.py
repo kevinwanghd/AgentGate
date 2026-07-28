@@ -56,6 +56,7 @@ DEFAULT_CONFIG = {
     "testing": {
         "enforcement": "soft",          # v1 软启动
         "soft_deadline": None,
+        "accept_tested_trailer": True,
         "exclude_paths": [              # 整目录/模式免测试检查
             "**/Migrations/**",
             "**/*.Designer.cs",
@@ -400,6 +401,8 @@ def check(diff_text: str, evidence: list[dict], cfg: dict,
         # A. 有全绿记录 + 本次改了测试文件 (双重信号)
         if green_runs and touched_test_file:
             continue
+        if not tc.get("accept_tested_trailer", True) and touched_test_file:
+            continue
         # A'. CI 退路: commit Tested: trailer 标记 pass + 本次改了测试文件
         if trailer_pass and touched_test_file:
             continue
@@ -409,7 +412,7 @@ def check(diff_text: str, evidence: list[dict], cfg: dict,
             continue
         # 未通过任何放行条件
         reason = []
-        if not green_runs and not trailer_pass:
+        if not green_runs and not trailer_pass and tc.get("accept_tested_trailer", True):
             reason.append("无全绿测试记录/Tested:trailer (用 record_test_run.py 跑测试)")
         elif not touched_test_file:
             reason.append("本次 diff 未改动任何测试文件, 且未 --covers 声明")
@@ -469,7 +472,7 @@ def main() -> int:
             return 2
     # 本地无证据 (CI 场景) 时, 退回读 commit 的 Tested: trailer
     trailer = None
-    if not evidence and not args.diff_file:
+    if not evidence and not args.diff_file and cfg["testing"].get("accept_tested_trailer", True):
         trailer = read_tested_trailer(args.diff_base)
     hard_errors, violations = check(diff_text, evidence, cfg, trailer,
                                     status_map=locals().get("status_map"))

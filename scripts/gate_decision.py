@@ -29,6 +29,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "require_up_to_date_branch": True,
         "require_all_required_checks": True,
         "required_checks": [],
+        "required_checks_by_risk": {
+            "low": ["risk-scan", "secret-scan", "mr-validate"],
+            "medium": ["risk-scan", "secret-scan", "mr-validate", "test-check"],
+            "high": ["risk-scan", "secret-scan", "mr-validate", "test-check", "selftest"],
+            "critical": ["risk-scan", "secret-scan", "mr-validate", "test-check", "selftest"],
+        },
         # 语言特定 job 列表：这些 check 缺失（missing）时视为 skip 而非失败。
         # 适用于只在特定语言仓库触发的 job（如 go-test、flutter-test、dotnet-test）。
         # job 自身负责检测语言标记文件（go.mod/pubspec.yaml/.csproj 等）并在不适用时
@@ -38,7 +44,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "node-test", "java-test", "dotnet-test", "rust-test",
         ],
         # critical 风险时需要的人工审批数（默认 1）
+        "high_approvals": 0,
         "critical_approvals": 1,
+        "risk_paths": {
+            "low": ["docs/**", "*.md"],
+            "high": ["**/auth/**", "**/payment/**", "**/deploy/**"],
+            "critical": [],
+        },
         # 保护分支: 只能通过 MR 合并，禁止直接推送
         "protected_branches": [
             "master",
@@ -77,6 +89,43 @@ def _is_protected(path: str, patterns: list[str]) -> bool:
     return any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
 
 
+def _max_risk(left: str, right: str) -> str:
+    order = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+    return left if order[left] >= order[right] else right
+
+
+def _classify_risk(changed_paths: list[str], auto: dict[str, Any], critical_paths: list[str]) -> str:
+    if critical_paths:
+        return "critical"
+    risk = "low"
+    risk_paths = auto.get("risk_paths", {})
+    if not isinstance(risk_paths, dict):
+        risk_paths = {}
+    low_patterns = [str(item) for item in risk_paths.get("low", [])]
+    high_patterns = [str(item) for item in risk_paths.get("high", [])]
+    critical_patterns = [str(item) for item in risk_paths.get("critical", [])]
+    for path in changed_paths:
+        if _is_protected(path, critical_patterns):
+            risk = _max_risk(risk, "critical")
+        elif _is_protected(path, high_patterns):
+            risk = _max_risk(risk, "high")
+        elif _is_protected(path, low_patterns):
+            risk = _max_risk(risk, "low")
+        else:
+            risk = _max_risk(risk, "medium")
+    return risk
+
+
+def _required_checks_for_risk(auto: dict[str, Any], risk_level: str, checks: dict[str, str]) -> list[str]:
+    by_risk = auto.get("required_checks_by_risk")
+    if isinstance(by_risk, dict):
+        plan = by_risk.get(risk_level)
+        if isinstance(plan, list):
+            return [str(item) for item in plan]
+    required = [str(item) for item in auto.get("required_checks", [])]
+    return required or sorted(checks)
+
+
 def build_gate_result(
     *,
     source_sha: str,
@@ -95,16 +144,14 @@ def build_gate_result(
     is_protected_branch = bool(target_branch) and any(
         fnmatch.fnmatch(target_branch, pattern) for pattern in protected_branches
     )
-    risk_level = "critical" if critical_paths else "medium"
+    risk_level = _classify_risk(changed_paths, auto, critical_paths)
     reasons: list[str] = []
     if critical_paths:
         reasons.append("protected_paths_changed")
     if is_protected_branch:
         reasons.append("protected_branch_direct_push")
 
-    required = [str(item) for item in auto.get("required_checks", [])]
-    if not required:
-        required = sorted(checks)
+    required = _required_checks_for_risk(auto, risk_level, checks)
     language_checks = set(str(c) for c in auto.get("language_checks", ["go-test"]))
 
     missing = [name for name in required if name not in checks
@@ -118,7 +165,12 @@ def build_gate_result(
     if failed:
         reasons.append("required_check_failed")
 
-    required_approvals = int(auto.get("critical_approvals", 1)) if risk_level == "critical" else 0
+    if risk_level == "critical":
+        required_approvals = int(auto.get("critical_approvals", 1))
+    elif risk_level == "high":
+        required_approvals = int(auto.get("high_approvals", 0))
+    else:
+        required_approvals = 0
     if risk_level == "critical":
         reasons.append("critical_risk_requires_human_approval")
     if valid_approvals < required_approvals:
@@ -184,6 +236,14 @@ def main() -> int:
         config = load_config(args.config, DEFAULT_CONFIG, ("auto_merge",))
         # utf-8-sig 同时兼容 Linux CI 的 UTF-8 和 Windows/PowerShell 写出的 BOM。
         evidence = json.loads(Path(args.evidence).read_text(encoding="utf-8-sig"))
+        for key, expected in (
+            ("source_sha", args.source_sha),
+            ("target_sha", args.target_sha),
+            ("policy_sha", args.policy_sha),
+        ):
+            actual = evidence.get(key)
+            if actual is not None and str(actual) != expected:
+                raise ValueError(f"evidence.{key} 与当前 CI 上下文不一致")
         checks = evidence.get("checks", {})
         if not isinstance(checks, dict):
             raise ValueError("evidence.checks 必须是 mapping")

@@ -333,7 +333,7 @@ jobs:
   # 只有该 job 成功后，后续独立 Merge Bot 才能申请平台自动合并。
   gate-decision:
     needs: [yaml-validate, risk-scan, secret-scan, mr-validate, test-check, go-test, flutter-test, python-test, node-test, java-test, dotnet-test, rust-test, selftest]
-    if: github.event.pull_request.draft == false
+    if: ${{ always() && github.event.pull_request.draft == false }}
     outputs:
       merge_action: ${{ steps.compute.outputs.merge_action }}
     runs-on: ubuntu-latest
@@ -354,15 +354,51 @@ jobs:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RISK_SCAN: ${{ needs.risk-scan.result == 'success' && 'pass' || 'fail' }}
+          SECRET_SCAN: ${{ needs.secret-scan.result == 'success' && 'pass' || 'fail' }}
+          MR_VALIDATE: ${{ needs.mr-validate.result == 'success' && 'pass' || 'fail' }}
+          TEST_CHECK: ${{ needs.test-check.result == 'success' && 'pass' || 'fail' }}
+          GO_TEST: ${{ needs.go-test.result == 'success' && 'pass' || needs.go-test.result == 'skipped' && 'skip' || 'fail' }}
+          FLUTTER_TEST: ${{ needs.flutter-test.result == 'success' && 'pass' || needs.flutter-test.result == 'skipped' && 'skip' || 'fail' }}
+          PYTHON_TEST: ${{ needs.python-test.result == 'success' && 'pass' || needs.python-test.result == 'skipped' && 'skip' || 'fail' }}
+          NODE_TEST: ${{ needs.node-test.result == 'success' && 'pass' || needs.node-test.result == 'skipped' && 'skip' || 'fail' }}
+          JAVA_TEST: ${{ needs.java-test.result == 'success' && 'pass' || needs.java-test.result == 'skipped' && 'skip' || 'fail' }}
+          DOTNET_TEST: ${{ needs.dotnet-test.result == 'success' && 'pass' || needs.dotnet-test.result == 'skipped' && 'skip' || 'fail' }}
+          RUST_TEST: ${{ needs.rust-test.result == 'success' && 'pass' || needs.rust-test.result == 'skipped' && 'skip' || 'fail' }}
+          SELFTEST: ${{ needs.selftest.result == 'success' && 'pass' || 'fail' }}
         run: |
           set -euo pipefail
           git fetch -q origin "$BASE_REF"
           git cat-file -e "$HEAD_SHA^{commit}"
           SOURCE_SHA="$HEAD_SHA"
           POLICY_SHA="$(git rev-parse "${SOURCE_SHA}:governance.config.yml")"
-          cat > /tmp/agentgate-evidence.json <<'JSON'
-          {"schema_version":"v1","checks":{"risk-scan":"pass","secret-scan":"pass","mr-validate":"pass","test-check":"pass","go-test":"pass","selftest":"pass"}}
-          JSON
+          export POLICY_SHA
+          python - <<'PY' > /tmp/agentgate-evidence.json
+          import json
+          import os
+
+          checks = {
+              "risk-scan": os.environ["RISK_SCAN"],
+              "secret-scan": os.environ["SECRET_SCAN"],
+              "mr-validate": os.environ["MR_VALIDATE"],
+              "test-check": os.environ["TEST_CHECK"],
+              "go-test": os.environ["GO_TEST"],
+              "flutter-test": os.environ["FLUTTER_TEST"],
+              "python-test": os.environ["PYTHON_TEST"],
+              "node-test": os.environ["NODE_TEST"],
+              "java-test": os.environ["JAVA_TEST"],
+              "dotnet-test": os.environ["DOTNET_TEST"],
+              "rust-test": os.environ["RUST_TEST"],
+              "selftest": os.environ["SELFTEST"],
+          }
+          print(json.dumps({
+              "schema_version": "agentgate.io/ci-evidence/v1",
+              "source_sha": os.environ["HEAD_SHA"],
+              "target_sha": os.environ["BASE_SHA"],
+              "policy_sha": os.environ["POLICY_SHA"],
+              "checks": checks,
+          }, ensure_ascii=False))
+          PY
           set +e
           python scripts/gate_decision.py \
             --evidence /tmp/agentgate-evidence.json \
