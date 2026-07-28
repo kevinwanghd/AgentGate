@@ -9,6 +9,32 @@ auto_merge:
   require_up_to_date_branch: true
   require_all_required_checks: true
   critical_approvals: 1       # critical 风险路径变更时需要的人工审批数
+  high_approvals: 0
+  required_checks_by_risk:
+    low:
+      - risk-scan
+      - secret-scan
+      - mr-validate
+    medium:
+      - risk-scan
+      - secret-scan
+      - mr-validate
+      - test-check
+      - python-test
+    high:
+      - risk-scan
+      - secret-scan
+      - mr-validate
+      - test-check
+      - python-test
+      - selftest
+    critical:
+      - risk-scan
+      - secret-scan
+      - mr-validate
+      - test-check
+      - python-test
+      - selftest
   required_checks:
     - risk-scan
     - secret-scan
@@ -48,6 +74,21 @@ auto_merge:
     - scripts/check_tested.py
     - scripts/validate_mr.py
     - scripts/gate_decision.py
+  risk_paths:
+    low:
+      - docs/**
+      - "*.md"
+      - templates/**
+    high:
+      - scripts/**
+      - install.sh
+      - .github/workflows/**
+      - gitlab/**
+    critical:
+      - governance.config.yml
+      - scripts/gate_decision.py
+      - scripts/check_tested.py
+      - scripts/validate_mr.py
 
 metadata:
   enforcement: hard           # 自举: 新仓库无历史包袱, 直接硬启动
@@ -56,7 +97,6 @@ metadata:
     - background
     - changes
     - self_test
-    - tested
 
 risk_annotations:
   enforcement: hard           # 自举展示严格模式 (消费仓库默认 soft)
@@ -111,6 +151,7 @@ large_change:
 testing:
   enforcement: hard           # 自举: 直接硬启动
   soft_deadline: 2026-09-27   # (已被 enforcement:hard 覆盖)
+  accept_tested_trailer: false # Tested: 仅作开发声明，合并放行只看 CI Evidence Bundle
   untested_max_age_days: 90
   # 本仓库是工具包: 脚本目录是被测主体, 文档/模板/指令文件不要求测试
   # ci/ 不再整目录豁免 —— CI 配置改动同样需要测试证据

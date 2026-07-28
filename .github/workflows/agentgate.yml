@@ -1,0 +1,282 @@
+name: AgentGate
+
+on:
+  workflow_call:
+    inputs:
+      config-path:
+        required: false
+        type: string
+        default: governance.config.yml
+      agentgate-repository:
+        required: false
+        type: string
+        default: kevinwanghd/AgentGate
+      agentgate-ref:
+        required: false
+        type: string
+        default: github-stable
+      skip-go-test:
+        required: false
+        type: boolean
+        default: false
+      skip-auto-merge:
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      GOVERNANCE_MERGE_BOT_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+jobs:
+  risk-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Checkout AgentGate
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.agentgate-repository }}
+          ref: ${{ inputs.agentgate-ref }}
+          path: .agentgate
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install runtime dependencies
+        run: pip install -q pyyaml==6.0.3
+      - name: Scan risk annotations
+        run: |
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          if [ -z "$BASE_REF" ]; then echo "::error::pull_request.base.ref is required"; exit 1; fi
+          git fetch -q origin "$BASE_REF"
+          python .agentgate/scripts/scan_risks.py \
+            --diff-base "origin/$BASE_REF" \
+            --config "${{ inputs.config-path }}"
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan introduced secrets
+        run: |
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          if [ -z "$BASE_REF" ]; then echo "::error::pull_request.base.ref is required"; exit 1; fi
+          git fetch -q origin "$BASE_REF"
+          docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.30.1 \
+            detect --source /repo --log-opts="origin/${BASE_REF}..HEAD" \
+            --redact --no-banner --verbose
+
+  mr-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Checkout AgentGate
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.agentgate-repository }}
+          ref: ${{ inputs.agentgate-ref }}
+          path: .agentgate
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install runtime dependencies
+        run: pip install -q pyyaml==6.0.3
+      - name: Validate PR description
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          if [ -z "$BASE_REF" ]; then echo "::error::pull_request.base.ref is required"; exit 1; fi
+          git fetch -q origin "$BASE_REF"
+          printf '%s' "$PR_BODY" \
+            | python .agentgate/scripts/validate_mr.py \
+                --diff-base "origin/$BASE_REF" \
+                --config "${{ inputs.config-path }}"
+
+  test-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Checkout AgentGate
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.agentgate-repository }}
+          ref: ${{ inputs.agentgate-ref }}
+          path: .agentgate
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install runtime dependencies
+        run: pip install -q pyyaml==6.0.3
+      - name: Check test evidence
+        run: |
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          if [ -z "$BASE_REF" ]; then echo "::error::pull_request.base.ref is required"; exit 1; fi
+          git fetch -q origin "$BASE_REF"
+          python .agentgate/scripts/check_tested.py \
+            --diff-base "origin/$BASE_REF" \
+            --config "${{ inputs.config-path }}"
+
+  go-test:
+    if: ${{ !inputs.skip-go-test }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Checkout AgentGate
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.agentgate-repository }}
+          ref: ${{ inputs.agentgate-ref }}
+          path: .agentgate
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install runtime dependencies
+        run: pip install -q pyyaml==6.0.3
+      - name: Run affected Go tests
+        run: |
+          if [ ! -f go.mod ]; then
+            echo "[go-test] go.mod not found, skipping."
+            exit 0
+          fi
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          if [ -z "$BASE_REF" ]; then echo "::error::pull_request.base.ref is required"; exit 1; fi
+          git fetch -q origin "$BASE_REF"
+          python .agentgate/scripts/run_affected_tests.py \
+            --diff-base "origin/$BASE_REF" \
+            --timeout "${GOVERNANCE_GO_TEST_TIMEOUT:-120}"
+
+  gate-decision:
+    needs:
+      - risk-scan
+      - secret-scan
+      - mr-validate
+      - test-check
+      - go-test
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    outputs:
+      merge-action: ${{ steps.gate.outputs.merge_action }}
+      result: ${{ steps.gate.outputs.result }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Checkout AgentGate
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.agentgate-repository }}
+          ref: ${{ inputs.agentgate-ref }}
+          path: .agentgate
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install runtime dependencies
+        run: pip install -q pyyaml==6.0.3
+      - name: Decide gate result
+        id: gate
+        run: |
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          if [ -z "$BASE_REF" ]; then echo "::error::pull_request.base.ref is required"; exit 1; fi
+          git fetch -q origin "$BASE_REF"
+          SOURCE_SHA="${{ github.event.pull_request.head.sha }}"
+          TARGET_SHA="$(git rev-parse "origin/$BASE_REF")"
+          CONFIG_PATH="${{ inputs.config-path }}"
+          POLICY_SHA="$(git rev-parse "${SOURCE_SHA}:${CONFIG_PATH}" 2>/dev/null || echo "$SOURCE_SHA")"
+          export SOURCE_SHA TARGET_SHA POLICY_SHA
+          python - <<'PY' > gate-evidence.json
+          import json
+          import os
+
+          checks = {
+              "risk-scan": os.environ["RISK_SCAN"],
+              "secret-scan": os.environ["SECRET_SCAN"],
+              "mr-validate": os.environ["MR_VALIDATE"],
+              "test-check": os.environ["TEST_CHECK"],
+              "go-test": os.environ["GO_TEST"],
+          }
+          print(json.dumps({
+              "schema_version": "agentgate.io/ci-evidence/v1",
+              "source_sha": os.environ["SOURCE_SHA"],
+              "target_sha": os.environ["TARGET_SHA"],
+              "policy_sha": os.environ["POLICY_SHA"],
+              "checks": checks,
+          }, ensure_ascii=False))
+          PY
+          set +e
+          python .agentgate/scripts/gate_decision.py \
+            --evidence gate-evidence.json \
+            --source-sha "$SOURCE_SHA" \
+            --target-sha "$TARGET_SHA" \
+            --policy-sha "$POLICY_SHA" \
+            --diff-base "origin/$BASE_REF" \
+            --config "$CONFIG_PATH" \
+            --output gate-result.json
+          DECISION_EXIT=$?
+          set -e
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+
+          with open("gate-result.json", encoding="utf-8") as f:
+              gate = json.load(f)
+          print(f"merge_action={gate.get('merge_action', 'BLOCK')}")
+          print(f"result={gate.get('result', 'FAIL')}")
+          PY
+          if [ "$DECISION_EXIT" -gt 1 ]; then
+            exit "$DECISION_EXIT"
+          fi
+        env:
+          RISK_SCAN: ${{ needs.risk-scan.result == 'success' && 'pass' || 'fail' }}
+          SECRET_SCAN: ${{ needs.secret-scan.result == 'success' && 'pass' || 'fail' }}
+          MR_VALIDATE: ${{ needs.mr-validate.result == 'success' && 'pass' || 'fail' }}
+          TEST_CHECK: ${{ needs.test-check.result == 'success' && 'pass' || 'fail' }}
+          GO_TEST: ${{ needs.go-test.result == 'success' && 'pass' || needs.go-test.result == 'skipped' && 'skip' || 'fail' }}
+      - name: Upload gate result
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentgate-result
+          path: gate-result.json
+
+  auto-merge:
+    needs: gate-decision
+    if: ${{ !inputs.skip-auto-merge && needs.gate-decision.outputs.merge-action == 'AUTO_MERGE' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enable auto merge
+        env:
+          GH_TOKEN: ${{ secrets.GOVERNANCE_MERGE_BOT_TOKEN || github.token }}
+        run: |
+          gh pr merge "${{ github.event.pull_request.number }}" \
+            --repo "${{ github.repository }}" \
+            --auto \
+            --squash \
+            --delete-branch

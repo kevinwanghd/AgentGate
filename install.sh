@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 #
 # MR 治理规范 v1 一键安装脚本
 #
@@ -14,10 +14,22 @@ set -euo pipefail
 # ---------- 参数 ----------
 TARGET_DIR="$PWD"
 AGENTS="all"   # 默认装所有 AI 指令文件
+PLATFORM="gitlab"
+MODE="pinned"
+AGENTGATE_REPO="kevinwanghd/AgentGate"
+AGENTGATE_REF="github-stable"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --agents) AGENTS="$2"; shift 2 ;;
     --agents=*) AGENTS="${1#*=}"; shift ;;
+    --platform) PLATFORM="$2"; shift 2 ;;
+    --platform=*) PLATFORM="${1#*=}"; shift ;;
+    --mode) MODE="$2"; shift 2 ;;
+    --mode=*) MODE="${1#*=}"; shift ;;
+    --agentgate-repo) AGENTGATE_REPO="$2"; shift 2 ;;
+    --agentgate-repo=*) AGENTGATE_REPO="${1#*=}"; shift ;;
+    --agentgate-ref) AGENTGATE_REF="$2"; shift 2 ;;
+    --agentgate-ref=*) AGENTGATE_REF="${1#*=}"; shift ;;
     *) TARGET_DIR="$1"; shift ;;
   esac
 done
@@ -80,6 +92,32 @@ if [[ -f "${SCRIPT_DIR}/mr-spec.md" && -f "${SCRIPT_DIR}/risk-types.md" ]]; then
   log "检测到本地源: ${SOURCE_DIR}"
 fi
 
+case "$PLATFORM" in
+  github|gitlab) ;;
+  *)
+    err "无效的 --platform 值: $PLATFORM (可选: github/gitlab)"
+    exit 1
+    ;;
+esac
+
+case "$MODE" in
+  thin|pinned) ;;
+  *)
+    err "无效的 --mode 值: $MODE (可选: thin/pinned)"
+    exit 1
+    ;;
+esac
+
+if [[ "$PLATFORM" == "gitlab" && "$MODE" == "thin" ]]; then
+  err "GitLab thin 模式需要 GitLab 中央 include 发布线, 请使用 --mode pinned 或手动 include gitlab/ci-snippet.yml@gitlab-stable"
+  exit 1
+fi
+
+if [[ "$PLATFORM" == "github" && "$MODE" != "thin" ]]; then
+  err "GitHub 目前只支持 --mode thin, 避免把中央脚本复制到业务仓库"
+  exit 1
+fi
+
 # ---------- DeliverHQ 共存检测 ----------
 DELIVERHQ_INTEGRATION="false"
 if [[ -d "${TARGET_DIR}/DeliverHQ" ]]; then
@@ -87,10 +125,16 @@ if [[ -d "${TARGET_DIR}/DeliverHQ" ]]; then
   ok "检测到 DeliverHQ/ 目录, 自动启用共存模式"
 fi
 
-# ---------- 1. MR 模板 ----------
-log "安装 MR 模板 -> .gitlab/merge_request_templates/default.md"
-fetch_or_local "templates/merge_request_default.md" \
-  | write_file ".gitlab/merge_request_templates/default.md"
+# ---------- 1. MR / PR 模板 ----------
+if [[ "$PLATFORM" == "gitlab" ]]; then
+  log "安装 MR 模板 -> .gitlab/merge_request_templates/default.md"
+  fetch_or_local "templates/merge_request_default.md" \
+    | write_file ".gitlab/merge_request_templates/default.md"
+else
+  log "安装 PR 模板 -> .github/pull_request_template.md"
+  fetch_or_local "templates/merge_request_default.md" \
+    | write_file ".github/pull_request_template.md"
+fi
 
 # ---------- 2. 规范文档 ----------
 log "安装规范文档 -> docs/governance/"
@@ -257,6 +301,29 @@ auto_merge:
   delete_branch_after_merge: true
   require_up_to_date_branch: true
   require_all_required_checks: true
+  required_checks_by_risk:
+    low:
+      - risk-scan
+      - secret-scan
+      - mr-validate
+    medium:
+      - risk-scan
+      - secret-scan
+      - mr-validate
+      - test-check
+      - go-test
+    high:
+      - risk-scan
+      - secret-scan
+      - mr-validate
+      - test-check
+      - go-test
+    critical:
+      - risk-scan
+      - secret-scan
+      - mr-validate
+      - test-check
+      - go-test
   required_checks:
     - risk-scan
     - secret-scan
@@ -274,10 +341,25 @@ auto_merge:
     - scripts/check_tested.py
     - scripts/validate_mr.py
     - scripts/gate_decision.py
+  risk_paths:
+    low:
+      - docs/**
+      - "*.md"
+    high:
+      - "**/auth/**"
+      - "**/payment/**"
+      - "**/deploy/**"
+      - .github/workflows/**
+      - .gitlab-ci.yml
+      - ci/**
+    critical:
+      - governance.config.yml
+      - governance/**
 
 testing:
   enforcement: soft           # v1 软启动: 未测代码仅警告; soft_deadline 后转硬
   soft_deadline: ${SOFT_DEADLINE}
+  accept_tested_trailer: false # Tested: 仅作开发声明，合并放行只看 CI Evidence Bundle
   untested_max_age_days: 90   # risk:untested 注解有效期 (推荐: 与季度 review 节奏对齐)
   exclude_paths:              # 整目录/模式免测试检查 (DTO/迁移/生成代码/启动引导)
     - "**/Migrations/**"
@@ -320,6 +402,39 @@ deliverhq_integration:
     - "目标"
 EOF
   ok "写入 governance.config.yml"
+fi
+
+if [[ "$PLATFORM" == "github" && "$MODE" == "thin" ]]; then
+  log "安装 GitHub 薄入口 -> .github/workflows/agentgate.yml"
+  fetch_or_local "templates/github_agentgate_workflow.yml" \
+    | sed \
+        -e "s#__AGENTGATE_REPO__#${AGENTGATE_REPO}#g" \
+        -e "s#__AGENTGATE_REF__#${AGENTGATE_REF}#g" \
+    | write_file ".github/workflows/agentgate.yml"
+
+  cat <<EOF
+
+============================================================
+ AgentGate GitHub thin onboarding complete
+============================================================
+
+Installed files:
+  .github/workflows/agentgate.yml
+  .github/pull_request_template.md
+  docs/governance/mr-spec.md
+  docs/governance/risk-types.md
+  governance.config.yml
+
+This repository now calls:
+  ${AGENTGATE_REPO}/.github/workflows/agentgate.yml@${AGENTGATE_REF}
+
+AgentGate scripts are not copied into this repository. Updating ${AGENTGATE_REF}
+in the central AgentGate repository updates all GitHub repositories that call it.
+
+GitLab repositories are not affected by this GitHub thin entrypoint.
+
+EOF
+  exit 0
 fi
 
 # ---------- 4. 扫描脚本 ----------
