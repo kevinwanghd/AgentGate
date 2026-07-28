@@ -115,6 +115,39 @@ governance:mr-validate:
 # ── 4. 测试痕迹检测: 软→硬 (失败测试记录无条件硬拦) ──────────────────────────
 # 改动的生产代码是否做过测试。CI 看不到 .governance/ 证据 (gitignore),
 # 退回读 commit 的 Tested: trailer。
+governance:mr-validate-compat:
+  stage: governance
+  image: python:3.11
+  rules:
+    - if: $CI_COMMIT_BRANCH
+  variables:
+    GIT_DEPTH: 0
+  before_script:
+    - pip install -q pyyaml==6.0.3
+  script:
+    - |
+      TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
+      git fetch -q origin "$TB"
+      BASE="origin/$TB"
+      CONFIG_ARG=""
+      [ -f "${GOVERNANCE_CONFIG_PATH:-governance/governance.config.yml}" ] \
+        && CONFIG_ARG="--config ${GOVERNANCE_CONFIG_PATH:-governance/governance.config.yml}"
+      STRICT_ARGS=""
+      [ "${GOVERNANCE_MR_VALIDATE_STRICT:-}" = "true" ] \
+        && STRICT_ARGS="--fail-if-no-token --fail-if-no-mr"
+      python governance/scripts/gitlab_mr_compat.py \
+        --diff-base "$BASE" \
+        --target-branch "$TB" \
+        --output governance-mr-validate-result.json \
+        $CONFIG_ARG \
+        $STRICT_ARGS
+  artifacts:
+    when: always
+    paths:
+      - governance-mr-validate-result.json
+    expire_in: 1 day
+  allow_failure: false
+
 governance:test-check:
   stage: governance
   image: python:3.11

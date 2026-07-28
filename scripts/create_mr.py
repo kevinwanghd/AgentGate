@@ -426,6 +426,32 @@ def infer_title(args, base: str) -> str:
     return "chore: update"
 
 
+def validate_generated_description(description: str, args) -> int:
+    """Validate generated MR body before it is submitted.
+
+    This turns create_mr.py into the safe path for AI agents: malformed MR
+    descriptions are rejected locally instead of being discovered after push.
+    """
+    try:
+        import validate_mr
+
+        cfg = validate_mr.load_config(args.config)
+        problems = validate_mr.validate(description, cfg, args.target_branch)
+    except Exception as exc:
+        sys.stderr.write(f"[create-mr] MR 描述本地校验失败: {exc}\n")
+        return 2
+
+    if not problems:
+        sys.stderr.write("[create-mr] MR 描述本地校验通过。\n")
+        return 0
+
+    sys.stderr.write("[create-mr] MR 描述不符合 AgentGate 规范，拒绝创建 MR:\n")
+    for item in problems:
+        sys.stderr.write(f"  - {item}\n")
+    sys.stderr.write("[create-mr] 请补充 --why/--tested/--risks，或使用 --interactive 修改后重试。\n")
+    return 1
+
+
 # ============================================================
 # 提交 MR
 # ============================================================
@@ -633,6 +659,8 @@ def main() -> int:
     ap.add_argument("--source-branch", help="源分支, 默认当前分支")
     ap.add_argument("--remove-source-branch", action="store_true",
                     help="MR 合并后删除源分支")
+    ap.add_argument("--skip-local-validate", action="store_true",
+                    help="跳过 create_mr.py 提交前的 MR 描述本地校验（仅用于迁移/调试）")
     args = ap.parse_args()
 
     if args.gitlab_preflight:
@@ -691,6 +719,11 @@ def main() -> int:
         with open(path, encoding="utf-8") as f:
             description = f.read()
         os.unlink(path)
+
+    if not args.dry_run and not args.skip_local_validate:
+        rc = validate_generated_description(description, args)
+        if rc != 0:
+            return rc
 
     if args.dry_run:
         print(f"# [DRY-RUN] 标题: {title}\n# 目标分支: {args.target_branch}\n")

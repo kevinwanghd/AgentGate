@@ -1,5 +1,21 @@
 # Agent 开发规范
 
+## 强制 MR 入口
+
+所有 AI agent 创建 MR 时必须走统一入口，不允许手写空描述或绕过本地校验：
+
+```bash
+python governance/scripts/agentgate.py mr create --why "<用中文说明本次任务背景>"
+```
+
+兼容旧安装时可使用等价命令：
+
+```bash
+python governance/scripts/create_mr.py --why "<用中文说明本次任务背景>"
+```
+
+该命令会先生成规范 MR 描述并本地运行 AgentGate 描述校验；校验失败时必须修复描述、测试记录或风险回滚说明，不允许改低门禁或直接去 GitLab 页面手工创建不规范 MR。
+
 本文件由 Claude Code / Kiro 在会话启动时自动加载。所有 AI agent 在本仓库开发时必须遵守以下规则。
 
 ---
