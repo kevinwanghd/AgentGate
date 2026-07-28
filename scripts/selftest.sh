@@ -46,6 +46,23 @@ fi
 
 skip() { echo "  ⊘ $1 (跳过: 环境无 pyyaml, 无法读自定义 config)"; }
 
+# ==================== 前置检查: YAML 配置语法 ====================
+echo "== YAML 配置文件语法检查 =="
+VALIDATE_YAML="${SCRIPT_DIR}/validate_yaml.py"
+if [[ -f "$VALIDATE_YAML" ]]; then
+  if python3 "$VALIDATE_YAML" --ci >/dev/null 2>&1; then
+    echo "  ✓ 所有 YAML 配置文件语法正确"
+    PASS=$((PASS+1))
+  else
+    echo "  ✗ YAML 配置文件语法错误:"
+    python3 "$VALIDATE_YAML" --ci 2>&1 | sed 's/^/    /'
+    FAIL=$((FAIL+1))
+  fi
+else
+  echo "  ⊘ validate_yaml.py 不存在, 跳过"
+fi
+echo ""
+
 # 临时工作区
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT

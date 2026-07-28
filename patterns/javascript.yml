@@ -26,7 +26,7 @@ patterns:
 
   # 4. 硬编码密钥
   - type: hardcoded-secret
-    regex: '(?i)(?:password|passwd|secret|apiKey|api_key|token|accessKey|access_key)\s*[:=]\s*["\'][^"\']{8,}'
+    regex: "(?i)(?:password|passwd|secret|apiKey|api_key|token|accessKey|access_key)\\s*[:=]\\s*[\"'][^\"']{8,}"
     desc: "敏感信息硬编码，应使用环境变量或密钥管理服务"
     exts: [".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"]
     mode: warn
@@ -40,14 +40,14 @@ patterns:
 
   # 6. SQL 注入 (Node.js)
   - type: sql-injection
-    regex: '(?:query|execute)\s*\([^)]*\$\{|\.concat\s*\(|[+]\s*["\']SELECT|INSERT|UPDATE|DELETE'
+    regex: "(?:query|execute)\\s*\\([^)]*\\$\\{|\\.concat\\s*\\(|[+]\\s*[\"']SELECT|INSERT|UPDATE|DELETE"
     desc: "SQL 语句拼接存在注入风险，应使用参数化查询"
     exts: [".js", ".ts", ".mjs", ".cjs"]
     mode: warn
 
   # 7. 命令注入 (child_process)
   - type: command-injection
-    regex: '(?:exec|execSync|spawn|spawnSync)\s*\([^)]*\$\{|\.concat\s*\('
+    regex: "(?:exec|execSync|spawn|spawnSync)\\s*\\([^)]*\\$\\{|\\.concat\\s*\\("
     desc: "命令拼接存在注入风险，应使用参数数组或验证输入"
     exts: [".js", ".ts", ".mjs", ".cjs"]
     mode: warn
@@ -61,14 +61,14 @@ patterns:
 
   # 9. localStorage 存储敏感信息
   - type: sensitive-storage
-    regex: '(?i)localStorage\.setItem\s*\([^)]*(?:token|password|secret|session)'
+    regex: "(?i)localStorage\\.setItem\\s*\\([^)]*(?:token|password|secret|session)"
     desc: "localStorage 明文存储敏感信息，应加密或使用 httpOnly cookie"
     exts: [".js", ".jsx", ".ts", ".tsx"]
     mode: warn
 
   # 10. CORS 配置过宽
   - type: cors-wildcard
-    regex: 'Access-Control-Allow-Origin.*\*|cors\s*\(\s*\{[^}]*origin:\s*["\']?\*'
+    regex: "Access-Control-Allow-Origin.*\\*|cors\\s*\\(\\s*\\{[^}]*origin:\\s*[\"']?\\*"
     desc: "CORS 配置为 * 可能允许任意来源，应限制为可信域名"
     exts: [".js", ".ts", ".mjs", ".cjs"]
     mode: warn

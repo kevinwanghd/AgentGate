@@ -19,6 +19,18 @@ on:
     types: [opened, synchronize, reopened, edited]
 
 jobs:
+  # YAML 配置语法检查: 最先运行，快速失败
+  yaml-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -q pyyaml==6.0.3
+      - name: validate YAML config files
+        run: python scripts/validate_yaml.py --ci
+
   # 风险扫描: 硬阻断 (命中风险模式且缺合法注解 → 拒合)
   risk-scan:
     runs-on: ubuntu-latest
@@ -320,7 +332,7 @@ jobs:
   # GateResult 汇总器（只读阶段）。
   # 只有该 job 成功后，后续独立 Merge Bot 才能申请平台自动合并。
   gate-decision:
-    needs: [risk-scan, secret-scan, mr-validate, test-check, go-test, flutter-test, python-test, node-test, java-test, dotnet-test, rust-test, selftest]
+    needs: [yaml-validate, risk-scan, secret-scan, mr-validate, test-check, go-test, flutter-test, python-test, node-test, java-test, dotnet-test, rust-test, selftest]
     if: ${{ always() && github.event.pull_request.draft == false }}
     outputs:
       merge_action: ${{ steps.compute.outputs.merge_action }}
