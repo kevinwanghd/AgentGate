@@ -251,11 +251,35 @@ class CreateMrGitLabApiTests(unittest.TestCase):
 
 class AgentGateCliTests(unittest.TestCase):
     def test_mr_create_delegates_to_create_mr(self) -> None:
-        with mock.patch.object(create_mr, "main", return_value=0) as delegated:
+        captured = []
+
+        def delegate() -> int:
+            captured.extend(sys.argv[1:])
+            return 0
+
+        original_argv = list(sys.argv)
+        with mock.patch.object(create_mr, "main", side_effect=delegate) as delegated:
             rc = agentgate.main(["mr", "create", "--why", "修复广告生命周期问题"])
 
         self.assertEqual(0, rc)
         delegated.assert_called_once()
+        self.assertEqual(["--why", "修复广告生命周期问题"], captured)
+        self.assertEqual(original_argv, sys.argv)
+
+    def test_mr_prepare_is_a_first_class_command(self) -> None:
+        captured = []
+
+        def delegate() -> int:
+            captured.extend(sys.argv[1:])
+            return 0
+
+        original_argv = list(sys.argv)
+        with mock.patch.object(create_mr, "main", side_effect=delegate):
+            rc = agentgate.main(["mr", "prepare", "--why", "修复门禁"])
+
+        self.assertEqual(0, rc)
+        self.assertEqual(["--prepare", "--why", "修复门禁"], captured)
+        self.assertEqual(original_argv, sys.argv)
 
     def test_create_mr_rejects_invalid_generated_description(self) -> None:
         args = mock.Mock(config=None, target_branch="origin/master")
@@ -281,10 +305,70 @@ class GitLabMrCompatTests(unittest.TestCase):
                 gitlab_mr_compat._derive_gitlab_url(args),
             )
 
-    def test_branch_pipeline_validates_open_mr_from_gitlab_api(self) -> None:
-        output = tempfile.NamedTemporaryFile(delete=False)
-        output.close()
-        try:
+    def test_mr_pipeline_prefers_actual_description(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            output = Path(td) / "result.json"
+            env = {
+                "CI_COMMIT_REF_NAME": "fix/bug",
+                "CI_MERGE_REQUEST_DESCRIPTION": "真实描述",
+            }
+            with mock.patch.dict(os.environ, env, clear=True), \
+                    mock.patch.object(
+                        gitlab_mr_compat,
+                        "validate_description",
+                        return_value=[],
+                    ) as validate, \
+                    mock.patch.object(gitlab_mr_compat, "_find_open_mr") as api, \
+                    mock.patch.object(sys, "argv", [
+                        "gitlab_mr_compat.py",
+                        "--target-branch", "master",
+                        "--output", str(output),
+                    ]):
+                rc = gitlab_mr_compat.main()
+
+            self.assertEqual(0, rc)
+            payload = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual("pass", payload["status"])
+            self.assertEqual("gitlab-ci", payload["source"])
+            self.assertTrue(payload["actual_mr_verified"])
+            self.assertIn("description_sha256", payload)
+            validate.assert_called_once()
+            api.assert_not_called()
+
+    def test_empty_actual_mr_description_does_not_fall_back(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            output = Path(td) / "result.json"
+            manifest = Path(td) / "mr-description.md"
+            manifest.write_text("合规清单", encoding="utf-8")
+            env = {
+                "CI_COMMIT_REF_NAME": "fix/bug",
+                "CI_MERGE_REQUEST_DESCRIPTION": "",
+            }
+            with mock.patch.dict(os.environ, env, clear=True), \
+                    mock.patch.object(
+                        gitlab_mr_compat,
+                        "validate_description",
+                        return_value=["缺少 ## 背景 段落"],
+                    ) as validate, \
+                    mock.patch.object(gitlab_mr_compat, "_manifest_changed") as changed, \
+                    mock.patch.object(sys, "argv", [
+                        "gitlab_mr_compat.py",
+                        "--target-branch", "master",
+                        "--manifest-path", str(manifest),
+                        "--output", str(output),
+                    ]):
+                rc = gitlab_mr_compat.main()
+
+            self.assertEqual(1, rc)
+            payload = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual("gitlab-ci", payload["source"])
+            self.assertTrue(payload["actual_mr_verified"])
+            validate.assert_called_once_with("", None, None)
+            changed.assert_not_called()
+
+    def test_explicit_api_fallback_uses_dedicated_read_token(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            output = Path(td) / "result.json"
             mr = {
                 "iid": 25,
                 "description": "Bug",
@@ -295,52 +379,194 @@ class GitLabMrCompatTests(unittest.TestCase):
                 "CI_COMMIT_REF_NAME": "fix/bug",
                 "CI_SERVER_URL": "https://gitlab.example.com",
                 "CI_PROJECT_ID": "123",
-                "GOVERNANCE_MR_VALIDATE_TOKEN": "token",
+                "AGENTGATE_GITLAB_READ_TOKEN": "read-token",
             }
-            with mock.patch.dict(os.environ, env, clear=False), \
+            with mock.patch.dict(os.environ, env, clear=True), \
                     mock.patch.object(create_mr, "_gitlab_api_request", return_value=[mr]) as api, \
                     mock.patch.object(gitlab_mr_compat, "validate_description", return_value=["缺少 ## 背景 段落"]), \
                     mock.patch.object(sys, "argv", [
                         "gitlab_mr_compat.py",
+                        "--allow-api-fallback",
                         "--target-branch", "master",
                         "--diff-base", "origin/master",
-                        "--output", output.name,
+                        "--output", str(output),
                     ]):
                 rc = gitlab_mr_compat.main()
 
             self.assertEqual(1, rc)
-            payload = json.loads(Path(output.name).read_text(encoding="utf-8"))
+            payload = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual("fail", payload["status"])
             self.assertEqual(25, payload["iid"])
+            self.assertEqual("gitlab-api", payload["source"])
+            self.assertTrue(payload["actual_mr_verified"])
             api.assert_called_once()
-        finally:
-            os.unlink(output.name)
 
-    def test_branch_pipeline_skips_without_token_by_default(self) -> None:
-        output = tempfile.NamedTemporaryFile(delete=False)
-        output.close()
-        try:
+    def test_branch_pipeline_uses_current_manifest_without_any_api_call(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            output = Path(td) / "result.json"
+            manifest = Path(td) / "mr-description.md"
+            manifest.write_text(
+                "## 背景\n\n修复旧版流水线无法读取合并请求描述的问题。\n\n"
+                "## 变更内容\n\n增加仓库内描述清单作为门禁输入。\n\n"
+                "## 自测确认\n\n已运行回归测试并确认全部通过。\n",
+                encoding="utf-8",
+            )
             env = {
                 "CI_COMMIT_REF_NAME": "fix/bug",
-                "CI_SERVER_URL": "https://gitlab.example.com",
-                "CI_PROJECT_ID": "123",
-                "GOVERNANCE_MR_VALIDATE_TOKEN": "",
-                "AGENTGATE_GITLAB_TOKEN": "",
-                "GOVERNANCE_MERGE_BOT_TOKEN": "",
+                "GOVERNANCE_MERGE_BOT_TOKEN": "must-not-be-used",
+                "PRIVATE_TOKEN": "must-not-be-used",
             }
-            with mock.patch.dict(os.environ, env, clear=False), \
+            with mock.patch.dict(os.environ, env, clear=True), \
+                    mock.patch.object(
+                        gitlab_mr_compat,
+                        "_manifest_changed",
+                        return_value=True,
+                    ), \
+                    mock.patch.object(gitlab_mr_compat, "validate_description", return_value=[]) as validate, \
+                    mock.patch.object(gitlab_mr_compat, "_find_open_mr") as api, \
                     mock.patch.object(sys, "argv", [
                         "gitlab_mr_compat.py",
                         "--target-branch", "master",
-                        "--output", output.name,
+                        "--diff-base", "origin/master",
+                        "--manifest-path", str(manifest),
+                        "--output", str(output),
                     ]):
                 rc = gitlab_mr_compat.main()
 
             self.assertEqual(0, rc)
-            payload = json.loads(Path(output.name).read_text(encoding="utf-8"))
+            payload = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual("pass", payload["status"])
+            self.assertEqual("repository-manifest", payload["source"])
+            self.assertFalse(payload["actual_mr_verified"])
+            self.assertEqual(str(manifest).replace("\\", "/"), payload["manifest_path"])
+            validate.assert_called_once()
+            api.assert_not_called()
+
+    def test_branch_pipeline_rejects_stale_repository_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            output = Path(td) / "result.json"
+            manifest = Path(td) / "mr-description.md"
+            manifest.write_text("## 背景\n\n旧内容。\n", encoding="utf-8")
+            env = {
+                "CI_COMMIT_REF_NAME": "fix/bug",
+            }
+            with mock.patch.dict(os.environ, env, clear=True), \
+                    mock.patch.object(gitlab_mr_compat, "_manifest_changed", return_value=False), \
+                    mock.patch.object(sys, "argv", [
+                        "gitlab_mr_compat.py",
+                        "--target-branch", "master",
+                        "--diff-base", "origin/master",
+                        "--manifest-path", str(manifest),
+                        "--output", str(output),
+                    ]):
+                rc = gitlab_mr_compat.main()
+
+            self.assertEqual(1, rc)
+            payload = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual("fail", payload["status"])
+            self.assertIn("was not changed", payload["reason"])
+
+    def test_missing_manifest_fails_without_implicit_api_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            output = Path(td) / "result.json"
+            missing = Path(td) / "missing.md"
+            env = {
+                "CI_COMMIT_REF_NAME": "fix/bug",
+                "CI_SERVER_URL": "https://gitlab.example.com",
+                "CI_PROJECT_ID": "123",
+                "GOVERNANCE_MERGE_BOT_TOKEN": "merge-token",
+                "PRIVATE_TOKEN": "personal-token",
+            }
+            with mock.patch.dict(os.environ, env, clear=True), \
+                    mock.patch.object(gitlab_mr_compat, "_find_open_mr") as api, \
+                    mock.patch.object(sys, "argv", [
+                        "gitlab_mr_compat.py",
+                        "--target-branch", "master",
+                        "--manifest-path", str(missing),
+                        "--output", str(output),
+                    ]):
+                rc = gitlab_mr_compat.main()
+
+            self.assertEqual(1, rc)
+            payload = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual("fail", payload["status"])
+            self.assertIn("API fallback is disabled", payload["reason"])
+            api.assert_not_called()
+
+    def test_api_fallback_rejects_merge_or_personal_tokens(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            output = Path(td) / "result.json"
+            env = {
+                "CI_COMMIT_REF_NAME": "fix/bug",
+                "CI_SERVER_URL": "https://gitlab.example.com",
+                "CI_PROJECT_ID": "123",
+                "GOVERNANCE_MERGE_BOT_TOKEN": "merge-token",
+                "PRIVATE_TOKEN": "personal-token",
+            }
+            with mock.patch.dict(os.environ, env, clear=True), \
+                    mock.patch.object(create_mr, "_gitlab_api_request") as api, \
+                    mock.patch.object(sys, "argv", [
+                        "gitlab_mr_compat.py",
+                        "--allow-api-fallback",
+                        "--target-branch", "master",
+                        "--manifest-path", str(Path(td) / "missing.md"),
+                        "--output", str(output),
+                    ]):
+                rc = gitlab_mr_compat.main()
+
+            self.assertEqual(1, rc)
+            payload = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual("fail", payload["status"])
+            self.assertIn("AGENTGATE_GITLAB_READ_TOKEN", payload["reason"])
+            api.assert_not_called()
+
+    def test_allow_missing_description_is_explicit(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            output = Path(td) / "result.json"
+            env = {
+                "CI_COMMIT_REF_NAME": "fix/bug",
+            }
+            with mock.patch.dict(os.environ, env, clear=True), \
+                    mock.patch.object(sys, "argv", [
+                        "gitlab_mr_compat.py",
+                        "--allow-missing-description",
+                        "--target-branch", "master",
+                        "--manifest-path", str(Path(td) / "missing.md"),
+                        "--output", str(output),
+                    ]):
+                rc = gitlab_mr_compat.main()
+
+            self.assertEqual(0, rc)
+            payload = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual("skip", payload["status"])
-        finally:
-            os.unlink(output.name)
+
+    def test_target_branch_pipeline_skips_description_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            output = Path(td) / "result.json"
+            with mock.patch.dict(
+                os.environ,
+                {"CI_COMMIT_REF_NAME": "master"},
+                clear=True,
+            ), mock.patch.object(sys, "argv", [
+                "gitlab_mr_compat.py",
+                "--target-branch", "master",
+                "--output", str(output),
+            ]):
+                rc = gitlab_mr_compat.main()
+
+            self.assertEqual(0, rc)
+            payload = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual("skip", payload["status"])
+
+
+class CreateMrManifestTests(unittest.TestCase):
+    def test_writes_description_manifest_and_parent_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            target = Path(td) / ".agentgate" / "mr-description.md"
+            written = create_mr.write_description_manifest(str(target), "## 背景\n\n修复问题。\n")
+
+            self.assertEqual(target, written)
+            self.assertEqual("## 背景\n\n修复问题。\n", target.read_text(encoding="utf-8"))
 
 
 class CreateMrSubmitFallbackTests(unittest.TestCase):

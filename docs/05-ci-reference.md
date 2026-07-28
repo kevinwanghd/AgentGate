@@ -131,13 +131,18 @@
 
 ## mr-validate 做了什么
 
-1. 读取 MR 描述（通过 GitLab API 或 CI 变量）。
+1. 按平台能力读取描述：
+   - MR pipeline：读取 `CI_MERGE_REQUEST_DESCRIPTION`，标记 `actual_mr_verified=true`。
+   - 旧版 branch pipeline：读取当前分支提交的 `.agentgate/mr-description.md`，并要求该文件相对目标分支已更新。
+   - 仅在显式传入 `--allow-api-fallback` 时，使用专用只读变量 `AGENTGATE_GITLAB_READ_TOKEN` 查询项目接口。
 2. 检查 MR 描述含 3 个必填段落：`## 背景`、`## 变更内容`、`## 自测确认`。
 3. **AI-Usage 不从描述读**：优先从本次 MR 的 commit trailer 读取（由 `collect_ai_usage.py` 在提交时自动写入）；trailer 缺失时退回看描述（兼容老 MR），并提示安装 hook。
 4. 判断是否"大变更"，是则要求 `## 风险与回滚`。
 5. v1 软模式：缺失项只打 `[warn]`，job 仍绿；`soft_deadline` 后转硬阻断。
 
 > 该 job 设 `GIT_DEPTH: 0`，以便读取完整 commit 历史里的 AI-Usage trailer。
+>
+> branch pipeline 默认不会读取个人 PAT、`PRIVATE_TOKEN` 或 `GOVERNANCE_MERGE_BOT_TOKEN`。分支清单只能证明规范内容已随代码提交，无法证明 GitLab 网页描述与清单一致，因此结果会明确写入 `actual_mr_verified=false`。
 
 软模式期内输出示例：
 

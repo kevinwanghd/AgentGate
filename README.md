@@ -130,6 +130,20 @@ GitLab 接入后会新增 `governance:gate-decision` 与 `governance:auto-merge`
 - GitLab 自动合并 token 必须放在受保护/Masked 变量 `GOVERNANCE_MERGE_BOT_TOKEN` 中；
 - Merge Bot token 应来自独立 Bot/Project Access Token，开发 agent 不应拥有主干写权限或合并权限。
 
+### 旧版 GitLab 的 MR 描述门禁
+
+GitLab 11.x 的 branch pipeline 通常拿不到 MR 描述。AgentGate 不再要求每位开发者配置 Personal Access Token，而是校验分支内的 `.agentgate/mr-description.md`：
+
+```bash
+python governance/scripts/agentgate.py mr prepare \
+  --why "<用中文说明任务背景>"
+
+git add .agentgate/mr-description.md
+git commit -m "docs: prepare merge request description"
+```
+
+CI 会确认该文件由当前分支修改过，再按正常 MR 规范校验。现代 GitLab 的 MR pipeline 仍直接校验真实 MR 描述；GitLab API 只保留为可选回退，不再依赖个人 PAT。手工创建 MR 时，将清单内容粘贴到 GitLab 描述框。
+
 ### 留痕与审计
 
 每次提交自动记录:
@@ -179,9 +193,9 @@ AgentGate 包含 14 个 Python 脚本(在 `scripts/` 目录):
 | `run_affected_tests.py` | Go 受影响包测试 + 反向依赖一跳扩展 |
 | `collect_ai_usage.py` | AI 用量统计(读证据,算占比,盖 trailer) |
 | `record_test_run.py` | 记录测试运行(盖 Tested trailer) |
-| `create_mr.py` | 自动生成 MR(从 commit 提取信息)，支持 GitLab API v4 预检和创建/更新 MR |
-| `agentgate.py` | 统一 CLI 入口，推荐 AI agent 使用 `agentgate.py mr create` 创建 MR |
-| `gitlab_mr_compat.py` | GitLab CE 11.4 兼容校验：branch pipeline 反查 open MR 并校验描述 |
+| `create_mr.py` | 自动生成 MR(从 commit 提取信息)，支持生成分支 MR 描述清单 |
+| `agentgate.py` | 统一 CLI 入口；`mr prepare` 准备清单，`mr create` 提交 MR |
+| `gitlab_mr_compat.py` | GitLab CE 11.x 兼容校验：CI 实际描述 → 当前分支清单 → 显式只读 API 回退 |
 | `gitlab_controller.py` | GitLab 11.4 外部 Controller 最小版，检查 Bot/API/保护分支/目标策略并创建 MR |
 | `evidence_bundle.py` | 生成 Evidence Plan/Bundle v2，校验证据与 source/target/merge/policy/profile 绑定 |
 | `risk_merge_decision.py` | 基于证据包做风险分级、审批校验、自动合并动作和审计记录 |

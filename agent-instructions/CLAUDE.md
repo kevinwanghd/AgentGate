@@ -5,13 +5,16 @@
 所有 AI agent 创建 MR 时必须走统一入口，不允许手写空描述或绕过本地校验：
 
 ```bash
-python governance/scripts/agentgate.py mr create --why "<用中文说明本次任务背景>"
+python governance/scripts/agentgate.py mr prepare \
+  --why "<用中文说明本次任务背景>"
 ```
 
 兼容旧安装时可使用等价命令：
 
 ```bash
-python governance/scripts/create_mr.py --why "<用中文说明本次任务背景>"
+python governance/scripts/create_mr.py \
+  --prepare \
+  --why "<用中文说明本次任务背景>"
 ```
 
 该命令会先生成规范 MR 描述并本地运行 AgentGate 描述校验；校验失败时必须修复描述、测试记录或风险回滚说明，不允许改低门禁或直接去 GitLab 页面手工创建不规范 MR。
@@ -29,7 +32,7 @@ python governance/scripts/create_mr.py --why "<用中文说明本次任务背景
 3. **风险扫描**：对照 `docs/governance/risk-types.md` 扫描自己的 diff
 4. **补注解**：命中风险模式的代码，在上方加 `risk:*` 注解
 5. **提交**：`AI-Usage` 和 `Tested` trailer 由 git hook 自动写入，**你不需要手填**
-6. **创建 MR**：调 `create_mr.py --why "<任务背景>"` 自动生成并提交（见下方"自动创建 MR"），**不要手填 MR 描述**
+6. **准备 MR**：调 `agentgate.py mr prepare --why "<任务背景>"` 自动生成可提交的描述清单，**不要手填 MR 描述**
 
 ---
 
@@ -37,10 +40,13 @@ python governance/scripts/create_mr.py --why "<用中文说明本次任务背景
 
 **重要：所有MR描述必须使用中文撰写。**
 
-你完成任务时已经知道"为什么改、改了什么、怎么测的"——这些信息开发时就有了，不该让你再对着空模板回忆手填。提交完 commit 后，用一条命令自动生成并提交 MR：
+你完成任务时已经知道"为什么改、改了什么、怎么测的"——这些信息开发时就有了，不该让你再对着空模板回忆手填。提交完代码 commit 后，生成旧版 GitLab branch pipeline 可校验的描述清单：
 
 ```bash
-python governance/scripts/create_mr.py --why "<从用户原始需求提取的任务背景，用中文描述>"
+python governance/scripts/agentgate.py mr prepare \
+  --why "<从用户原始需求提取的任务背景，用中文描述>"
+git add .agentgate/mr-description.md
+git commit -m "docs: prepare merge request description"
 ```
 
 脚本自动拼装 MR 描述（所有内容均为中文）：
@@ -50,7 +56,7 @@ python governance/scripts/create_mr.py --why "<从用户原始需求提取的任
 - **## 风险与回滚** ← 自动判断大变更/敏感路径/schema（中文描述）
 - **治理元数据**（AI-Usage / Tested 等）← 从 commit trailer 读，放折叠块
 
-提交前可加 `--dry-run` 预览描述。你**只需提供 `--why`（中文）**，其余全自动。
+提交前可加 `--dry-run` 预览描述。你**只需提供 `--why`（中文）**，其余全自动。手工创建 MR 时将 `.agentgate/mr-description.md` 原文粘贴到描述框；门禁本身不需要个人 PAT。
 
 ---
 
@@ -245,6 +251,6 @@ Requirement-ID: REQ-1234        (有需求时填，可选)
 | `governance/scripts/collect_ai_usage.py` | 汇总 AI 证据、自动算 AI-Usage trailer |
 | `governance/scripts/record_test_run.py` | 包装并记录测试运行，留痕到 test-evidence.jsonl |
 | `governance/scripts/check_tested.py` | 检测改动的生产代码是否做过测试 |
-| `governance/scripts/create_mr.py` | 自动生成并提交 MR（AI 只传 --why） |
+| `governance/scripts/create_mr.py` | 自动生成 MR 描述清单并可提交 MR（AI 只传 --why） |
 | `governance/scripts/install-hooks.sh` | 安装提交时自动写 trailer 的 git hook |
 | `.governance/ai-evidence.jsonl` | 你开发时追加证据的文件（已 gitignore） |

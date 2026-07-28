@@ -132,15 +132,11 @@ governance:mr-validate-compat:
       CONFIG_ARG=""
       [ -f "${GOVERNANCE_CONFIG_PATH:-governance/governance.config.yml}" ] \
         && CONFIG_ARG="--config ${GOVERNANCE_CONFIG_PATH:-governance/governance.config.yml}"
-      STRICT_ARGS=""
-      [ "${GOVERNANCE_MR_VALIDATE_STRICT:-}" = "true" ] \
-        && STRICT_ARGS="--fail-if-no-token --fail-if-no-mr"
       python governance/scripts/gitlab_mr_compat.py \
         --diff-base "$BASE" \
         --target-branch "$TB" \
         --output governance-mr-validate-result.json \
-        $CONFIG_ARG \
-        $STRICT_ARGS
+        $CONFIG_ARG
   artifacts:
     when: always
     paths:

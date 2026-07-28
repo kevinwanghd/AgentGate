@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **GitLab 11.x MR 描述门禁不再依赖个人 PAT** — branch pipeline 优先校验当前分支提交的 `.agentgate/mr-description.md`，并要求该文件相对目标分支已更新；GitLab API 降为可选回退。
+- **新增 `agentgate.py mr prepare`** — 自动生成、校验并写入 MR 描述清单，供旧版 GitLab CI 和手工创建 MR 共同使用。
+- **目标分支流水线自动跳过 MR 描述校验** — `master/main` 自身没有对应 MR，不再因缺少 MR 描述误报失败。
+- **API 回退改为显式最小权限** — 默认不访问项目接口；启用时只读取专用 `AGENTGATE_GITLAB_READ_TOKEN`，不再接受个人 token、`PRIVATE_TOKEN` 或 Merge Bot token。
+- **描述证据标注真实性** — 结果文件写入 `actual_mr_verified` 和描述摘要，区分“真实 MR 已验证”与“仅分支清单已验证”。
+
+---
+
 ## [1.3.0] - 2026-07-22
 
 ### Added

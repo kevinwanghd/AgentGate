@@ -2,19 +2,24 @@
 
 ## 强制 MR 入口
 
-所有 AI agent 创建 MR 时必须走统一入口，不允许手写空描述或绕过本地校验：
+所有 AI agent 创建 MR 时必须走统一入口，不允许手写空描述或绕过本地校验。旧版 GitLab 在推送前先生成可提交的描述清单：
 
 ```bash
-python governance/scripts/agentgate.py mr create --why "<用中文说明本次任务背景>"
+python governance/scripts/agentgate.py mr prepare \
+  --why "<用中文说明本次任务背景>"
+git add .agentgate/mr-description.md
+git commit -m "docs: prepare merge request description"
 ```
 
 兼容旧安装时可使用等价命令：
 
 ```bash
-python governance/scripts/create_mr.py --why "<用中文说明本次任务背景>"
+python governance/scripts/create_mr.py \
+  --prepare \
+  --why "<用中文说明本次任务背景>"
 ```
 
-该命令会先生成规范 MR 描述并本地运行 AgentGate 描述校验；校验失败时必须修复描述、测试记录或风险回滚说明，不允许改低门禁或直接去 GitLab 页面手工创建不规范 MR。
+该命令会先生成规范 MR 描述并本地运行 AgentGate 描述校验。CI 校验提交到分支的 `.agentgate/mr-description.md`，不依赖开发者 Personal Access Token。校验失败时必须修复描述、测试记录或风险回滚说明。
 
 所有 AI agent 在本仓库提交代码时必须走 AgentGate 流程。不要手写 commit trailer，不要手写单行 MR 描述，不要绕过本地校验。
 
@@ -27,13 +32,14 @@ python governance/scripts/create_mr.py --why "<用中文说明本次任务背景
 
 ## MR 前
 
-MR 描述必须由 `governance/scripts/create_mr.py` 生成，一条命令完成：
+MR 描述必须由 AgentGate 统一入口生成：
 
 ```bash
-python governance/scripts/create_mr.py --why "<从用户原始需求提取的任务背景>"
+python governance/scripts/agentgate.py mr prepare \
+  --why "<从用户原始需求提取的任务背景>"
 ```
 
-脚本自动生成规范描述并提交 MR，你只需提供 `--why`。不要手写 MR 描述，不要用单行描述。
+脚本自动生成规范描述清单，你只需提供 `--why`。将清单与代码一起提交并推送；手工创建 MR 时将清单原文粘贴到描述框。
 
 ## CI 兜底
 

@@ -20,6 +20,9 @@ create_mr.py — 自动生成并提交 MR (描述从 git/trailer/测试证据自
     # 仅生成描述不提交 (预览 / 测试)
     python create_mr.py --why "..." --dry-run
 
+    # 旧版 GitLab: 生成供 branch pipeline 校验的分支清单
+    python create_mr.py --prepare --why "..."
+
     # 人工补充更多段落
     python create_mr.py --why "..." --what "调整超时为30s" --tested "本地模拟延迟测试" \\
         --excludes "未改退款逻辑" --link "REQ-1234"
@@ -35,6 +38,7 @@ import argparse
 import fnmatch
 import json
 import os
+from pathlib import Path
 import re
 import shutil
 import subprocess
@@ -54,6 +58,7 @@ except Exception:  # pragma: no cover
 
 
 EVIDENCE_PATH = ".governance/test-evidence.jsonl"
+DEFAULT_DESCRIPTION_MANIFEST = ".agentgate/mr-description.md"
 
 DEFAULT_CONFIG = {
     "large_change": {
@@ -452,6 +457,14 @@ def validate_generated_description(description: str, args) -> int:
     return 1
 
 
+def write_description_manifest(path: str, description: str) -> Path:
+    """Write the branch-owned MR description used by legacy GitLab CI."""
+    manifest = Path(path)
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(description, encoding="utf-8")
+    return manifest
+
+
 # ============================================================
 # 提交 MR
 # ============================================================
@@ -645,6 +658,16 @@ def main() -> int:
     ap.add_argument("--meta-style", choices=["details", "section", "comment"],
                     default="details", help="治理元数据呈现方式")
     ap.add_argument("--dry-run", action="store_true", help="只打印描述, 不提交")
+    ap.add_argument(
+        "--prepare",
+        action="store_true",
+        help="生成并校验分支内的 MR 描述清单后退出",
+    )
+    ap.add_argument(
+        "--manifest-path",
+        default=DEFAULT_DESCRIPTION_MANIFEST,
+        help=f"MR 描述清单路径 (默认 {DEFAULT_DESCRIPTION_MANIFEST})",
+    )
     ap.add_argument("--interactive", action="store_true",
                     help="生成草稿后打开编辑器, 保存后再提交")
     ap.add_argument("--gitlab-api", action="store_true",
@@ -724,6 +747,12 @@ def main() -> int:
         rc = validate_generated_description(description, args)
         if rc != 0:
             return rc
+
+    if args.prepare:
+        manifest = write_description_manifest(args.manifest_path, description)
+        print(f"[create-mr] 已生成 MR 描述清单: {manifest.as_posix()}")
+        print("[create-mr] 请将该文件与代码一起提交后再推送。")
+        return 0
 
     if args.dry_run:
         print(f"# [DRY-RUN] 标题: {title}\n# 目标分支: {args.target_branch}\n")
