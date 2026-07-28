@@ -56,16 +56,24 @@ git add . && git commit -m "chore: 接入 AgentGate 治理" && git push
 
 ## 🔍 这套工具做什么
 
-### 6 项自动检查(CI 跑)
+### 12 项自动检查(CI 跑)
 
 | 检查 | 做什么 | 拦什么 |
 |---|---|---|
-| **risk-scan** | 扫描 8 类内置风险模式 + 语言专属规则包(Go 为 10 条 warn 规则) + 自定义规则；warn 命中写 Job Summary | 硬编码 ID/密钥、SQL 拼接、认证绕过等 |
+| **risk-scan** | 扫描 8 类内置风险模式 + 语言专属规则包 + 自定义规则；warn 命中写 Job Summary | 硬编码 ID/密钥、SQL 拼接、认证绕过等 |
 | **secret-scan** | gitleaks 检测密钥泄露 | 私钥、API token、数据库连接串 |
 | **test-check** | 验证测试覆盖 | 改了生产代码但没测试痕迹 |
 | **mr-validate** | 校验 MR 描述格式（**必须使用中文**）；大 PR 写拆分建议到 Job Summary | 缺背景/变更内容/自测确认段落，或未使用中文撰写 |
-| **go-test** | 对受影响 Go 包（含反向依赖一跳）跑 `go test`；非 Go 仓库自动跳过 | 直接/间接受影响包测试失败 |
+| **go-test** | 受影响 Go 包（含反向依赖一跳）跑 `go test`；**无 go.mod 自动跳过** | 直接/间接受影响包测试失败 |
+| **flutter-test** | 递归查找 `pubspec.yaml`，在各 Flutter 子目录跑 `flutter test`；**无 pubspec.yaml 自动跳过** | Flutter 测试失败 |
+| **python-test** | 递归查找 `requirements.txt/pyproject.toml/setup.py`，跑 `pytest`；**无标记文件自动跳过** | Python 测试失败 |
+| **node-test** | 递归查找 `package.json`，跑 `npm test`；**无 package.json 自动跳过** | Node.js/TypeScript 测试失败 |
+| **java-test** | 递归查找 `pom.xml/build.gradle`，跑 `mvn test` 或 `gradle test`；**无标记文件自动跳过** | Java 测试失败 |
+| **dotnet-test** | 递归查找 `*.sln/*.csproj`，跑 `dotnet test`；**无标记文件自动跳过** | .NET/C# 测试失败 |
+| **rust-test** | 查找 `Cargo.toml`，跑 `cargo test`（根目录优先含 workspace）；**无标记文件自动跳过** | Rust 测试失败 |
 | **selftest** | 工具自检 | 确保脚本本身没 bug(仅 AgentGate 仓库) |
+
+所有语言测试 job 支持 monorepo：递归查找最深 3 层，找到多个子目录时逐一运行，任意一个失败则整个 job 失败。不适用的语言自动 skip，不阻断合并。
 
 ### 本地自动化
 
@@ -221,7 +229,13 @@ auto_merge:
     - test-check
     - go-test
   language_checks:        # 这些 job 未触发（missing）或返回 skip 时均视为通过
-    - go-test             # 扩展其他语言：flutter-test/dotnet-test/rust-test 等
+    - go-test
+    - flutter-test
+    - python-test
+    - node-test
+    - java-test
+    - dotnet-test
+    - rust-test
 ```
 
 ---

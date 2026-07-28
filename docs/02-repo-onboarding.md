@@ -172,6 +172,41 @@ include:
 >     file: '/ci/governance-ci.yml'
 > ```
 
+## B5. 按语言配置（开箱即用，无需额外操作）
+
+AgentGate 内置 7 个语言测试 job，**全部默认启用**。每个 job 在运行时自动用 `find -maxdepth 3` 检测标记文件，找不到就写 skip，不阻断合并。你不需要为每种语言单独配置。
+
+| 你的项目语言 | 标记文件 | CI 行为 |
+|---|---|---|
+| Go | `go.mod` | `go-test` 运行，其余语言 job 自动 skip |
+| Flutter/Dart | `pubspec.yaml` | `flutter-test` 运行 |
+| Python | `requirements.txt` / `pyproject.toml` / `setup.py` | `python-test` 运行 |
+| Node.js/TypeScript | `package.json` | `node-test` 运行 |
+| Java | `pom.xml` / `build.gradle` | `java-test` 运行 |
+| .NET/C# | `*.sln` / `*.csproj` | `dotnet-test` 运行 |
+| Rust | `Cargo.toml` | `rust-test` 运行 |
+| 多语言 monorepo | 多个标记文件共存 | 对应的多个 job 都运行 |
+
+**Monorepo 说明**：标记文件不必在仓库根目录，`find -maxdepth 3` 会递归查找最深 3 层。例如 `backend/requirements.txt`、`frontend/package.json` 都能被正确检测到。如果你的项目嵌套超过 3 层，可以在 CI 变量里设置 `GOVERNANCE_SKIP_*=true` 跳过该语言的全局 job，改为在自己的 CI 里单独处理。
+
+**语言专属风险规则**：除了测试 job，AgentGate 还提供语言专属的静态扫描规则包。在 `governance/config.yml` 里按需启用：
+
+```yaml
+risk_annotations:
+  pattern_includes:
+    - governance/patterns/go.yml          # Go
+    - governance/patterns/dart.yml        # Flutter/Dart
+    - governance/patterns/python.yml      # Python
+    - governance/patterns/javascript.yml  # JavaScript/TypeScript
+    - governance/patterns/java.yml        # Java
+    - governance/patterns/csharp.yml      # C#/.NET
+  registered_types:
+    # 把 pattern 文件里列出的 type 名称加到这里
+    - hardcoded-secret
+    - sql-injection
+    - ...
+```
+
 ---
 
 # C. 提交 MR 合入

@@ -14,7 +14,13 @@
 | `governance:secret-scan` | gitleaks 密钥扫描 | **硬阻断** | `false` |
 | `governance:mr-validate` | 校验 MR 描述必填段落 + 读 AI-Usage trailer | **软警告** | `false`* |
 | `governance:test-check` | 改动的生产代码是否做过测试（读 Tested trailer） | **软警告** / 失败测试硬拦 | `false`* |
-| `governance:go-test` | 对受影响 Go 包跑 `go test`；**无 go.mod 时自动跳过**（返回 skip） | **硬阻断** | `false` |
+| `governance:go-test` | 受影响 Go 包跑 `go test`；**无 go.mod 自动 skip** | **硬阻断** | `false` |
+| `governance:flutter-test` | 递归查找 `pubspec.yaml`，跑 `flutter test`；**无标记文件自动 skip** | **硬阻断** | `false` |
+| `governance:python-test` | 递归查找 `requirements.txt/pyproject.toml/setup.py`，跑 `pytest`；**无标记文件自动 skip** | **硬阻断** | `false` |
+| `governance:node-test` | 递归查找 `package.json`，跑 `npm test`；**无标记文件自动 skip** | **硬阻断** | `false` |
+| `governance:java-test` | 递归查找 `pom.xml/build.gradle`，跑 `mvn/gradle test`；**无标记文件自动 skip** | **硬阻断** | `false` |
+| `governance:dotnet-test` | 递归查找 `*.sln/*.csproj`，跑 `dotnet test`；**无标记文件自动 skip** | **硬阻断** | `false` |
+| `governance:rust-test` | 查找 `Cargo.toml`，跑 `cargo test`；**无标记文件自动 skip** | **硬阻断** | `false` |
 | `governance:gate-decision` | 汇总以上所有检查结果，生成 GateResult；决定是否可以自动合并 | **硬阻断** | `false` |
 | `governance:auto-merge` | GateResult=AUTO_MERGE 时自动合并 MR | — | — |
 | `governance:expired-report` | 过期注解周报（定时/手动） | 不阻断 | `true` |
@@ -26,19 +32,35 @@
 
 ### 语言特定 job 的 skip 机制
 
-`go-test` 是语言特定 job：在非 Go 仓库（无 `go.mod`）中，job 会自动写 `{"status": "skip"}` 并以 exit 0 退出，`gate-decision` 将 `skip` 视为通过，不阻断合并。
+所有语言测试 job 共用同一套逻辑：
 
-**添加其他语言的测试 job**（如 Flutter、.NET）时遵循同样模式：检测各自的标记文件（`pubspec.yaml`、`.csproj`），不存在则写 skip。然后同时更新 `governance.config.yml` 的 `required_checks` 和 `language_checks`：
+1. 用 `find -maxdepth 3` 递归查找标记文件
+2. 找不到 → 写 `{"status": "skip"}` → exit 0
+3. 找到 → 在每个目录里运行测试 → 写 `{"status": "pass/fail"}`
+4. `gate-decision` 将 `skip` 和 `missing`（job 未触发）均视为通过，`fail` 才阻断
 
-```yaml
-auto_merge:
-  required_checks:
-    - go-test
-    - flutter-test    # 新增
-  language_checks:
-    - go-test
-    - flutter-test    # 新增，missing 时也视为 skip
+**Monorepo 支持**：同一仓库存在多个语言子目录时，对应 job 会逐一进入每个目录运行测试，任意子目录失败则整个 job 失败。
+
 ```
+仓库根目录
+├── backend/requirements.txt   ← python-test 在此跑 pytest
+├── frontend/package.json      ← node-test 在此跑 npm test
+└── mobile/pubspec.yaml        ← flutter-test 在此跑 flutter test
+```
+
+**各语言标记文件一览**：
+
+| Job | 标记文件 | 测试命令 |
+|---|---|---|
+| go-test | `go.mod` | `go test ./...`（受影响包） |
+| flutter-test | `pubspec.yaml` | `flutter test` |
+| python-test | `requirements.txt` / `pyproject.toml` / `setup.py` | `pytest` |
+| node-test | `package.json` | `npm test` |
+| java-test | `pom.xml` / `build.gradle` / `build.gradle.kts` | `mvn test` / `gradle test` |
+| dotnet-test | `*.sln` / `*.csproj` | `dotnet test`（优先 .sln） |
+| rust-test | `Cargo.toml` | `cargo test`（根目录优先含 workspace） |
+
+每个 job 也支持 `GOVERNANCE_SKIP_*=true` 环境变量强制跳过（Bazel 等特殊构建场景）。
 
 ---
 
