@@ -23,7 +23,7 @@ stages:
 # ── 1. 风险扫描: 硬阻断 ──────────────────────────────────────────────────────
 governance:risk-scan:
   stage: governance
-  image: python:3.11-slim
+  image: python:3.11
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH
@@ -40,6 +40,14 @@ governance:risk-scan:
       CONFIG_PATH="${GOVERNANCE_CONFIG_PATH:-governance/governance.config.yml}"
       [ -f "$CONFIG_PATH" ] && CONFIG_ARG="--config $CONFIG_PATH"
       python governance/scripts/scan_risks.py --diff-base "$BASE" $CONFIG_ARG
+      EXIT_CODE=$?
+      echo "{\"status\": \"$([ $EXIT_CODE -eq 0 ] && echo 'pass' || echo 'fail')\"}" \
+        > governance-risk-scan-result.json
+      exit $EXIT_CODE
+  artifacts:
+    paths:
+      - governance-risk-scan-result.json
+    expire_in: 1 day
   allow_failure: false
 
 # ── 2. 密钥扫描: 硬阻断 ──────────────────────────────────────────────────────
@@ -64,12 +72,20 @@ governance:secret-scan:
         --redact \
         --no-banner \
         --verbose
+      EXIT_CODE=$?
+      echo "{\"status\": \"$([ $EXIT_CODE -eq 0 ] && echo 'pass' || echo 'fail')\"}" \
+        > governance-secret-scan-result.json
+      exit $EXIT_CODE
+  artifacts:
+    paths:
+      - governance-secret-scan-result.json
+    expire_in: 1 day
   allow_failure: false
 
 # ── 3. MR 描述校验: 软→硬 ───────────────────────────────────────────────────
 governance:mr-validate:
   stage: governance
-  image: python:3.11-slim
+  image: python:3.11
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
   variables:
@@ -86,6 +102,14 @@ governance:mr-validate:
         && CONFIG_ARG="--config ${GOVERNANCE_CONFIG_PATH:-governance/governance.config.yml}"
       echo "$CI_MERGE_REQUEST_DESCRIPTION" \
         | python governance/scripts/validate_mr.py --diff-base "$BASE" $CONFIG_ARG
+      EXIT_CODE=$?
+      echo "{\"status\": \"$([ $EXIT_CODE -eq 0 ] && echo 'pass' || echo 'fail')\"}" \
+        > governance-mr-validate-result.json
+      exit $EXIT_CODE
+  artifacts:
+    paths:
+      - governance-mr-validate-result.json
+    expire_in: 1 day
   allow_failure: false
 
 # ── 4. 测试痕迹检测: 软→硬 (失败测试记录无条件硬拦) ──────────────────────────
@@ -93,7 +117,7 @@ governance:mr-validate:
 # 退回读 commit 的 Tested: trailer。
 governance:test-check:
   stage: governance
-  image: python:3.11-slim
+  image: python:3.11
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH
@@ -110,6 +134,14 @@ governance:test-check:
       [ -f "${GOVERNANCE_CONFIG_PATH:-governance/governance.config.yml}" ] \
         && CONFIG_ARG="--config ${GOVERNANCE_CONFIG_PATH:-governance/governance.config.yml}"
       python governance/scripts/check_tested.py --diff-base "$BASE" $CONFIG_ARG
+      EXIT_CODE=$?
+      echo "{\"status\": \"$([ $EXIT_CODE -eq 0 ] && echo 'pass' || echo 'fail')\"}" \
+        > governance-test-check-result.json
+      exit $EXIT_CODE
+  artifacts:
+    paths:
+      - governance-test-check-result.json
+    expire_in: 1 day
   allow_failure: false
 
 # ── 5. 过期注解周报: 仅报告, 不阻断 ─────────────────────────────────────────
@@ -117,7 +149,7 @@ governance:test-check:
 # 也可在 MR 流水线里手动触发 (when: manual) 随时生成快照。
 governance:expired-report:
   stage: governance
-  image: python:3.11-slim
+  image: python:3.11
   rules:
     # 定时 pipeline
     - if: $CI_PIPELINE_SOURCE == "schedule"
@@ -158,6 +190,7 @@ governance:go-test:
       # 仓库没有 go.mod 时静默跳过 (非 Go 仓库)
       if [ ! -f go.mod ]; then
         echo "[go-test] 未找到 go.mod, 跳过 Go 测试。"
+        echo "{\"status\": \"skip\"}" > governance-go-test-result.json
         exit 0
       fi
       TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
@@ -166,12 +199,20 @@ governance:go-test:
       python governance/scripts/run_affected_tests.py \
         --diff-base "$BASE" \
         --timeout "${GOVERNANCE_GO_TEST_TIMEOUT:-120}"
+      EXIT_CODE=$?
+      echo "{\"status\": \"$([ $EXIT_CODE -eq 0 ] && echo 'pass' || echo 'fail')\"}" \
+        > governance-go-test-result.json
+      exit $EXIT_CODE
+  artifacts:
+    paths:
+      - governance-go-test-result.json
+    expire_in: 1 day
   allow_failure: false
 
 # ── 7. GateResult 决策: 汇总 CI 独立证据, 不直接合并 ─────────────────────────
 governance:gate-decision:
   stage: test
-  image: python:3.11-slim
+  image: python:3.11
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
   variables:
@@ -195,13 +236,31 @@ governance:gate-decision:
       POLICY_SHA="$(git rev-parse "${SOURCE_SHA}:${CONFIG_PATH}" 2>/dev/null || echo "$SOURCE_SHA")"
       python - <<'PY' > gate-evidence.json
       import json
+      import os
+
+      def read_check_result(name):
+          """读取前置 job 的结果文件，返回 pass/fail/skip/missing"""
+          path = f"governance-{name}-result.json"
+          if not os.path.exists(path):
+              return "missing"
+          try:
+              with open(path, "r") as f:
+                  data = json.load(f)
+                  return data.get("status", "missing")
+          except Exception as e:
+              print(f"[gate-decision] 警告: 无法解析 {path}: {e}", file=sys.stderr)
+              return "missing"
+
       checks = {
-          "risk-scan": "pass",
-          "secret-scan": "pass",
-          "mr-validate": "pass",
-          "test-check": "pass",
-          "go-test": "pass",
+          "risk-scan":   read_check_result("risk-scan"),
+          "secret-scan": read_check_result("secret-scan"),
+          "mr-validate": read_check_result("mr-validate"),
+          "test-check":  read_check_result("test-check"),
+          "go-test":     read_check_result("go-test"),
       }
+
+      import sys
+      print(f"[gate-decision] 各检查结果: {checks}", file=sys.stderr)
       print(json.dumps({"checks": checks}, ensure_ascii=False))
       PY
       set +e
@@ -228,7 +287,7 @@ governance:gate-decision:
 # ── 8. Merge Bot: 仅消费 GateResult, 使用独立 token 设置 GitLab 自动合并 ─────
 governance:auto-merge:
   stage: merge
-  image: python:3.11-slim
+  image: python:3.11
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
   dependencies:

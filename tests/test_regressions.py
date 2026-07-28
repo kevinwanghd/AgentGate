@@ -235,6 +235,121 @@ class CreateMrGitLabApiTests(unittest.TestCase):
         self.assertEqual("true", calls[1][4]["remove_source_branch"])
 
 
+class CreateMrSubmitFallbackTests(unittest.TestCase):
+    """测试 _submit_with_fallback 的优先级回退链: explicit API > token env > CLI > print"""
+
+    def _args(self, **kwargs):
+        defaults = dict(
+            gitlab_api=False,
+            gitlab_url=None,
+            gitlab_project_id=None,
+            gitlab_token=None,
+            source_branch=None,
+            target_branch="master",
+            remove_source_branch=False,
+        )
+        defaults.update(kwargs)
+        return mock.Mock(**defaults)
+
+    def _clear_env(self):
+        return {k: "" for k in [
+            "AGENTGATE_GITLAB_TOKEN", "AGENTGATE_GITLAB_URL",
+            "AGENTGATE_GITLAB_PROJECT_ID", "CI_SERVER_URL", "CI_PROJECT_ID",
+        ]}
+
+    def test_explicit_gitlab_api_flag_skips_auto_detect(self):
+        """--gitlab-api 显式指定时直接走 API，不走自动检测"""
+        args = self._args(gitlab_api=True)
+        with mock.patch.object(create_mr, "submit_gitlab_api", return_value=0) as api, \
+                mock.patch.object(create_mr, "detect_cli") as cli_detect:
+            rc = create_mr._submit_with_fallback("title", "desc", args)
+        self.assertEqual(0, rc)
+        api.assert_called_once_with("title", "desc", "master", args)
+        cli_detect.assert_not_called()
+
+    def test_auto_api_when_token_env_set(self):
+        """有 AGENTGATE_GITLAB_TOKEN + URL + PROJECT_ID 时自动走 API，无需 --gitlab-api"""
+        args = self._args()
+        env = {
+            "AGENTGATE_GITLAB_TOKEN": "tok",
+            "AGENTGATE_GITLAB_URL": "https://gitlab.example.com",
+            "AGENTGATE_GITLAB_PROJECT_ID": "group/proj",
+        }
+        with mock.patch.dict(os.environ, env, clear=False), \
+                mock.patch.object(create_mr, "submit_gitlab_api", return_value=0) as api, \
+                mock.patch.object(create_mr, "detect_cli") as cli_detect:
+            rc = create_mr._submit_with_fallback("title", "desc", args)
+        self.assertEqual(0, rc)
+        api.assert_called_once()
+        cli_detect.assert_not_called()
+
+    def test_no_api_without_token(self):
+        """无 token 时不走 API，继续向下回退"""
+        args = self._args()
+        with mock.patch.dict(os.environ, self._clear_env(), clear=False), \
+                mock.patch.object(create_mr, "submit_gitlab_api") as api, \
+                mock.patch.object(create_mr, "detect_cli", return_value="glab"), \
+                mock.patch.object(create_mr, "submit_mr", return_value=0):
+            rc = create_mr._submit_with_fallback("title", "desc", args)
+        api.assert_not_called()
+        self.assertEqual(0, rc)
+
+    def test_falls_back_to_cli_when_no_token(self):
+        """无 token 但有 glab CLI 时走 CLI"""
+        args = self._args()
+        with mock.patch.dict(os.environ, self._clear_env(), clear=False), \
+                mock.patch.object(create_mr, "detect_cli", return_value="glab"), \
+                mock.patch.object(create_mr, "submit_mr", return_value=0) as cli_submit:
+            rc = create_mr._submit_with_fallback("title", "desc", args)
+        self.assertEqual(0, rc)
+        cli_submit.assert_called_once_with("title", "desc", "master", "glab")
+
+    def test_falls_back_to_print_when_no_token_no_cli(self):
+        """无 token 无 CLI 时降级打印，返回 1"""
+        args = self._args()
+        with mock.patch.dict(os.environ, self._clear_env(), clear=False), \
+                mock.patch.object(create_mr, "detect_cli", return_value=None), \
+                mock.patch.object(create_mr, "current_branch", return_value="feat/x"):
+            rc = create_mr._submit_with_fallback("title", "desc", args)
+        self.assertEqual(1, rc)
+
+    def test_fallback_print_includes_mr_url_when_gitlab_url_known(self):
+        """降级时若有 GITLAB_URL 和 PROJECT_ID（无 token），stderr 包含 MR 创建链接"""
+        args = self._args()
+        env = {
+            "AGENTGATE_GITLAB_TOKEN": "",
+            "AGENTGATE_GITLAB_URL": "https://gitlab.example.com",
+            "AGENTGATE_GITLAB_PROJECT_ID": "group/proj",
+            "CI_SERVER_URL": "", "CI_PROJECT_ID": "",
+        }
+        stderr_lines = []
+        with mock.patch.dict(os.environ, env, clear=False), \
+                mock.patch.object(create_mr, "detect_cli", return_value=None), \
+                mock.patch.object(create_mr, "current_branch", return_value="feat/x"), \
+                mock.patch("sys.stderr", mock.Mock(write=lambda s: stderr_lines.append(s))):
+            rc = create_mr._submit_with_fallback("title", "desc", args)
+        full = "".join(stderr_lines)
+        self.assertIn("https://gitlab.example.com", full)
+        self.assertIn("merge_requests/new", full)
+        self.assertEqual(1, rc)
+
+    def test_token_in_args_takes_precedence_over_env(self):
+        """args.gitlab_token 优先于环境变量 AGENTGATE_GITLAB_TOKEN"""
+        args = self._args(
+            gitlab_token="args-token",
+            gitlab_url="https://gitlab.example.com",
+            gitlab_project_id="group/proj",
+        )
+        env = {"AGENTGATE_GITLAB_TOKEN": "env-token"}
+        with mock.patch.dict(os.environ, env, clear=False), \
+                mock.patch.object(create_mr, "submit_gitlab_api", return_value=0) as api:
+            rc = create_mr._submit_with_fallback("title", "desc", args)
+        self.assertEqual(0, rc)
+        # 验证调用的 args 里 gitlab_token 来自 args 而非 env
+        call_args = api.call_args[0]
+        self.assertEqual("args-token", call_args[3].gitlab_token)
+
+
 class GitLabControllerTests(unittest.TestCase):
     def _args(self) -> mock.Mock:
         return mock.Mock(

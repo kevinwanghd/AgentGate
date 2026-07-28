@@ -11,31 +11,13 @@
 
 ## MR 前
 
-MR 描述必须由 `governance/scripts/create_mr.py` 生成，并通过 `validate_mr.py` 校验。
+MR 描述必须由 `governance/scripts/create_mr.py` 生成，一条命令完成：
 
 ```bash
-python governance/scripts/create_mr.py \
-  --dry-run \
-  --target-branch master \
-  --why "<从用户原始需求提取的任务背景>" \
-  > .governance/mr.md
-
-sed '1,2d' .governance/mr.md \
-  | python governance/scripts/validate_mr.py \
-      --diff-base origin/master \
-      --config governance.config.yml
+python governance/scripts/create_mr.py --why "<从用户原始需求提取的任务背景>"
 ```
 
-校验通过后再创建 MR。原始 Markdown 必须保留这些二级标题：
-
-```markdown
-## 背景
-## 变更内容
-## 自测确认
-## 风险与回滚
-```
-
-普通文本标题如 `背景 xxx` 不合规。GitLab 渲染后可能隐藏 `##`，但原始 MR 描述必须包含 `##`。
+脚本自动生成规范描述并提交 MR，你只需提供 `--why`。不要手写 MR 描述，不要用单行描述。
 
 ## CI 兜底
 
