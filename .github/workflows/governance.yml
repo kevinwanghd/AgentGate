@@ -181,7 +181,7 @@ jobs:
           DIRS=$(find . -maxdepth 3 \( -name "requirements.txt" -o -name "pyproject.toml" -o -name "setup.py" \) \
                  -not -path "*/.*" -not -path "*/node_modules/*" | xargs -I{} dirname {} | sort -u)
           if [ -z "$DIRS" ]; then echo "[python-test] 未找到 Python 项目标记文件, 跳过。"; exit 0; fi
-          pip install -q pytest
+          pip install -q pytest pyyaml
           OVERALL=0
           for DIR in $DIRS; do
             echo "[python-test] 在 $DIR 运行 pytest"

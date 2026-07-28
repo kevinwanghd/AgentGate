@@ -9,3 +9,11 @@ __pycache__/
 
 # 备份文件 (install.sh 生成)
 *.bak.*
+
+# 工具产物
+.upload-cache/
+
+# 第三方工具安装目录（不提交到仓库）
+.claude/
+DeliverHQ/
+

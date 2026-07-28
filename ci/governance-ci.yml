@@ -254,7 +254,7 @@ governance:python-test:
         echo "{\"status\": \"skip\"}" > governance-python-test-result.json
         exit 0
       fi
-      pip install -q pytest
+      pip install -q pytest pyyaml
       OVERALL=0
       for DIR in $DIRS; do
         echo "[python-test] 在 $DIR 安装依赖并运行 pytest"
