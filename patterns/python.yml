@@ -5,21 +5,21 @@
 patterns:
   # 1. SQL 注入风险
   - type: sql-injection
-    regex: '(?:execute|executemany|raw)\s*\([^)]*[%+]|\.format\s*\(|f["\'].*\{.*SELECT|INSERT|UPDATE|DELETE'
+    regex: "(?:execute|executemany|raw)\\s*\\([^)]*[%+]|\\.format\\s*\\(|f[\"'].*\\{.*SELECT|INSERT|UPDATE|DELETE"
     desc: "SQL 语句拼接存在注入风险，应使用参数化查询"
     exts: [".py"]
     mode: warn
 
   # 2. 命令注入风险
   - type: command-injection
-    regex: '(?:os\.system|subprocess\.call|subprocess\.run|subprocess\.Popen|eval|exec)\s*\([^)]*(?:%|\.format|f["\'])'
+    regex: "(?:os\\.system|subprocess\\.call|subprocess\\.run|subprocess\\.Popen|eval|exec)\\s*\\([^)]*(?:%|\\.format|f[\"'])"
     desc: "命令拼接存在注入风险，应使用参数列表或 shlex.quote"
     exts: [".py"]
     mode: warn
 
   # 3. 敏感信息硬编码
   - type: hardcoded-secret
-    regex: '(?i)(?:password|passwd|secret|api[_-]?key|token|access[_-]?key)\s*=\s*["\'][^"\']{8,}'
+    regex: "(?i)(?:password|passwd|secret|api[_-]?key|token|access[_-]?key)\\s*=\\s*[\"'][^\"']{8,}"
     desc: "敏感信息硬编码，应使用环境变量或密钥管理服务"
     exts: [".py"]
     mode: warn
@@ -47,7 +47,7 @@ patterns:
 
   # 7. 敏感信息日志
   - type: sensitive-log
-    regex: '(?i)\b(?:log|logger|logging)\b.*\b(?:password|passwd|token|secret|ssn|credit[_-]?card|id[_-]?card)\b'
+    regex: "(?i)\\b(?:log|logger|logging)\\b.*\\b(?:password|passwd|token|secret|ssn|credit[_-]?card|id[_-]?card)\\b"
     desc: "敏感字段可能被写入日志，应脱敏处理"
     exts: [".py"]
     mode: warn
