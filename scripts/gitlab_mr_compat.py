@@ -38,6 +38,21 @@ def _env(*names: str) -> str | None:
     return None
 
 
+def _derive_gitlab_url(args: argparse.Namespace) -> str | None:
+    explicit = args.gitlab_url or _env("AGENTGATE_GITLAB_URL", "CI_SERVER_URL")
+    if explicit:
+        return explicit.rstrip("/")
+    api_v4 = os.environ.get("CI_API_V4_URL")
+    if api_v4:
+        return api_v4.rstrip("/").removesuffix("/api/v4")
+    project_url = os.environ.get("CI_PROJECT_URL")
+    if project_url:
+        parsed = urllib.parse.urlparse(project_url)
+        if parsed.scheme and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}"
+    return None
+
+
 def _write_result(path: str, status: str, **extra: object) -> None:
     payload = {"status": status, **extra}
     with open(path, "w", encoding="utf-8") as f:
@@ -46,10 +61,7 @@ def _write_result(path: str, status: str, **extra: object) -> None:
 
 
 def _require_api_args(args: argparse.Namespace) -> tuple[str, str, str]:
-    base_url = (
-        args.gitlab_url
-        or _env("AGENTGATE_GITLAB_URL", "CI_SERVER_URL")
-    )
+    base_url = _derive_gitlab_url(args)
     project_id = (
         args.gitlab_project_id
         or _env("AGENTGATE_GITLAB_PROJECT_ID", "CI_PROJECT_ID")

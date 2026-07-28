@@ -267,6 +267,20 @@ class AgentGateCliTests(unittest.TestCase):
 
 
 class GitLabMrCompatTests(unittest.TestCase):
+    def test_derives_gitlab_url_from_legacy_ci_variables(self) -> None:
+        args = mock.Mock(gitlab_url=None)
+        with mock.patch.dict(os.environ, {"CI_API_V4_URL": "https://gitlab.example.com/api/v4"}, clear=False):
+            self.assertEqual(
+                "https://gitlab.example.com",
+                gitlab_mr_compat._derive_gitlab_url(args),
+            )
+
+        with mock.patch.dict(os.environ, {"CI_API_V4_URL": "", "CI_PROJECT_URL": "https://gitlab.example.com/group/project"}, clear=False):
+            self.assertEqual(
+                "https://gitlab.example.com",
+                gitlab_mr_compat._derive_gitlab_url(args),
+            )
+
     def test_branch_pipeline_validates_open_mr_from_gitlab_api(self) -> None:
         output = tempfile.NamedTemporaryFile(delete=False)
         output.close()
