@@ -218,17 +218,20 @@ governance:flutter-test:
     - if: $CI_COMMIT_BRANCH && $GOVERNANCE_SKIP_FLUTTER_TEST != "true"
   script:
     - |
-      if [ ! -f pubspec.yaml ]; then
+      DIRS=$(find . -maxdepth 3 -name "pubspec.yaml" -not -path "*/.*" | xargs -I{} dirname {} 2>/dev/null)
+      if [ -z "$DIRS" ]; then
         echo "[flutter-test] 未找到 pubspec.yaml, 跳过 Flutter 测试。"
         echo "{\"status\": \"skip\"}" > governance-flutter-test-result.json
         exit 0
       fi
-      flutter pub get
-      flutter test
-      EXIT_CODE=$?
-      echo "{\"status\": \"$([ $EXIT_CODE -eq 0 ] && echo 'pass' || echo 'fail')\"}" \
+      OVERALL=0
+      for DIR in $DIRS; do
+        echo "[flutter-test] 在 $DIR 运行 flutter test"
+        (cd "$DIR" && flutter pub get && flutter test) || OVERALL=1
+      done
+      echo "{\"status\": \"$([ $OVERALL -eq 0 ] && echo 'pass' || echo 'fail')\"}" \
         > governance-flutter-test-result.json
-      exit $EXIT_CODE
+      exit $OVERALL
   artifacts:
     paths:
       - governance-flutter-test-result.json
@@ -244,19 +247,27 @@ governance:python-test:
     - if: $CI_COMMIT_BRANCH && $GOVERNANCE_SKIP_PYTHON_TEST != "true"
   script:
     - |
-      if [ ! -f requirements.txt ] && [ ! -f pyproject.toml ] && [ ! -f setup.py ]; then
+      DIRS=$(find . -maxdepth 3 \( -name "requirements.txt" -o -name "pyproject.toml" -o -name "setup.py" \) \
+             -not -path "*/.*" -not -path "*/node_modules/*" | xargs -I{} dirname {} | sort -u)
+      if [ -z "$DIRS" ]; then
         echo "[python-test] 未找到 Python 项目标记文件, 跳过 Python 测试。"
         echo "{\"status\": \"skip\"}" > governance-python-test-result.json
         exit 0
       fi
       pip install -q pytest
-      [ -f requirements.txt ] && pip install -q -r requirements.txt
-      [ -f pyproject.toml ] && pip install -q -e ".[test]" 2>/dev/null || true
-      python -m pytest --tb=short -q
-      EXIT_CODE=$?
-      echo "{\"status\": \"$([ $EXIT_CODE -eq 0 ] && echo 'pass' || echo 'fail')\"}" \
+      OVERALL=0
+      for DIR in $DIRS; do
+        echo "[python-test] 在 $DIR 安装依赖并运行 pytest"
+        (
+          cd "$DIR"
+          [ -f requirements.txt ] && pip install -q -r requirements.txt
+          [ -f pyproject.toml ] && pip install -q -e ".[test]" 2>/dev/null || true
+          python -m pytest --tb=short -q
+        ) || OVERALL=1
+      done
+      echo "{\"status\": \"$([ $OVERALL -eq 0 ] && echo 'pass' || echo 'fail')\"}" \
         > governance-python-test-result.json
-      exit $EXIT_CODE
+      exit $OVERALL
   artifacts:
     paths:
       - governance-python-test-result.json
@@ -272,17 +283,26 @@ governance:node-test:
     - if: $CI_COMMIT_BRANCH && $GOVERNANCE_SKIP_NODE_TEST != "true"
   script:
     - |
-      if [ ! -f package.json ]; then
+      # 排除子包的 package.json（node_modules 及有父级 package.json 的子目录）
+      DIRS=$(find . -maxdepth 3 -name "package.json" \
+             -not -path "*/node_modules/*" -not -path "*/.*" | xargs -I{} dirname {} | sort -u)
+      if [ -z "$DIRS" ]; then
         echo "[node-test] 未找到 package.json, 跳过 Node.js 测试。"
         echo "{\"status\": \"skip\"}" > governance-node-test-result.json
         exit 0
       fi
-      npm ci --prefer-offline --no-audit 2>/dev/null || npm install --no-audit
-      npm test
-      EXIT_CODE=$?
-      echo "{\"status\": \"$([ $EXIT_CODE -eq 0 ] && echo 'pass' || echo 'fail')\"}" \
+      OVERALL=0
+      for DIR in $DIRS; do
+        echo "[node-test] 在 $DIR 运行 npm test"
+        (
+          cd "$DIR"
+          npm ci --prefer-offline --no-audit 2>/dev/null || npm install --no-audit
+          npm test
+        ) || OVERALL=1
+      done
+      echo "{\"status\": \"$([ $OVERALL -eq 0 ] && echo 'pass' || echo 'fail')\"}" \
         > governance-node-test-result.json
-      exit $EXIT_CODE
+      exit $OVERALL
   artifacts:
     paths:
       - governance-node-test-result.json
@@ -298,20 +318,28 @@ governance:java-test:
     - if: $CI_COMMIT_BRANCH && $GOVERNANCE_SKIP_JAVA_TEST != "true"
   script:
     - |
-      if [ ! -f pom.xml ] && [ ! -f build.gradle ] && [ ! -f build.gradle.kts ]; then
+      DIRS=$(find . -maxdepth 3 \( -name "pom.xml" -o -name "build.gradle" -o -name "build.gradle.kts" \) \
+             -not -path "*/.*" | xargs -I{} dirname {} | sort -u)
+      if [ -z "$DIRS" ]; then
         echo "[java-test] 未找到 pom.xml / build.gradle, 跳过 Java 测试。"
         echo "{\"status\": \"skip\"}" > governance-java-test-result.json
         exit 0
       fi
-      if [ -f pom.xml ]; then
-        mvn -q test -Dsurefire.failIfNoSpecifiedTests=false
-      else
-        ./gradlew test --console=plain -q 2>/dev/null || gradle test --console=plain -q
-      fi
-      EXIT_CODE=$?
-      echo "{\"status\": \"$([ $EXIT_CODE -eq 0 ] && echo 'pass' || echo 'fail')\"}" \
+      OVERALL=0
+      for DIR in $DIRS; do
+        echo "[java-test] 在 $DIR 运行测试"
+        (
+          cd "$DIR"
+          if [ -f pom.xml ]; then
+            mvn -q test -Dsurefire.failIfNoSpecifiedTests=false
+          else
+            ./gradlew test --console=plain -q 2>/dev/null || gradle test --console=plain -q
+          fi
+        ) || OVERALL=1
+      done
+      echo "{\"status\": \"$([ $OVERALL -eq 0 ] && echo 'pass' || echo 'fail')\"}" \
         > governance-java-test-result.json
-      exit $EXIT_CODE
+      exit $OVERALL
   artifacts:
     paths:
       - governance-java-test-result.json
@@ -327,13 +355,23 @@ governance:dotnet-test:
     - if: $CI_COMMIT_BRANCH && $GOVERNANCE_SKIP_DOTNET_TEST != "true"
   script:
     - |
-      if ! find . -maxdepth 3 -name "*.sln" -o -name "*.csproj" 2>/dev/null | grep -q .; then
+      SLN=$(find . -maxdepth 3 -name "*.sln" -not -path "*/.*" | head -1)
+      if [ -n "$SLN" ]; then
+        echo "[dotnet-test] 使用 solution: $SLN"
+        dotnet test "$SLN" --verbosity quiet
+        EXIT_CODE=$?
+      elif find . -maxdepth 3 -name "*.csproj" -not -path "*/.*" | grep -q .; then
+        echo "[dotnet-test] 未找到 .sln，逐 .csproj 运行测试"
+        OVERALL=0
+        for PROJ in $(find . -maxdepth 3 -name "*.csproj" -not -path "*/.*"); do
+          dotnet test "$PROJ" --verbosity quiet || OVERALL=1
+        done
+        EXIT_CODE=$OVERALL
+      else
         echo "[dotnet-test] 未找到 .sln / .csproj, 跳过 .NET 测试。"
         echo "{\"status\": \"skip\"}" > governance-dotnet-test-result.json
         exit 0
       fi
-      dotnet test --no-build --verbosity quiet 2>/dev/null || dotnet test --verbosity quiet
-      EXIT_CODE=$?
       echo "{\"status\": \"$([ $EXIT_CODE -eq 0 ] && echo 'pass' || echo 'fail')\"}" \
         > governance-dotnet-test-result.json
       exit $EXIT_CODE
@@ -352,21 +390,29 @@ governance:rust-test:
     - if: $CI_COMMIT_BRANCH && $GOVERNANCE_SKIP_RUST_TEST != "true"
   script:
     - |
-      if [ ! -f Cargo.toml ]; then
-        echo "[rust-test] 未找到 Cargo.toml, 跳过 Rust 测试。"
-        echo "{\"status\": \"skip\"}" > governance-rust-test-result.json
-        exit 0
+      # workspace 根的 Cargo.toml 包含所有成员，直接在根跑即可覆盖所有 crate
+      ROOT_CARGO=$(find . -maxdepth 1 -name "Cargo.toml" | head -1)
+      if [ -n "$ROOT_CARGO" ]; then
+        echo "[rust-test] 在根目录运行 cargo test（含 workspace 成员）"
+        cargo test --quiet 2>&1
+        EXIT_CODE=$?
+      else
+        DIRS=$(find . -maxdepth 3 -name "Cargo.toml" -not -path "*/.*" | xargs -I{} dirname {} | sort -u)
+        if [ -z "$DIRS" ]; then
+          echo "[rust-test] 未找到 Cargo.toml, 跳过 Rust 测试。"
+          echo "{\"status\": \"skip\"}" > governance-rust-test-result.json
+          exit 0
+        fi
+        OVERALL=0
+        for DIR in $DIRS; do
+          echo "[rust-test] 在 $DIR 运行 cargo test"
+          (cd "$DIR" && cargo test --quiet 2>&1) || OVERALL=1
+        done
+        EXIT_CODE=$OVERALL
       fi
-      cargo test --quiet 2>&1
-      EXIT_CODE=$?
       echo "{\"status\": \"$([ $EXIT_CODE -eq 0 ] && echo 'pass' || echo 'fail')\"}" \
         > governance-rust-test-result.json
       exit $EXIT_CODE
-  artifacts:
-    paths:
-      - governance-rust-test-result.json
-    expire_in: 1 day
-  allow_failure: false
 
 # ── 8. GateResult 决策: 汇总 CI 独立证据, 不直接合并 ─────────────────────────
 governance:gate-decision:

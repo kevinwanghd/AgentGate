@@ -156,11 +156,14 @@ jobs:
           GOVERNANCE_SKIP_FLUTTER_TEST: ${{ vars.GOVERNANCE_SKIP_FLUTTER_TEST }}
         run: |
           if [ "${GOVERNANCE_SKIP_FLUTTER_TEST}" = "true" ]; then exit 0; fi
-          if [ ! -f pubspec.yaml ]; then
-            echo "[flutter-test] 未找到 pubspec.yaml, 跳过。"
-            exit 0
-          fi
-          flutter pub get && flutter test
+          DIRS=$(find . -maxdepth 3 -name "pubspec.yaml" -not -path "*/.*" | xargs -I{} dirname {} 2>/dev/null)
+          if [ -z "$DIRS" ]; then echo "[flutter-test] 未找到 pubspec.yaml, 跳过。"; exit 0; fi
+          OVERALL=0
+          for DIR in $DIRS; do
+            echo "[flutter-test] 在 $DIR 运行 flutter test"
+            (cd "$DIR" && flutter pub get && flutter test) || OVERALL=1
+          done
+          exit $OVERALL
 
   # Python 测试: 无 requirements.txt / pyproject.toml / setup.py 时跳过
   python-test:
@@ -175,14 +178,21 @@ jobs:
           GOVERNANCE_SKIP_PYTHON_TEST: ${{ vars.GOVERNANCE_SKIP_PYTHON_TEST }}
         run: |
           if [ "${GOVERNANCE_SKIP_PYTHON_TEST}" = "true" ]; then exit 0; fi
-          if [ ! -f requirements.txt ] && [ ! -f pyproject.toml ] && [ ! -f setup.py ]; then
-            echo "[python-test] 未找到 Python 项目标记文件, 跳过。"
-            exit 0
-          fi
+          DIRS=$(find . -maxdepth 3 \( -name "requirements.txt" -o -name "pyproject.toml" -o -name "setup.py" \) \
+                 -not -path "*/.*" -not -path "*/node_modules/*" | xargs -I{} dirname {} | sort -u)
+          if [ -z "$DIRS" ]; then echo "[python-test] 未找到 Python 项目标记文件, 跳过。"; exit 0; fi
           pip install -q pytest
-          [ -f requirements.txt ] && pip install -q -r requirements.txt
-          [ -f pyproject.toml ] && pip install -q -e ".[test]" 2>/dev/null || true
-          python -m pytest --tb=short -q
+          OVERALL=0
+          for DIR in $DIRS; do
+            echo "[python-test] 在 $DIR 运行 pytest"
+            (
+              cd "$DIR"
+              [ -f requirements.txt ] && pip install -q -r requirements.txt
+              [ -f pyproject.toml ] && pip install -q -e ".[test]" 2>/dev/null || true
+              python -m pytest --tb=short -q
+            ) || OVERALL=1
+          done
+          exit $OVERALL
 
   # Node.js/TypeScript 测试: 无 package.json 时跳过
   node-test:
@@ -197,12 +207,19 @@ jobs:
           GOVERNANCE_SKIP_NODE_TEST: ${{ vars.GOVERNANCE_SKIP_NODE_TEST }}
         run: |
           if [ "${GOVERNANCE_SKIP_NODE_TEST}" = "true" ]; then exit 0; fi
-          if [ ! -f package.json ]; then
-            echo "[node-test] 未找到 package.json, 跳过。"
-            exit 0
-          fi
-          npm ci --prefer-offline --no-audit 2>/dev/null || npm install --no-audit
-          npm test
+          DIRS=$(find . -maxdepth 3 -name "package.json" \
+                 -not -path "*/node_modules/*" -not -path "*/.*" | xargs -I{} dirname {} | sort -u)
+          if [ -z "$DIRS" ]; then echo "[node-test] 未找到 package.json, 跳过。"; exit 0; fi
+          OVERALL=0
+          for DIR in $DIRS; do
+            echo "[node-test] 在 $DIR 运行 npm test"
+            (
+              cd "$DIR"
+              npm ci --prefer-offline --no-audit 2>/dev/null || npm install --no-audit
+              npm test
+            ) || OVERALL=1
+          done
+          exit $OVERALL
 
   # Java 测试: 无 pom.xml / build.gradle 时跳过
   java-test:
@@ -218,15 +235,22 @@ jobs:
           GOVERNANCE_SKIP_JAVA_TEST: ${{ vars.GOVERNANCE_SKIP_JAVA_TEST }}
         run: |
           if [ "${GOVERNANCE_SKIP_JAVA_TEST}" = "true" ]; then exit 0; fi
-          if [ ! -f pom.xml ] && [ ! -f build.gradle ] && [ ! -f build.gradle.kts ]; then
-            echo "[java-test] 未找到 pom.xml / build.gradle, 跳过。"
-            exit 0
-          fi
-          if [ -f pom.xml ]; then
-            mvn -q test -Dsurefire.failIfNoSpecifiedTests=false
-          else
-            ./gradlew test --console=plain -q 2>/dev/null || gradle test --console=plain -q
-          fi
+          DIRS=$(find . -maxdepth 3 \( -name "pom.xml" -o -name "build.gradle" -o -name "build.gradle.kts" \) \
+                 -not -path "*/.*" | xargs -I{} dirname {} | sort -u)
+          if [ -z "$DIRS" ]; then echo "[java-test] 未找到 pom.xml / build.gradle, 跳过。"; exit 0; fi
+          OVERALL=0
+          for DIR in $DIRS; do
+            echo "[java-test] 在 $DIR 运行测试"
+            (
+              cd "$DIR"
+              if [ -f pom.xml ]; then
+                mvn -q test -Dsurefire.failIfNoSpecifiedTests=false
+              else
+                ./gradlew test --console=plain -q 2>/dev/null || gradle test --console=plain -q
+              fi
+            ) || OVERALL=1
+          done
+          exit $OVERALL
 
   # .NET/C# 测试: 无 .sln / .csproj 时跳过
   dotnet-test:
@@ -241,11 +265,19 @@ jobs:
           GOVERNANCE_SKIP_DOTNET_TEST: ${{ vars.GOVERNANCE_SKIP_DOTNET_TEST }}
         run: |
           if [ "${GOVERNANCE_SKIP_DOTNET_TEST}" = "true" ]; then exit 0; fi
-          if ! find . -maxdepth 3 \( -name "*.sln" -o -name "*.csproj" \) 2>/dev/null | grep -q .; then
+          SLN=$(find . -maxdepth 3 -name "*.sln" -not -path "*/.*" | head -1)
+          if [ -n "$SLN" ]; then
+            dotnet test "$SLN" --verbosity quiet
+          elif find . -maxdepth 3 -name "*.csproj" -not -path "*/.*" | grep -q .; then
+            OVERALL=0
+            for PROJ in $(find . -maxdepth 3 -name "*.csproj" -not -path "*/.*"); do
+              dotnet test "$PROJ" --verbosity quiet || OVERALL=1
+            done
+            exit $OVERALL
+          else
             echo "[dotnet-test] 未找到 .sln / .csproj, 跳过。"
             exit 0
           fi
-          dotnet test --no-build --verbosity quiet 2>/dev/null || dotnet test --verbosity quiet
 
   # Rust 测试: 无 Cargo.toml 时跳过
   rust-test:
@@ -258,11 +290,20 @@ jobs:
           GOVERNANCE_SKIP_RUST_TEST: ${{ vars.GOVERNANCE_SKIP_RUST_TEST }}
         run: |
           if [ "${GOVERNANCE_SKIP_RUST_TEST}" = "true" ]; then exit 0; fi
-          if [ ! -f Cargo.toml ]; then
-            echo "[rust-test] 未找到 Cargo.toml, 跳过。"
-            exit 0
+          ROOT_CARGO=$(find . -maxdepth 1 -name "Cargo.toml" | head -1)
+          if [ -n "$ROOT_CARGO" ]; then
+            echo "[rust-test] 在根目录运行 cargo test（含 workspace 成员）"
+            cargo test --quiet
+          else
+            DIRS=$(find . -maxdepth 3 -name "Cargo.toml" -not -path "*/.*" | xargs -I{} dirname {} | sort -u)
+            if [ -z "$DIRS" ]; then echo "[rust-test] 未找到 Cargo.toml, 跳过。"; exit 0; fi
+            OVERALL=0
+            for DIR in $DIRS; do
+              echo "[rust-test] 在 $DIR 运行 cargo test"
+              (cd "$DIR" && cargo test --quiet) || OVERALL=1
+            done
+            exit $OVERALL
           fi
-          cargo test --quiet
 
   # 自测: 跑 governance 脚本自己的完整回归套件
   selftest:
