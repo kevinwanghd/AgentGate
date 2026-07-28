@@ -98,7 +98,8 @@ def build_gate_result(
     if not required:
         required = sorted(checks)
     missing = [name for name in required if name not in checks]
-    failed = [name for name in required if checks.get(name) != "pass"]
+    # skip 和 pass 都算通过，只有 fail/missing 算失败
+    failed = [name for name in required if checks.get(name) not in ("pass", "skip")]
     if missing:
         reasons.append("required_check_missing")
     if failed:
