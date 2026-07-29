@@ -613,11 +613,59 @@ def submit_gitlab_api(title: str, description: str, target: str, args) -> int:
     return 0
 
 
-def detect_cli() -> str | None:
-    if shutil.which("glab"):
-        return "glab"
-    if shutil.which("gh"):
-        return "gh"
+def _origin_remote_url() -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def _remote_host(remote_url: str | None) -> str | None:
+    if not remote_url:
+        return None
+    parsed = urllib.parse.urlparse(remote_url)
+    if parsed.hostname:
+        return parsed.hostname.lower()
+    scp_style = re.match(r"^(?:[^@]+@)?([^:]+):", remote_url)
+    return scp_style.group(1).lower() if scp_style else None
+
+
+def detect_cli(remote_url: str | None = None) -> str | None:
+    """Select the CLI adapter that matches the origin remote platform."""
+
+    host = _remote_host(remote_url or _origin_remote_url())
+    github_hosts = {
+        value
+        for value in (
+            "github.com",
+            _remote_host(os.environ.get("GITHUB_SERVER_URL")),
+        )
+        if value
+    }
+    gitlab_hosts = {
+        value
+        for value in (
+            _remote_host(os.environ.get("CI_SERVER_URL")),
+            _remote_host(os.environ.get("AGENTGATE_GITLAB_URL")),
+        )
+        if value
+    }
+    if host in github_hosts:
+        return "gh" if shutil.which("gh") else None
+    if host in gitlab_hosts or (host and "gitlab" in host):
+        return "glab" if shutil.which("glab") else None
+
+    available = [name for name in ("gh", "glab") if shutil.which(name)]
+    if len(available) == 1:
+        return available[0]
     return None
 
 
@@ -631,7 +679,7 @@ def submit_mr(title: str, description: str, target: str, cli: str) -> int:
         if cli == "glab":
             cmd = ["glab", "mr", "create", "--title", title,
                    "--description", description,
-                   "--target-branch", target, "--fill"]
+                   "--target-branch", target, "--yes"]
         else:  # gh
             cmd = ["gh", "pr", "create", "--title", title,
                    "--body-file", desc_file, "--base", target]

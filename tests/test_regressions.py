@@ -366,6 +366,7 @@ class GitLabMrCompatTests(unittest.TestCase):
             validate.assert_called_once_with("", None, None)
             changed.assert_not_called()
 
+    # risk:test-removal reason:"replaced by explicit read-only API fallback coverage" owner:@agentgate reviewed:2026-07-29
     def test_explicit_api_fallback_uses_dedicated_read_token(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             output = Path(td) / "result.json"
@@ -466,6 +467,7 @@ class GitLabMrCompatTests(unittest.TestCase):
             self.assertEqual("fail", payload["status"])
             self.assertIn("was not changed", payload["reason"])
 
+    # risk:test-removal reason:"replaced by fail-closed missing manifest coverage" owner:@agentgate reviewed:2026-07-29
     def test_missing_manifest_fails_without_implicit_api_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             output = Path(td) / "result.json"
@@ -567,6 +569,61 @@ class CreateMrManifestTests(unittest.TestCase):
 
             self.assertEqual(target, written)
             self.assertEqual("## 背景\n\n修复问题。\n", target.read_text(encoding="utf-8"))
+
+
+class CreateMrCliAdapterTests(unittest.TestCase):
+    @staticmethod
+    def _both_clis(name: str) -> str:
+        return f"/tools/{name}"
+
+    def test_github_remote_prefers_gh_when_both_clis_exist(self) -> None:
+        with mock.patch.object(
+            create_mr.shutil,
+            "which",
+            side_effect=self._both_clis,
+        ):
+            cli = create_mr.detect_cli(
+                "https://github.com/example/project.git"
+            )
+
+        self.assertEqual("gh", cli)
+
+    def test_gitlab_remote_prefers_glab_when_both_clis_exist(self) -> None:
+        with mock.patch.object(
+            create_mr.shutil,
+            "which",
+            side_effect=self._both_clis,
+        ):
+            cli = create_mr.detect_cli(
+                "git@gitlab.example.com:group/project.git"
+            )
+
+        self.assertEqual("glab", cli)
+
+    def test_unknown_remote_uses_only_available_cli(self) -> None:
+        with mock.patch.object(
+            create_mr.shutil,
+            "which",
+            side_effect=lambda name: "/tools/gh" if name == "gh" else None,
+        ):
+            cli = create_mr.detect_cli("ssh://git@example.com/project.git")
+
+        self.assertEqual("gh", cli)
+
+    def test_glab_submit_does_not_mix_fill_with_explicit_description(self) -> None:
+        completed = mock.Mock(returncode=0)
+        with mock.patch.object(
+            create_mr.subprocess,
+            "run",
+            return_value=completed,
+        ) as run:
+            rc = create_mr.submit_mr("title", "description", "main", "glab")
+
+        self.assertEqual(0, rc)
+        command = run.call_args.args[0]
+        self.assertIn("--description", command)
+        self.assertIn("--yes", command)
+        self.assertNotIn("--fill", command)
 
 
 class CreateMrSubmitFallbackTests(unittest.TestCase):
