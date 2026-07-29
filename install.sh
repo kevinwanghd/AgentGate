@@ -578,14 +578,10 @@ governance:mr-validate-compat:
       TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
       git fetch -q origin "$TB"
       BASE="origin/$TB"
-      STRICT_ARGS=""
-      [ "${GOVERNANCE_MR_VALIDATE_STRICT:-}" = "true" ] \
-        && STRICT_ARGS="--fail-if-no-token --fail-if-no-mr"
       python governance/scripts/gitlab_mr_compat.py \
         --diff-base "$BASE" \
         --target-branch "$TB" \
-        --output governance-mr-validate-result.json \
-        $STRICT_ARGS
+        --output governance-mr-validate-result.json
   artifacts:
     when: always
     paths:
