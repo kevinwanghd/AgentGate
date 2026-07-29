@@ -696,16 +696,17 @@ class CreateMrSubmitFallbackTests(unittest.TestCase):
         cli_submit.assert_called_once_with("title", "desc", "master", "glab")
 
     def test_falls_back_to_print_when_no_token_no_cli(self):
-        """无 token 无 CLI 时降级打印，返回 1"""
+        """No token or CLI falls back to the browser MR page helper."""
         args = self._args()
         with mock.patch.dict(os.environ, self._clear_env(), clear=False), \
                 mock.patch.object(create_mr, "detect_cli", return_value=None), \
-                mock.patch.object(create_mr, "current_branch", return_value="feat/x"):
+                mock.patch.object(create_mr, "open_gitlab_mr_fallback", return_value=1) as fallback:
             rc = create_mr._submit_with_fallback("title", "desc", args)
         self.assertEqual(1, rc)
+        fallback.assert_called_once()
 
     def test_fallback_print_includes_mr_url_when_gitlab_url_known(self):
-        """降级时若有 GITLAB_URL 和 PROJECT_ID（无 token），stderr 包含 MR 创建链接"""
+        """Fallback opens a GitLab MR page with source, target, title, and body prefilled."""
         args = self._args()
         env = {
             "AGENTGATE_GITLAB_TOKEN": "",
@@ -717,12 +718,40 @@ class CreateMrSubmitFallbackTests(unittest.TestCase):
         with mock.patch.dict(os.environ, env, clear=False), \
                 mock.patch.object(create_mr, "detect_cli", return_value=None), \
                 mock.patch.object(create_mr, "current_branch", return_value="feat/x"), \
+                mock.patch.object(create_mr.webbrowser, "open", return_value=True) as browser, \
                 mock.patch("sys.stderr", mock.Mock(write=lambda s: stderr_lines.append(s))):
             rc = create_mr._submit_with_fallback("title", "desc", args)
         full = "".join(stderr_lines)
         self.assertIn("https://gitlab.example.com", full)
         self.assertIn("merge_requests/new", full)
+        browser.assert_called_once()
+        parsed = create_mr.urllib.parse.urlparse(browser.call_args.args[0])
+        query = create_mr.urllib.parse.parse_qs(parsed.query)
+        self.assertEqual(["feat/x"], query["merge_request[source_branch]"])
+        self.assertEqual(["master"], query["merge_request[target_branch]"])
+        self.assertEqual(["title"], query["merge_request[title]"])
+        self.assertEqual(["desc"], query["merge_request[description]"])
         self.assertEqual(1, rc)
+
+    def test_cli_failure_falls_back_to_prefilled_browser_url(self):
+        args = self._args(
+            gitlab_url="https://gitlab.example.com",
+            gitlab_project_id="group%2Fproj",
+            source_branch="fix/x",
+        )
+        body = "## 背景\n\n修复广告生命周期问题"
+        with mock.patch.dict(os.environ, self._clear_env(), clear=False), \
+                mock.patch.object(create_mr, "detect_cli", return_value="glab"), \
+                mock.patch.object(create_mr, "submit_mr", return_value=1), \
+                mock.patch.object(create_mr.webbrowser, "open", return_value=True) as browser:
+            rc = create_mr._submit_with_fallback("fix: title", body, args)
+
+        self.assertEqual(1, rc)
+        url = browser.call_args.args[0]
+        self.assertIn("/group/proj/-/merge_requests/new?", url)
+        query = create_mr.urllib.parse.parse_qs(create_mr.urllib.parse.urlparse(url).query)
+        self.assertEqual(["fix: title"], query["merge_request[title]"])
+        self.assertEqual([body], query["merge_request[description]"])
 
     def test_token_in_args_takes_precedence_over_env(self):
         """args.gitlab_token 优先于环境变量 AGENTGATE_GITLAB_TOKEN"""
