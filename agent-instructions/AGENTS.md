@@ -2,24 +2,22 @@
 
 ## 强制 MR 入口
 
-所有 AI agent 创建 MR 时必须走统一入口，不允许手写空描述或绕过本地校验。旧版 GitLab 在推送前先生成可提交的描述清单：
+所有 AI agent 创建 MR 时必须走统一入口，不允许手写空描述或绕过本地校验。原则：AgentGate 可以阻止不合规合并，但不能因为缺 token、缺 CLI 或旧版 GitLab 能力不足而阻碍代码提交到分支。
+
+```bash
+python governance/scripts/create_mr.py --why "<用中文说明本次任务背景>"
+```
+
+该命令会生成中文 MR 描述并本地运行 `validate_mr.py`、`scan_risks.py` 和配置的测试命令；有 GitLab token 时自动走 API，有 `glab`/`gh` 时走 CLI，都不可用时降级打印 MR 链接和描述，供人工创建 MR，不得卡住代码提交。
+
+兼容旧安装或仅需生成 branch manifest 时，才使用 fallback：
 
 ```bash
 python governance/scripts/agentgate.py mr prepare \
   --why "<用中文说明本次任务背景>"
-git add .agentgate/mr-description.md
-git commit -m "docs: prepare merge request description"
 ```
 
-兼容旧安装时可使用等价命令：
-
-```bash
-python governance/scripts/create_mr.py \
-  --prepare \
-  --why "<用中文说明本次任务背景>"
-```
-
-该命令会先生成规范 MR 描述并本地运行 AgentGate 描述校验。CI 校验提交到分支的 `.agentgate/mr-description.md`，不依赖开发者 Personal Access Token。校验失败时必须修复描述、测试记录或风险回滚说明。
+校验失败时必须修复描述、测试记录或风险回滚说明，不允许改低门禁；提交 MR 通道失败时走降级路径，不允许因为工具链不可用阻断分支提交。
 
 所有 AI agent 在本仓库提交代码时必须走 AgentGate 流程。不要手写 commit trailer，不要手写单行 MR 描述，不要绕过本地校验。
 
@@ -35,12 +33,12 @@ python governance/scripts/create_mr.py \
 MR 描述必须由 AgentGate 统一入口生成：
 
 ```bash
-python governance/scripts/agentgate.py mr prepare \
+python governance/scripts/create_mr.py \
   --why "<从用户原始需求提取的任务背景>"
 ```
 
-脚本自动生成规范描述清单，你只需提供 `--why`。将清单与代码一起提交并推送；手工创建 MR 时将清单原文粘贴到描述框。
+脚本自动生成规范中文描述并完成本地校验，你只需提供 `--why`。它会按“GitLab API → glab/gh CLI → 打印 MR 链接和描述”的顺序降级；最后一种情况需要人工创建 MR，但不能让代码提交停在本地。
 
 ## CI 兜底
 
-CI 是最后防线，不是主要工作流。AI 提交前必须先在本地跑同一套校验，失败就修复后再推送。
+CI 是最后防线，不是主要工作流。AI 提交前必须先在本地跑同一套校验；真实测试失败、风险注解缺失、描述不合规要修复，token/CLI/API 不可用则走降级创建 MR，不阻断分支提交。

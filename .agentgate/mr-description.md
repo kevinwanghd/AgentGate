@@ -9,6 +9,7 @@
 - 将语言测试跳过逻辑从 `rules` 条件下沉到脚本内部，确保跳过时仍产出结果文件。
 - `install.sh` 不再内嵌旧 CI 模板，改为安装中心 `ci/governance-ci.yml`，避免模板漂移。
 - 增加回归测试，防止 `apt-get`、`python:3.11-slim`、`rules` / `needs` 回流。
+- `agent-instructions/CLAUDE.md` 与 `agent-instructions/AGENTS.md` 统一默认 MR 入口为 `create_mr.py --why "..."`，并明确 AgentGate 不得因 token、CLI 或旧版 GitLab 能力不足阻碍分支提交。
 
 ## 不包含的内容
 
@@ -20,6 +21,7 @@
 - PASS: `git diff --check`
 - PASS: `PYTHONIOENCODING=utf-8 python -m unittest discover -s tests -v`（147 tests）
 - PASS: `python scripts/agentgate.py mr prepare ... --prepare`
+- PASS: `PYTHONIOENCODING=utf-8 python -m unittest tests.test_regressions.AgentGateCliTests tests.test_regressions.GitLabAutoMergeTemplateTests -v`
 
 ## 风险与回滚
 
