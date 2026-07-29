@@ -47,6 +47,7 @@ import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
+import webbrowser
 
 from governance_common import ConfigError, load_config as load_shared_config, repository_state
 
@@ -59,6 +60,14 @@ except Exception:  # pragma: no cover
 
 EVIDENCE_PATH = ".governance/test-evidence.jsonl"
 DEFAULT_DESCRIPTION_MANIFEST = ".agentgate/mr-description.md"
+GITLAB_TOKEN_ENV_NAMES = (
+    "AGENTGATE_GITLAB_TOKEN",
+    "GITLAB_TOKEN",
+    "GLAB_TOKEN",
+    "GOVERNANCE_MR_VALIDATE_TOKEN",
+    "GOVERNANCE_MERGE_BOT_TOKEN",
+    "PRIVATE_TOKEN",
+)
 
 DEFAULT_CONFIG = {
     "large_change": {
@@ -511,6 +520,14 @@ def _gitlab_api_request(
         raise RuntimeError(f"GitLab API {method} {path} 返回非 JSON: {body[:500]}") from exc
 
 
+def _gitlab_token_from_env() -> str | None:
+    for name in GITLAB_TOKEN_ENV_NAMES:
+        value = os.environ.get(name)
+        if value:
+            return value
+    return None
+
+
 def _require_gitlab_api_args(args) -> tuple[str, str, str]:
     base_url = args.gitlab_url or os.environ.get("AGENTGATE_GITLAB_URL") or os.environ.get(
         "CI_SERVER_URL"
@@ -518,7 +535,7 @@ def _require_gitlab_api_args(args) -> tuple[str, str, str]:
     project_id = args.gitlab_project_id or os.environ.get(
         "AGENTGATE_GITLAB_PROJECT_ID"
     ) or os.environ.get("CI_PROJECT_ID")
-    token = args.gitlab_token or os.environ.get("AGENTGATE_GITLAB_TOKEN")
+    token = args.gitlab_token or _gitlab_token_from_env()
 
     missing = []
     if not base_url:
@@ -526,7 +543,7 @@ def _require_gitlab_api_args(args) -> tuple[str, str, str]:
     if not project_id:
         missing.append("--gitlab-project-id/AGENTGATE_GITLAB_PROJECT_ID")
     if not token:
-        missing.append("--gitlab-token/AGENTGATE_GITLAB_TOKEN")
+        missing.append("--gitlab-token/GitLab token env")
     if missing:
         raise RuntimeError("缺少 GitLab API 参数: " + ", ".join(missing))
     return base_url, project_id, token
@@ -611,6 +628,81 @@ def submit_gitlab_api(title: str, description: str, target: str, args) -> int:
         sys.stderr.write(f": {web_url}")
     sys.stderr.write("\n")
     return 0
+
+
+def _gitlab_project_web_path(project_id: str) -> str:
+    """Return the browser URL path for a project id or namespace path."""
+    if re.fullmatch(r"\d+", str(project_id)):
+        return str(project_id)
+    return urllib.parse.unquote(str(project_id)).strip("/")
+
+
+def build_gitlab_new_mr_url(
+    gitlab_url: str,
+    project_id: str,
+    source: str,
+    target: str,
+    title: str,
+    description: str,
+) -> str:
+    query = urllib.parse.urlencode(
+        {
+            "merge_request[source_branch]": source,
+            "merge_request[target_branch]": target,
+            "merge_request[title]": title,
+            "merge_request[description]": description,
+        }
+    )
+    project_path = _gitlab_project_web_path(project_id)
+    return f"{gitlab_url.rstrip('/')}/{project_path}/merge_requests/new?{query}"
+
+
+def open_gitlab_mr_fallback(
+    title: str,
+    description: str,
+    args,
+    reason: str | None = None,
+) -> int:
+    gitlab_url = (
+        getattr(args, "gitlab_url", None)
+        or os.environ.get("AGENTGATE_GITLAB_URL")
+        or os.environ.get("CI_SERVER_URL")
+    )
+    project_id = (
+        getattr(args, "gitlab_project_id", None)
+        or os.environ.get("AGENTGATE_GITLAB_PROJECT_ID")
+        or os.environ.get("CI_PROJECT_PATH")
+        or os.environ.get("CI_PROJECT_ID")
+    )
+    if not gitlab_url or not project_id:
+        if reason:
+            sys.stderr.write(f"[create-mr] {reason}\n")
+        sys.stderr.write("[create-mr] Missing GitLab URL or project path for browser fallback.\n\n")
+        print(f"Title: {title}\n")
+        print(description)
+        return 1
+
+    source = getattr(args, "source_branch", None) or current_branch()
+    mr_url = build_gitlab_new_mr_url(
+        gitlab_url,
+        str(project_id),
+        source,
+        args.target_branch,
+        title,
+        description,
+    )
+    if reason:
+        sys.stderr.write(f"[create-mr] {reason}\n")
+    sys.stderr.write("[create-mr] Open GitLab new MR page with title and description prefilled.\n")
+    sys.stderr.write(f"[create-mr] {mr_url}\n")
+    try:
+        opened = webbrowser.open(mr_url)
+    except Exception as exc:  # pragma: no cover - browser integration varies by platform
+        sys.stderr.write(f"[create-mr] Failed to open browser: {exc}\n")
+        opened = False
+    if not opened:
+        sys.stderr.write("[create-mr] Browser did not open automatically; use the URL above.\n")
+    return 1
 
 
 def _origin_remote_url() -> str | None:
@@ -811,68 +903,62 @@ def main() -> int:
 
 
 def _submit_with_fallback(title: str, description: str, args) -> int:
-    """提交 MR，按优先级自动选择提交方式：
-    1. 显式 --gitlab-api 标志
-    2. 检测到 AGENTGATE_GITLAB_TOKEN 环境变量（自动走 API，无需手动加 --gitlab-api）
-    3. glab / gh CLI
-    4. 降级：打印描述 + MR 创建链接
-    """
-    # 优先级 1: 显式 --gitlab-api
+    """Submit an MR, then fall back to a prefilled GitLab browser page."""
     if getattr(args, "gitlab_api", False):
-        return submit_gitlab_api(title, description, args.target_branch, args)
+        rc = submit_gitlab_api(title, description, args.target_branch, args)
+        if rc == 0:
+            return 0
+        return open_gitlab_mr_fallback(
+            title,
+            description,
+            args,
+            "GitLab API submit failed; falling back to browser MR creation.",
+        )
 
-    # 优先级 2: 检测环境变量，有 token 自动走 API
-    token = (getattr(args, "gitlab_token", None)
-             or os.environ.get("AGENTGATE_GITLAB_TOKEN"))
-    gitlab_url = (getattr(args, "gitlab_url", None)
-                  or os.environ.get("AGENTGATE_GITLAB_URL")
-                  or os.environ.get("CI_SERVER_URL"))
-    project_id = (getattr(args, "gitlab_project_id", None)
-                  or os.environ.get("AGENTGATE_GITLAB_PROJECT_ID")
-                  or os.environ.get("CI_PROJECT_ID"))
+    token = (
+        getattr(args, "gitlab_token", None)
+        or _gitlab_token_from_env()
+    )
+    gitlab_url = (
+        getattr(args, "gitlab_url", None)
+        or os.environ.get("AGENTGATE_GITLAB_URL")
+        or os.environ.get("CI_SERVER_URL")
+    )
+    project_id = (
+        getattr(args, "gitlab_project_id", None)
+        or os.environ.get("AGENTGATE_GITLAB_PROJECT_ID")
+        or os.environ.get("CI_PROJECT_ID")
+    )
     if token and gitlab_url and project_id:
-        sys.stderr.write("[create-mr] 检测到 GitLab API 凭据，自动使用 API 提交。\n")
-        return submit_gitlab_api(title, description, args.target_branch, args)
+        sys.stderr.write("[create-mr] Detected GitLab API credentials; submitting via API.\n")
+        rc = submit_gitlab_api(title, description, args.target_branch, args)
+        if rc == 0:
+            return 0
+        return open_gitlab_mr_fallback(
+            title,
+            description,
+            args,
+            "GitLab API submit failed; falling back to browser MR creation.",
+        )
 
-    # 优先级 3: CLI
     cli = detect_cli()
     if cli:
-        return submit_mr(title, description, args.target_branch, cli)
+        rc = submit_mr(title, description, args.target_branch, cli)
+        if rc == 0:
+            return 0
+        return open_gitlab_mr_fallback(
+            title,
+            description,
+            args,
+            f"{cli} submit failed; falling back to browser MR creation.",
+        )
 
-    # 优先级 4: 降级打印 + MR 创建链接
-    source = (getattr(args, "source_branch", None) or current_branch())
-    if gitlab_url and project_id:
-        encoded_source = urllib.parse.quote(source, safe="")
-        encoded_target = urllib.parse.quote(args.target_branch, safe="")
-        mr_url = (
-            f"{gitlab_url.rstrip('/')}/{project_id}/-/merge_requests/new"
-            f"?merge_request[source_branch]={encoded_source}"
-            f"&merge_request[target_branch]={encoded_target}"
-            f"&issuable_template=default"
-        )
-        sys.stderr.write(
-            "[create-mr] 未找到 glab/gh CLI，也未配置 AGENTGATE_GITLAB_TOKEN。\n"
-            "  若要自动提交，可通过以下任一方式解决:\n"
-            "    A) 安装 glab CLI: https://gitlab.com/gitlab-org/cli\n"
-            "    B) 设置环境变量: export AGENTGATE_GITLAB_TOKEN=<your-token>\n"
-            "       (可在 GitLab → User Settings → Access Tokens 创建)\n"
-            f"  或直接在浏览器打开以下链接手动创建 MR:\n"
-            f"  {mr_url}\n\n"
-            "  MR 描述已生成，复制粘贴到描述框:\n\n"
-        )
-    else:
-        sys.stderr.write(
-            "[create-mr] 未找到 glab/gh CLI，也未配置 AGENTGATE_GITLAB_TOKEN。\n"
-            "  若要自动提交，可通过以下任一方式解决:\n"
-            "    A) 安装 glab CLI: https://gitlab.com/gitlab-org/cli\n"
-            "    B) 设置环境变量: export AGENTGATE_GITLAB_TOKEN=<your-token>\n"
-            "       并同时设置 AGENTGATE_GITLAB_URL 和 AGENTGATE_GITLAB_PROJECT_ID\n"
-            "  MR 描述已生成，请手动创建 MR:\n\n"
-        )
-    print(f"标题: {title}\n")
-    print(description)
-    return 1
-
+    return open_gitlab_mr_fallback(
+        title,
+        description,
+        args,
+        "No usable glab/gh CLI found; falling back to browser MR creation.",
+    )
 
 if __name__ == "__main__":
     sys.exit(main())

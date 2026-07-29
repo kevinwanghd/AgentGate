@@ -30,13 +30,16 @@ diff_base + target_branch + config + output
 
 分支清单必须相对目标分支发生变化，防止新分支复用上一次 MR 的旧描述。
 
-项目接口回退只能通过 `--allow-api-fallback` 显式启用，并且只读取 `AGENTGATE_GITLAB_READ_TOKEN`。以下变量永远不能被描述校验模块读取：
+项目接口回退只能通过 `--allow-api-fallback` 显式启用。启用后，AgentGate 会按通用顺序读取可用的 GitLab token 环境变量，最终由 GitLab API 判断该 token 是否有权限；AgentGate 不按发起人、工具、机器或变量名预先阻断。支持的常见变量包括：
 
 ```text
+AGENTGATE_GITLAB_READ_TOKEN
+AGENTGATE_GITLAB_TOKEN
+GITLAB_TOKEN
+GLAB_TOKEN
+GOVERNANCE_MR_VALIDATE_TOKEN
 GOVERNANCE_MERGE_BOT_TOKEN
 PRIVATE_TOKEN
-AGENTGATE_GITLAB_TOKEN
-GOVERNANCE_MR_VALIDATE_TOKEN
 ```
 
 ## 证据语义
@@ -73,5 +76,5 @@ git push
 - 清单未由当前分支更新：失败；
 - 清单格式不合规：失败；
 - 项目接口回退未显式启用：不访问接口；
-- 显式回退但专用只读 token 缺失：失败；
+- 显式回退但没有任何可用 GitLab token：失败；
 - 默认分支自身流水线：跳过，因为不存在待校验 MR。
