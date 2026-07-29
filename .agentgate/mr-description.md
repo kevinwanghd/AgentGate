@@ -1,41 +1,40 @@
 ## 背景
 
-修复 AgentGate 自举问题：创建 PR/MR 前自动生成中文合规模板，并在本地通过 MR 描述校验、风险扫描和回归测试后再提交，避免 CI 事后才暴露模板、测试删除或风险注解问题。
+避免 GitLab 治理 job 在 Python slim 镜像中每次运行时安装 git / PyYAML，降低 CI 冷启动耗时，并保证 zhuishu-flutter 接入新版 AgentGate 后，不会因为门禁镜像缺少 git 或依赖下载过慢而阻塞正常提交。
 
 ## 变更内容
 
-- `scripts/create_mr.py` (+143/-57)
-- `tests/test_regressions.py` (+67/-9)
-- `docs/07-legacy-gitlab-mr-description.md` (+7/-4)
-- `scripts/gitlab_mr_compat.py` (+5/-4)
+- `ci/governance-ci.yml` 改为使用 `GOVERNANCE_PY_IMAGE` / `GOVERNANCE_SECRET_IMAGE` 预构建镜像，并增加 git / Python / PyYAML / gitleaks 快速预检。
+- 移除 GitLab 新版 `rules` / `needs` 依赖，改用 GitLab 11.4 兼容的 `only` + `dependencies` + artifacts。
+- 将语言测试跳过逻辑从 `rules` 条件下沉到脚本内部，确保跳过时仍产出结果文件。
+- `install.sh` 不再内嵌旧 CI 模板，改为安装中心 `ci/governance-ci.yml`，避免模板漂移。
+- 增加回归测试，防止 `apt-get`、`python:3.11-slim`、`rules` / `needs` 回流。
 
 ## 不包含的内容
 
-无
+无。
 
 ## 自测确认
 
-- [x] python -m unittest tests.test_regressions.AgentGateCliTests -v：通过，5 个测试通过。
-- [x] python -m unittest discover -s tests -v：通过，146 个测试通过。
-- [x] python -m compileall -q scripts tests：通过。
-- [x] python scripts/scan_risks.py --diff-base origin/main --config governance.config.yml：通过。
-- [x] git diff --check：通过。
+- PASS: `PYTHONIOENCODING=utf-8 python scripts/validate_yaml.py --ci`
+- PASS: `git diff --check`
+- PASS: `PYTHONIOENCODING=utf-8 python -m unittest discover -s tests -v`（147 tests）
+- PASS: `python scripts/agentgate.py mr prepare ... --prepare`
 
 ## 风险与回滚
 
-- 风险：create_mr.py 的提交前检查会让不合规描述、风险扫描失败或配置的测试命令失败时提前阻断 PR/MR 创建。
-- 应对：保留 --skip-local-validate、--skip-risk-scan、--skip-tests 作为迁移/调试逃生口，但默认闭环开启。
-- 回滚：如某消费仓库测试命令不适配，可先配置 create_mr.preflight_test_command 或临时使用 --skip-tests，不影响既有 CI 门禁。
+- 风险：默认治理镜像必须在内网镜像仓库可拉取，并预装 git / Python / PyYAML；密钥扫描镜像必须预装 git / gitleaks。
+- 回滚：将 `GOVERNANCE_PY_IMAGE` / `GOVERNANCE_SECRET_IMAGE` CI 变量临时覆盖为可用镜像，或回退本次模板变更。
 
 ## 关联
 
--
+- PR #41
 
 ---
 
 <details>
 <summary>📊 治理元数据（CI 自动采集）</summary>
 
-（未检测到治理 trailer，建议安装 hook: bash governance/scripts/install-hooks.sh）
+（未检测到治理 trailer，建议安装 hook: `bash governance/scripts/install-hooks.sh`）
 
 </details>
