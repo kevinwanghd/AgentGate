@@ -177,3 +177,10 @@ testing:
 
 deliverhq_integration:
   enabled: false
+
+create_mr:
+  # AgentGate 自身开发必须吃自己的狗粮: 创建 PR/MR 前先跑与创建闭环相关的回归测试。
+  # 全量测试仍应在提交前/CI 中单独运行；避免在 create_mr 自身流程里递归执行整套测试导致环境污染。
+  # CI 或装了 pytest 的环境可用 --preflight-test-command pytest 覆盖。
+  # 消费仓库可按技术栈覆盖，例如 flutter test / dotnet test / go test ./...
+  preflight_test_command: python -m unittest tests.test_regressions.AgentGateCliTests

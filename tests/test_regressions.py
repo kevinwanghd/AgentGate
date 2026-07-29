@@ -289,6 +289,50 @@ class AgentGateCliTests(unittest.TestCase):
 
         self.assertEqual(1, rc)
 
+    def test_create_mr_preflight_runs_description_risk_and_tests(self) -> None:
+        args = mock.Mock(
+            config="governance.config.yml",
+            target_branch="origin/main",
+            skip_local_validate=False,
+            skip_risk_scan=False,
+            skip_tests=False,
+            preflight_test_command=None,
+        )
+        cfg = {"create_mr": {"preflight_test_command": "python -m unittest tests.test_regressions.AgentGateCliTests"}}
+        calls = []
+
+        def fake_run(cmd, text=True):
+            calls.append(cmd)
+            return mock.Mock(returncode=0)
+
+        with mock.patch.object(create_mr, "validate_generated_description", return_value=0) as validate, \
+                mock.patch.object(create_mr.subprocess, "run", side_effect=fake_run):
+            rc = create_mr.run_local_preflight("## 背景\n\n修复门禁。", args, cfg)
+
+        self.assertEqual(0, rc)
+        validate.assert_called_once()
+        self.assertEqual(sys.executable, calls[0][0])
+        self.assertTrue(calls[0][1].endswith("scan_risks.py"))
+        self.assertEqual(["python", "-m", "unittest", "tests.test_regressions.AgentGateCliTests"], calls[1])
+
+    def test_create_mr_preflight_stops_before_tests_when_risk_scan_fails(self) -> None:
+        args = mock.Mock(
+            config=None,
+            target_branch="origin/main",
+            skip_local_validate=False,
+            skip_risk_scan=False,
+            skip_tests=False,
+            preflight_test_command=None,
+        )
+        cfg = {"create_mr": {"preflight_test_command": "python -m unittest tests.test_regressions.AgentGateCliTests"}}
+
+        with mock.patch.object(create_mr, "validate_generated_description", return_value=0), \
+                mock.patch.object(create_mr.subprocess, "run", return_value=mock.Mock(returncode=1)) as run:
+            rc = create_mr.run_local_preflight("## 背景\n\n修复门禁。", args, cfg)
+
+        self.assertEqual(1, rc)
+        self.assertEqual(1, run.call_count)
+
 
 class GitLabMrCompatTests(unittest.TestCase):
     def test_derives_gitlab_url_from_legacy_ci_variables(self) -> None:
@@ -370,6 +414,7 @@ class GitLabMrCompatTests(unittest.TestCase):
     def test_explicit_api_fallback_uses_dedicated_read_token(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             output = Path(td) / "result.json"
+            missing_manifest = Path(td) / "missing-mr-description.md"
             mr = {
                 "iid": 25,
                 "description": "Bug",
@@ -390,6 +435,7 @@ class GitLabMrCompatTests(unittest.TestCase):
                         "--allow-api-fallback",
                         "--target-branch", "master",
                         "--diff-base", "origin/master",
+                        "--manifest-path", str(missing_manifest),
                         "--output", str(output),
                     ]):
                 rc = gitlab_mr_compat.main()
