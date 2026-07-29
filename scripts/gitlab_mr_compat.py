@@ -5,7 +5,7 @@ Resolution order:
 
 1. GitLab-provided ``CI_MERGE_REQUEST_DESCRIPTION`` (actual MR verified).
 2. A version-controlled branch manifest (policy validated, actual MR not verified).
-3. GitLab project API, only when explicitly enabled with a dedicated read token.
+3. GitLab project API, only when explicitly enabled with an available token.
 
 The default path is safe for GitLab 11.x branch pipelines: no project API call
 and no personal or merge credential is required.
@@ -31,6 +31,7 @@ from governance_common import ConfigError
 DEFAULT_RESULT = "governance-mr-validate-result.json"
 DEFAULT_MANIFEST_PATH = ".agentgate/mr-description.md"
 READ_TOKEN_ENV = "AGENTGATE_GITLAB_READ_TOKEN"
+TOKEN_ENV_NAMES = (READ_TOKEN_ENV, *create_mr.GITLAB_TOKEN_ENV_NAMES)
 
 
 @dataclass(frozen=True)
@@ -98,14 +99,14 @@ def _require_api_config(args: argparse.Namespace) -> tuple[str, str, str]:
         args.gitlab_project_id
         or _env("AGENTGATE_GITLAB_PROJECT_ID", "CI_PROJECT_ID")
     )
-    token = _env(READ_TOKEN_ENV)
+    token = _env(*TOKEN_ENV_NAMES)
     missing = []
     if not base_url:
         missing.append("gitlab url")
     if not project_id:
         missing.append("project id")
     if not token:
-        missing.append(f"dedicated read token ({READ_TOKEN_ENV})")
+        missing.append("GitLab token env")
     if missing:
         raise DescriptionSourceError(
             "missing GitLab read settings: " + ", ".join(missing)
@@ -285,7 +286,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--allow-api-fallback",
         action="store_true",
-        help=f"allow GitLab project lookup using only {READ_TOKEN_ENV}",
+        help="allow GitLab project lookup using the first available GitLab token env",
     )
     parser.add_argument("--gitlab-url", help="GitLab URL for explicit API fallback")
     parser.add_argument("--gitlab-project-id", help="GitLab project ID or path")

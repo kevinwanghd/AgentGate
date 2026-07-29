@@ -60,6 +60,14 @@ except Exception:  # pragma: no cover
 
 EVIDENCE_PATH = ".governance/test-evidence.jsonl"
 DEFAULT_DESCRIPTION_MANIFEST = ".agentgate/mr-description.md"
+GITLAB_TOKEN_ENV_NAMES = (
+    "AGENTGATE_GITLAB_TOKEN",
+    "GITLAB_TOKEN",
+    "GLAB_TOKEN",
+    "GOVERNANCE_MR_VALIDATE_TOKEN",
+    "GOVERNANCE_MERGE_BOT_TOKEN",
+    "PRIVATE_TOKEN",
+)
 
 DEFAULT_CONFIG = {
     "large_change": {
@@ -512,6 +520,14 @@ def _gitlab_api_request(
         raise RuntimeError(f"GitLab API {method} {path} 返回非 JSON: {body[:500]}") from exc
 
 
+def _gitlab_token_from_env() -> str | None:
+    for name in GITLAB_TOKEN_ENV_NAMES:
+        value = os.environ.get(name)
+        if value:
+            return value
+    return None
+
+
 def _require_gitlab_api_args(args) -> tuple[str, str, str]:
     base_url = args.gitlab_url or os.environ.get("AGENTGATE_GITLAB_URL") or os.environ.get(
         "CI_SERVER_URL"
@@ -519,7 +535,7 @@ def _require_gitlab_api_args(args) -> tuple[str, str, str]:
     project_id = args.gitlab_project_id or os.environ.get(
         "AGENTGATE_GITLAB_PROJECT_ID"
     ) or os.environ.get("CI_PROJECT_ID")
-    token = args.gitlab_token or os.environ.get("AGENTGATE_GITLAB_TOKEN")
+    token = args.gitlab_token or _gitlab_token_from_env()
 
     missing = []
     if not base_url:
@@ -527,7 +543,7 @@ def _require_gitlab_api_args(args) -> tuple[str, str, str]:
     if not project_id:
         missing.append("--gitlab-project-id/AGENTGATE_GITLAB_PROJECT_ID")
     if not token:
-        missing.append("--gitlab-token/AGENTGATE_GITLAB_TOKEN")
+        missing.append("--gitlab-token/GitLab token env")
     if missing:
         raise RuntimeError("缺少 GitLab API 参数: " + ", ".join(missing))
     return base_url, project_id, token
@@ -901,7 +917,7 @@ def _submit_with_fallback(title: str, description: str, args) -> int:
 
     token = (
         getattr(args, "gitlab_token", None)
-        or os.environ.get("AGENTGATE_GITLAB_TOKEN")
+        or _gitlab_token_from_env()
     )
     gitlab_url = (
         getattr(args, "gitlab_url", None)
