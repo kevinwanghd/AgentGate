@@ -40,6 +40,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -70,6 +71,9 @@ GITLAB_TOKEN_ENV_NAMES = (
 )
 
 DEFAULT_CONFIG = {
+    "create_mr": {
+        "preflight_test_command": None,
+    },
     "large_change": {
         "line_threshold": 500,
         "excluded_paths": ["*.lock", "*.Designer.cs", "migrations/**", "**/*.generated.*"],
@@ -95,7 +99,7 @@ _NOISE_PATTERNS = ["*.lock", "**/*.generated.*", "*.Designer.cs"]
 # ============================================================
 def load_config(path: str | None) -> dict:
     return load_shared_config(
-        path, DEFAULT_CONFIG, ("large_change", "deliverhq_integration")
+        path, DEFAULT_CONFIG, ("create_mr", "large_change", "deliverhq_integration")
     )
 
 
@@ -466,6 +470,82 @@ def validate_generated_description(description: str, args) -> int:
     return 1
 
 
+def _script_path(name: str) -> str:
+    return str(Path(__file__).resolve().parent / name)
+
+
+def run_risk_scan(args) -> int:
+    cmd = [
+        sys.executable,
+        _script_path("scan_risks.py"),
+        "--diff-base",
+        args.target_branch,
+    ]
+    if args.config:
+        cmd.extend(["--config", args.config])
+    sys.stderr.write("[create-mr] 本地风险扫描: scan_risks.py ...\n")
+    rc = subprocess.run(cmd, text=True).returncode
+    if rc != 0:
+        sys.stderr.write(
+            "[create-mr] 风险扫描未通过，拒绝创建 MR。请按 scan_risks 输出补充 "
+            "risk:<type> reason:\"...\" owner:@team reviewed:YYYY-MM-DD 注解，"
+            "尤其是测试删除/替换场景需要 risk:test-removal。\n"
+        )
+    return rc
+
+
+def _configured_test_command(args, cfg: dict) -> str | None:
+    if getattr(args, "preflight_test_command", None):
+        return args.preflight_test_command
+    create_cfg = cfg.get("create_mr", {})
+    command = create_cfg.get("preflight_test_command")
+    return str(command).strip() if command else None
+
+
+def run_preflight_tests(args, cfg: dict) -> int:
+    if getattr(args, "skip_tests", False):
+        sys.stderr.write("[create-mr] 已按参数跳过本地测试命令。\n")
+        return 0
+
+    command = _configured_test_command(args, cfg)
+    if not command:
+        sys.stderr.write(
+            "[create-mr] 未配置本地测试命令；跳过测试执行。建议在 governance.config.yml "
+            "配置 create_mr.preflight_test_command，或本次使用 --preflight-test-command。\n"
+        )
+        return 0
+
+    sys.stderr.write(f"[create-mr] 本地测试: {command}\n")
+    try:
+        cmd = shlex.split(command, posix=(os.name != "nt"))
+    except ValueError as exc:
+        sys.stderr.write(f"[create-mr] 测试命令解析失败: {exc}\n")
+        return 2
+    rc = subprocess.run(cmd, text=True).returncode
+    if rc != 0:
+        sys.stderr.write("[create-mr] 本地测试未通过，拒绝创建 MR。请修复后重跑。\n")
+    return rc
+
+
+def run_local_preflight(description: str, args, cfg: dict) -> int:
+    """Run AgentGate checks before creating or preparing an MR."""
+    if not getattr(args, "skip_local_validate", False):
+        rc = validate_generated_description(description, args)
+        if rc != 0:
+            return rc
+    else:
+        sys.stderr.write("[create-mr] 已按参数跳过 MR 描述本地校验。\n")
+
+    if not getattr(args, "skip_risk_scan", False):
+        rc = run_risk_scan(args)
+        if rc != 0:
+            return rc
+    else:
+        sys.stderr.write("[create-mr] 已按参数跳过本地风险扫描。\n")
+
+    return run_preflight_tests(args, cfg)
+
+
 def write_description_manifest(path: str, description: str) -> Path:
     """Write the branch-owned MR description used by legacy GitLab CI."""
     manifest = Path(path)
@@ -824,6 +904,12 @@ def main() -> int:
                     help="MR 合并后删除源分支")
     ap.add_argument("--skip-local-validate", action="store_true",
                     help="跳过 create_mr.py 提交前的 MR 描述本地校验（仅用于迁移/调试）")
+    ap.add_argument("--skip-risk-scan", action="store_true",
+                    help="跳过 create_mr.py 提交前的本地风险扫描（仅用于迁移/调试）")
+    ap.add_argument("--skip-tests", action="store_true",
+                    help="跳过 create_mr.py 提交前的本地测试命令（仅用于无测试命令的仓库）")
+    ap.add_argument("--preflight-test-command",
+                    help="创建 MR 前运行的测试命令；默认读取 create_mr.preflight_test_command")
     args = ap.parse_args()
 
     if args.gitlab_preflight:
@@ -883,8 +969,8 @@ def main() -> int:
             description = f.read()
         os.unlink(path)
 
-    if not args.dry_run and not args.skip_local_validate:
-        rc = validate_generated_description(description, args)
+    if not args.dry_run:
+        rc = run_local_preflight(description, args, cfg)
         if rc != 0:
             return rc
 
