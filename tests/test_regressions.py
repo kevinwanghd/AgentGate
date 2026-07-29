@@ -495,6 +495,7 @@ class GitLabMrCompatTests(unittest.TestCase):
             self.assertIn("API fallback is disabled", payload["reason"])
             api.assert_not_called()
 
+    # risk:test-removal reason:"replaced obsolete token-source rejection with authorized-token acceptance coverage" owner:@agentgate reviewed:2026-07-29
     def test_api_fallback_accepts_any_available_gitlab_token(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             output = Path(td) / "result.json"
