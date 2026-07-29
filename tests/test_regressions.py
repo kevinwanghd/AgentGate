@@ -748,7 +748,7 @@ class CreateMrSubmitFallbackTests(unittest.TestCase):
 
         self.assertEqual(1, rc)
         url = browser.call_args.args[0]
-        self.assertIn("/group/proj/-/merge_requests/new?", url)
+        self.assertIn("/group/proj/merge_requests/new?", url)
         query = create_mr.urllib.parse.parse_qs(create_mr.urllib.parse.urlparse(url).query)
         self.assertEqual(["fix: title"], query["merge_request[title]"])
         self.assertEqual([body], query["merge_request[description]"])

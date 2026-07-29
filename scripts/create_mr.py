@@ -638,7 +638,7 @@ def build_gitlab_new_mr_url(
         }
     )
     project_path = _gitlab_project_web_path(project_id)
-    return f"{gitlab_url.rstrip('/')}/{project_path}/-/merge_requests/new?{query}"
+    return f"{gitlab_url.rstrip('/')}/{project_path}/merge_requests/new?{query}"
 
 
 def open_gitlab_mr_fallback(
