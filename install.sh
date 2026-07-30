@@ -40,69 +40,6 @@ TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 # 90 天 soft_deadline 默认值
 SOFT_DEADLINE="$(date -u -d "+90 days" +%Y-%m-%d 2>/dev/null || date -u -v+90d +%Y-%m-%d)"
 
-# ---------- GitLab URL / project id 自动探测 ----------
-_detect_gitlab_url() {
-  # 优先环境变量，其次从 git remote 推导
-  if [[ -n "${AGENTGATE_GITLAB_URL:-}" ]]; then
-    echo "$AGENTGATE_GITLAB_URL"
-    return
-  fi
-  if [[ -n "${CI_SERVER_URL:-}" ]]; then
-    echo "$CI_SERVER_URL"
-    return
-  fi
-  local remote_url
-  remote_url="$(git -C "${TARGET_DIR}" remote get-url origin 2>/dev/null || true)"
-  if [[ -z "$remote_url" ]]; then return; fi
-  # https://host/... 或 git@host:...
-  if [[ "$remote_url" =~ ^https?://([^/]+)/ ]]; then
-    echo "https://${BASH_REMATCH[1]}"
-  elif [[ "$remote_url" =~ ^[^@]+@([^:]+): ]]; then
-    echo "https://${BASH_REMATCH[1]}"
-  fi
-}
-
-_detect_gitlab_project_id() {
-  local gitlab_url="$1"
-  # CI 环境直接有
-  if [[ -n "${CI_PROJECT_ID:-}" ]]; then
-    echo "$CI_PROJECT_ID"
-    return
-  fi
-  if [[ -n "${AGENTGATE_GITLAB_PROJECT_ID:-}" ]]; then
-    echo "$AGENTGATE_GITLAB_PROJECT_ID"
-    return
-  fi
-  # 用 token + API 查
-  local token="${AGENTGATE_GITLAB_TOKEN:-}"
-  if [[ -z "$token" || -z "$gitlab_url" ]]; then return; fi
-  local repo_name
-  repo_name="$(basename "${TARGET_DIR}")"
-  local result
-  result="$(curl -sf --max-time 5 \
-    -H "PRIVATE-TOKEN: $token" \
-    "${gitlab_url}/api/v4/projects?search=${repo_name}&per_page=10" 2>/dev/null || true)"
-  if [[ -z "$result" ]]; then return; fi
-  # 取 path_with_namespace 精确匹配（remote_path 通过 $1 传入避免引号展开问题）
-  local remote_path
-  remote_path="$(git -C "${TARGET_DIR}" remote get-url origin 2>/dev/null | sed 's|.*://[^/]*/||;s|\.git$||' || true)"
-  printf '%s' "$result" | python3 -c \
-    "import sys,json; d=json.load(sys.stdin); r=sys.argv[1].lower(); [print(p['id']) or exit() for p in d if p.get('path_with_namespace','').lower()==r]" \
-    "$remote_path" 2>/dev/null || true
-}
-
-DETECTED_GITLAB_URL="$(_detect_gitlab_url || true)"
-DETECTED_PROJECT_ID="$(_detect_gitlab_project_id "${DETECTED_GITLAB_URL}" || true)"
-
-if [[ -n "$DETECTED_GITLAB_URL" && -n "$DETECTED_PROJECT_ID" ]]; then
-  ok "自动探测到 GitLab: ${DETECTED_GITLAB_URL}，project id: ${DETECTED_PROJECT_ID}"
-elif [[ -n "$DETECTED_GITLAB_URL" ]]; then
-  warn "探测到 GitLab URL: ${DETECTED_GITLAB_URL}，但无法自动查 project id（缺少 AGENTGATE_GITLAB_TOKEN）"
-  warn "安装完成后请在 governance.config.yml 中手动填写 create_mr.gitlab_project_id"
-else
-  warn "无法自动探测 GitLab URL，安装完成后请手动填写 governance.config.yml 的 create_mr 块"
-fi
-
 # ---------- 工具函数 ----------
 log()  { printf '\033[1;34m[install]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
@@ -145,6 +82,47 @@ log "MR 治理规范 ${VERSION} 安装到: ${TARGET_DIR}"
 
 if [[ ! -d "${TARGET_DIR}/.git" ]]; then
   warn "${TARGET_DIR} 不是 git 仓库根目录, 仍继续安装但 CI 集成可能失效。"
+fi
+
+# ---------- GitLab URL / project id 自动探测 ----------
+_detect_gitlab_url() {
+  if [[ -n "${AGENTGATE_GITLAB_URL:-}" ]]; then echo "$AGENTGATE_GITLAB_URL"; return; fi
+  if [[ -n "${CI_SERVER_URL:-}" ]]; then echo "$CI_SERVER_URL"; return; fi
+  local remote_url
+  remote_url="$(git -C "${TARGET_DIR}" remote get-url origin 2>/dev/null || true)"
+  if [[ -z "$remote_url" ]]; then return; fi
+  if [[ "$remote_url" =~ ^https?://[^@/]+@([^/]+)/ ]]; then echo "https://${BASH_REMATCH[1]}"
+  elif [[ "$remote_url" =~ ^https?://([^/]+)/ ]]; then echo "https://${BASH_REMATCH[1]}"
+  elif [[ "$remote_url" =~ ^[^@]+@([^:]+): ]]; then echo "https://${BASH_REMATCH[1]}"; fi
+}
+
+_detect_gitlab_project_id() {
+  local gitlab_url="$1"
+  if [[ -n "${CI_PROJECT_ID:-}" ]]; then echo "$CI_PROJECT_ID"; return; fi
+  if [[ -n "${AGENTGATE_GITLAB_PROJECT_ID:-}" ]]; then echo "$AGENTGATE_GITLAB_PROJECT_ID"; return; fi
+  local token="${AGENTGATE_GITLAB_TOKEN:-}"
+  if [[ -z "$token" || -z "$gitlab_url" ]]; then return; fi
+  local repo_name result remote_path
+  repo_name="$(basename "${TARGET_DIR}")"
+  result="$(curl -sf --max-time 5 -H "PRIVATE-TOKEN: $token" \
+    "${gitlab_url}/api/v4/projects?search=${repo_name}&per_page=10" 2>/dev/null || true)"
+  [[ -z "$result" ]] && return
+  remote_path="$(git -C "${TARGET_DIR}" remote get-url origin 2>/dev/null | sed 's|.*://[^/]*/||;s|\.git$||' || true)"
+  printf '%s' "$result" | python3 -c \
+    "import sys,json; d=json.load(sys.stdin); r=sys.argv[1].lower(); [print(p['id']) or exit() for p in d if p.get('path_with_namespace','').lower()==r]" \
+    "$remote_path" 2>/dev/null || true
+}
+
+DETECTED_GITLAB_URL="$(_detect_gitlab_url || true)"
+DETECTED_PROJECT_ID="$(_detect_gitlab_project_id "${DETECTED_GITLAB_URL}" || true)"
+
+if [[ -n "$DETECTED_GITLAB_URL" && -n "$DETECTED_PROJECT_ID" ]]; then
+  ok "自动探测到 GitLab: ${DETECTED_GITLAB_URL}，project id: ${DETECTED_PROJECT_ID}"
+elif [[ -n "$DETECTED_GITLAB_URL" ]]; then
+  warn "探测到 GitLab URL: ${DETECTED_GITLAB_URL}，但无法自动查 project id（缺少 AGENTGATE_GITLAB_TOKEN）"
+  warn "安装完成后请在 governance.config.yml 中手动填写 create_mr.gitlab_project_id"
+else
+  warn "无法自动探测 GitLab URL，安装完成后请手动填写 governance.config.yml 的 create_mr 块"
 fi
 
 # ---------- 自动检测 SOURCE_DIR ----------
@@ -282,7 +260,23 @@ fi
 log "生成 governance.config.yml"
 CONFIG_PATH="${TARGET_DIR}/governance.config.yml"
 if [[ -e "$CONFIG_PATH" ]]; then
-  warn "governance.config.yml 已存在, 跳过 (如需重置, 先手动删除)"
+  warn "governance.config.yml 已存在, 跳过生成 (如需重置, 先手动删除)"
+  # 若已存在但缺少 create_mr 块，自动追加（不覆盖用户已有配置）
+  if ! grep -q "^create_mr:" "$CONFIG_PATH"; then
+    if [[ -n "$DETECTED_GITLAB_URL" && -n "$DETECTED_PROJECT_ID" ]]; then
+      cat >> "$CONFIG_PATH" <<CEOF
+
+create_mr:
+  gitlab_url: "${DETECTED_GITLAB_URL}"
+  gitlab_project_id: "${DETECTED_PROJECT_ID}"
+  # AI agent 创建 MR 时直连 GitLab API，不依赖 glab/gh CLI
+  # 个人 token 放本机环境变量 AGENTGATE_GITLAB_TOKEN（不要提交进仓库）
+CEOF
+      ok "已追加 create_mr 块到 governance.config.yml (url=${DETECTED_GITLAB_URL}, id=${DETECTED_PROJECT_ID})"
+    else
+      warn "无法自动追加 create_mr 块：缺少探测结果，请手动在 governance.config.yml 末尾添加 create_mr.gitlab_url 和 create_mr.gitlab_project_id"
+    fi
+  fi
 else
   cat > "$CONFIG_PATH" <<EOF
 # MR 治理规范配置 v1
