@@ -2416,6 +2416,20 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
         self.assertIn('"merge_when_pipeline_succeeds": "true"', template)
         self.assertIn("CI_MERGE_REQUEST_SOURCE_BRANCH_SHA", template)
 
+    def test_gitlab_template_uses_prebuilt_images_and_legacy_syntax(self) -> None:
+        template = (ROOT / "ci" / "governance-ci.yml").read_text(encoding="utf-8")
+        self.assertIn("GOVERNANCE_PY_IMAGE", template)
+        self.assertIn("GOVERNANCE_SECRET_IMAGE", template)
+        self.assertIn("git --version", template)
+        self.assertIn("python -c \"import yaml; print('pyyaml ok')\"", template)
+        self.assertIn("dependencies:", template)
+        self.assertNotIn("apt-get", template)
+        self.assertNotIn("pip install -q pyyaml", template)
+        self.assertNotIn("python:3.11-slim", template)
+        self.assertNotIn("image: python:3.11", template)
+        self.assertNotIn("rules:", template)
+        self.assertNotIn("needs:", template)
+
     def test_installer_ships_gate_decision_and_gitlab_auto_merge_jobs(self) -> None:
         installer = (ROOT / "install.sh").read_text(encoding="utf-8")
         self.assertIn('scripts/gate_decision.py"   | write_file "governance/scripts/gate_decision.py"', installer)
@@ -2425,11 +2439,7 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
         self.assertIn("scripts/evidence_bundle.py", installer)
         self.assertIn("scripts/risk_merge_decision.py", installer)
         self.assertIn("profiles/flutter-mobile.yml", installer)
-        self.assertIn("governance:gate-decision:", installer)
-        self.assertIn("governance:mr-validate-compat:", installer)
-        self.assertIn("governance:auto-merge:", installer)
-        self.assertIn("GOVERNANCE_MERGE_BOT_TOKEN", installer)
-        self.assertIn("CI_MERGE_REQUEST_SOURCE_PROJECT_ID", installer)
+        self.assertIn('fetch_or_local "ci/governance-ci.yml" | write_file "governance/ci-snippet.yml"', installer)
 
 
 if __name__ == "__main__":

@@ -20,17 +20,23 @@ stages:
   - build
   - merge
 
+variables:
+  GOVERNANCE_PY_IMAGE: "swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest"
+  GOVERNANCE_SECRET_IMAGE: "swr.cn-north-4.myhuaweicloud.com/adbidding/governance/gitleaks:latest"
+
 # ── 1. 风险扫描: 硬阻断 ──────────────────────────────────────────────────────
 governance:risk-scan:
   stage: governance
-  image: python:3.11
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_COMMIT_BRANCH
+  image: "$GOVERNANCE_PY_IMAGE"
+  only:
+    - branches
+    - merge_requests
   variables:
     GIT_DEPTH: 0
   before_script:
-    - pip install -q pyyaml==6.0.3
+    - git --version
+    - python --version
+    - python -c "import yaml; print('pyyaml ok')"
   script:
     - |
       TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
@@ -54,13 +60,16 @@ governance:risk-scan:
 governance:secret-scan:
   stage: governance
   image:
-    name: zricethezav/gitleaks:v8.30.1
+    name: "$GOVERNANCE_SECRET_IMAGE"
     entrypoint: [""]
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_COMMIT_BRANCH
+  only:
+    - branches
+    - merge_requests
   variables:
     GIT_DEPTH: 0
+  before_script:
+    - git --version
+    - gitleaks version
   script:
     - |
       TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
@@ -85,13 +94,15 @@ governance:secret-scan:
 # ── 3. MR 描述校验: 软→硬 ───────────────────────────────────────────────────
 governance:mr-validate:
   stage: governance
-  image: python:3.11
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  image: "$GOVERNANCE_PY_IMAGE"
+  only:
+    - merge_requests
   variables:
     GIT_DEPTH: 0          # 需完整历史以读取 commit 里的 AI-Usage trailer
   before_script:
-    - pip install -q pyyaml==6.0.3
+    - git --version
+    - python --version
+    - python -c "import yaml; print('pyyaml ok')"
   script:
     - |
       TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
@@ -117,14 +128,16 @@ governance:mr-validate:
 # 退回读 commit 的 Tested: trailer。
 governance:test-check:
   stage: governance
-  image: python:3.11
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_COMMIT_BRANCH
+  image: "$GOVERNANCE_PY_IMAGE"
+  only:
+    - branches
+    - merge_requests
   variables:
     GIT_DEPTH: 0
   before_script:
-    - pip install -q pyyaml==6.0.3
+    - git --version
+    - python --version
+    - python -c "import yaml; print('pyyaml ok')"
   script:
     - |
       TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
@@ -149,19 +162,35 @@ governance:test-check:
 # 也可在 MR 流水线里手动触发 (when: manual) 随时生成快照。
 governance:expired-report:
   stage: governance
-  image: python:3.11
-  rules:
-    # 定时 pipeline
-    - if: $CI_PIPELINE_SOURCE == "schedule"
-    # 手动触发 (MR 或分支 pipeline 均可)
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-      when: manual
-      allow_failure: true
-    - if: $CI_COMMIT_BRANCH
-      when: manual
-      allow_failure: true
+  image: "$GOVERNANCE_PY_IMAGE"
+  only:
+    - schedules
   before_script:
-    - pip install -q pyyaml==6.0.3
+    - git --version
+    - python --version
+    - python -c "import yaml; print('pyyaml ok')"
+  script:
+    - |
+      OUTPUT="${GOVERNANCE_REPORT_OUTPUT:-governance/reports/expired-annotations.md}"
+      python governance/scripts/report_expired.py \
+        --root . \
+        --output "$OUTPUT"
+  artifacts:
+    paths:
+      - governance/reports/
+  allow_failure: true
+
+governance:expired-report-manual:
+  stage: governance
+  image: "$GOVERNANCE_PY_IMAGE"
+  only:
+    - branches
+    - merge_requests
+  when: manual
+  before_script:
+    - git --version
+    - python --version
+    - python -c "import yaml; print('pyyaml ok')"
   script:
     - |
       OUTPUT="${GOVERNANCE_REPORT_OUTPUT:-governance/reports/expired-annotations.md}"
@@ -179,14 +208,19 @@ governance:expired-report:
 governance:go-test:
   stage: test
   image: golang:1.22-bookworm
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $GOVERNANCE_SKIP_GO_TEST != "true"
-    - if: $CI_COMMIT_BRANCH && $GOVERNANCE_SKIP_GO_TEST != "true"
+  only:
+    - branches
+    - merge_requests
   variables:
     GIT_DEPTH: 0
     GOFLAGS: "-mod=mod"
   script:
     - |
+      if [ "${GOVERNANCE_SKIP_GO_TEST:-false}" = "true" ]; then
+        echo "[go-test] GOVERNANCE_SKIP_GO_TEST=true, skip."
+        echo "{\"status\": \"skip\"}" > governance-go-test-result.json
+        exit 0
+      fi
       # 仓库没有 go.mod 时静默跳过 (非 Go 仓库)
       if [ ! -f go.mod ]; then
         echo "[go-test] 未找到 go.mod, 跳过 Go 测试。"
@@ -213,11 +247,16 @@ governance:go-test:
 governance:flutter-test:
   stage: test
   image: ghcr.io/cirruslabs/flutter:stable
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $GOVERNANCE_SKIP_FLUTTER_TEST != "true"
-    - if: $CI_COMMIT_BRANCH && $GOVERNANCE_SKIP_FLUTTER_TEST != "true"
+  only:
+    - branches
+    - merge_requests
   script:
     - |
+      if [ "${GOVERNANCE_SKIP_FLUTTER_TEST:-false}" = "true" ]; then
+        echo "[flutter-test] GOVERNANCE_SKIP_FLUTTER_TEST=true, skip."
+        echo "{\"status\": \"skip\"}" > governance-flutter-test-result.json
+        exit 0
+      fi
       DIRS=$(find . -maxdepth 3 -name "pubspec.yaml" -not -path "*/.*" | xargs -I{} dirname {} 2>/dev/null)
       if [ -z "$DIRS" ]; then
         echo "[flutter-test] 未找到 pubspec.yaml, 跳过 Flutter 测试。"
@@ -241,12 +280,21 @@ governance:flutter-test:
 # ── 7b. Python 测试: 无 requirements.txt / pyproject.toml / setup.py 时跳过 ──
 governance:python-test:
   stage: test
-  image: python:3.11
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $GOVERNANCE_SKIP_PYTHON_TEST != "true"
-    - if: $CI_COMMIT_BRANCH && $GOVERNANCE_SKIP_PYTHON_TEST != "true"
+  image: "$GOVERNANCE_PY_IMAGE"
+  only:
+    - branches
+    - merge_requests
+  before_script:
+    - git --version
+    - python --version
+    - python -c "import yaml; print('pyyaml ok')"
   script:
     - |
+      if [ "${GOVERNANCE_SKIP_PYTHON_TEST:-false}" = "true" ]; then
+        echo "[python-test] GOVERNANCE_SKIP_PYTHON_TEST=true, skip."
+        echo "{\"status\": \"skip\"}" > governance-python-test-result.json
+        exit 0
+      fi
       DIRS=$(find . -maxdepth 3 \( -name "requirements.txt" -o -name "pyproject.toml" -o -name "setup.py" \) \
              -not -path "*/.*" -not -path "*/node_modules/*" | xargs -I{} dirname {} | sort -u)
       if [ -z "$DIRS" ]; then
@@ -278,11 +326,16 @@ governance:python-test:
 governance:node-test:
   stage: test
   image: node:20-slim
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $GOVERNANCE_SKIP_NODE_TEST != "true"
-    - if: $CI_COMMIT_BRANCH && $GOVERNANCE_SKIP_NODE_TEST != "true"
+  only:
+    - branches
+    - merge_requests
   script:
     - |
+      if [ "${GOVERNANCE_SKIP_NODE_TEST:-false}" = "true" ]; then
+        echo "[node-test] GOVERNANCE_SKIP_NODE_TEST=true, skip."
+        echo "{\"status\": \"skip\"}" > governance-node-test-result.json
+        exit 0
+      fi
       # 排除子包的 package.json（node_modules 及有父级 package.json 的子目录）
       DIRS=$(find . -maxdepth 3 -name "package.json" \
              -not -path "*/node_modules/*" -not -path "*/.*" | xargs -I{} dirname {} | sort -u)
@@ -313,11 +366,16 @@ governance:node-test:
 governance:java-test:
   stage: test
   image: maven:3.9-eclipse-temurin-21
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $GOVERNANCE_SKIP_JAVA_TEST != "true"
-    - if: $CI_COMMIT_BRANCH && $GOVERNANCE_SKIP_JAVA_TEST != "true"
+  only:
+    - branches
+    - merge_requests
   script:
     - |
+      if [ "${GOVERNANCE_SKIP_JAVA_TEST:-false}" = "true" ]; then
+        echo "[java-test] GOVERNANCE_SKIP_JAVA_TEST=true, skip."
+        echo "{\"status\": \"skip\"}" > governance-java-test-result.json
+        exit 0
+      fi
       DIRS=$(find . -maxdepth 3 \( -name "pom.xml" -o -name "build.gradle" -o -name "build.gradle.kts" \) \
              -not -path "*/.*" | xargs -I{} dirname {} | sort -u)
       if [ -z "$DIRS" ]; then
@@ -350,11 +408,16 @@ governance:java-test:
 governance:dotnet-test:
   stage: test
   image: mcr.microsoft.com/dotnet/sdk:8.0
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $GOVERNANCE_SKIP_DOTNET_TEST != "true"
-    - if: $CI_COMMIT_BRANCH && $GOVERNANCE_SKIP_DOTNET_TEST != "true"
+  only:
+    - branches
+    - merge_requests
   script:
     - |
+      if [ "${GOVERNANCE_SKIP_DOTNET_TEST:-false}" = "true" ]; then
+        echo "[dotnet-test] GOVERNANCE_SKIP_DOTNET_TEST=true, skip."
+        echo "{\"status\": \"skip\"}" > governance-dotnet-test-result.json
+        exit 0
+      fi
       SLN=$(find . -maxdepth 3 -name "*.sln" -not -path "*/.*" | head -1)
       if [ -n "$SLN" ]; then
         echo "[dotnet-test] 使用 solution: $SLN"
@@ -385,11 +448,16 @@ governance:dotnet-test:
 governance:rust-test:
   stage: test
   image: rust:1.78-slim
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $GOVERNANCE_SKIP_RUST_TEST != "true"
-    - if: $CI_COMMIT_BRANCH && $GOVERNANCE_SKIP_RUST_TEST != "true"
+  only:
+    - branches
+    - merge_requests
   script:
     - |
+      if [ "${GOVERNANCE_SKIP_RUST_TEST:-false}" = "true" ]; then
+        echo "[rust-test] GOVERNANCE_SKIP_RUST_TEST=true, skip."
+        echo "{\"status\": \"skip\"}" > governance-rust-test-result.json
+        exit 0
+      fi
       # workspace 根的 Cargo.toml 包含所有成员，直接在根跑即可覆盖所有 crate
       ROOT_CARGO=$(find . -maxdepth 1 -name "Cargo.toml" | head -1)
       if [ -n "$ROOT_CARGO" ]; then
@@ -417,9 +485,9 @@ governance:rust-test:
 # ── 8. GateResult 决策: 汇总 CI 独立证据, 不直接合并 ─────────────────────────
 governance:gate-decision:
   stage: test
-  image: python:3.11
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  image: "$GOVERNANCE_PY_IMAGE"
+  only:
+    - merge_requests
   variables:
     GIT_DEPTH: 0
   dependencies:
@@ -435,7 +503,9 @@ governance:gate-decision:
     - governance:dotnet-test
     - governance:rust-test
   before_script:
-    - pip install -q pyyaml==6.0.3
+    - git --version
+    - python --version
+    - python -c "import yaml; print('pyyaml ok')"
   script:
     - |
       TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
@@ -498,9 +568,9 @@ governance:gate-decision:
 # ── 8. Merge Bot: 仅消费 GateResult, 使用独立 token 设置 GitLab 自动合并 ─────
 governance:auto-merge:
   stage: merge
-  image: python:3.11
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  image: "$GOVERNANCE_PY_IMAGE"
+  only:
+    - merge_requests
   dependencies:
     - governance:gate-decision
   script:

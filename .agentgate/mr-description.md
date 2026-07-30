@@ -1,41 +1,40 @@
-<!-- agentgate-pr-bind {"base_ref": "origin/main", "changed_paths": ["docs/08-github-rollout-kit.md", "rollout.repos.yml", "scripts/agentgate.py", "scripts/create_mr.py", "scripts/rollout_github.py", "tests/test_regressions.py", "tests/test_rollout_github.py"], "diff_fingerprint": "013869700606d8b4fed58adf2b63e4912f923845f8bd89eb5eeea6599c027742", "head_sha": "0db1359c95b442e0ffcc78482588612b6cc10cd6", "schema_version": "agentgate.io/pr-description-binding/v1"} -->
-
 ## 背景
 
-修复 AgentGate 自身 PR 流程可绕过治理的问题：PR 描述必须由工具生成、绑定当前 diff，并在 rollout 推送前强制校验，避免再次出现只推分支但 PR 正文不合规的情况。
+合并 GitHub 上当前尚未进入 main 的 AgentGate 分支，保留 GitHub rollout kit、GitLab MR 兼容路径、CI 治理模板优化，以及 Dart 扫描支持等并行变更。
 
 ## 变更内容
 
-- `scripts/rollout_github.py` (+312/-0)
-- `scripts/create_mr.py` (+142/-3)
-- `tests/test_regressions.py` (+101/-0)
-- `tests/test_rollout_github.py` (+81/-0)
-- `docs/08-github-rollout-kit.md` (+77/-0)
-- `.agentgate/mr-description.md` (+25/-24)
-- `rollout.repos.yml` (+22/-0)
-- `scripts/agentgate.py` (+10/-2)
+- 新增 GitHub rollout kit 文档、仓库清单和 `scripts/rollout_github.py`，并在 rollout 推送前校验绑定的 PR 描述。
+- `scripts/create_mr.py` 增加 MR 描述 manifest 绑定校验、GitLab API/浏览器 fallback，以及按远端平台选择 `gh`/`glab` 的提交路径。
+- 优化 GitLab 治理 CI 模板，使用预构建治理镜像并保持旧版 GitLab 兼容。
+- 将 `.dart` 纳入测试/扫描扩展名，并补充 YAML 配置校验与相关回归测试。
 
 ## 不包含的内容
 
-不修改业务仓库内容；不改变 GitLab 私仓现有 CI 模板和 token 使用方式；不直接合并到 main。
+不修改业务仓库内容；不删除远端分支。
 
 ## 自测确认
 
-已运行 python -m py_compile scripts\create_mr.py scripts\agentgate.py scripts\rollout_github.py tests\test_regressions.py tests\test_rollout_github.py；已运行 python -m unittest discover -s tests -v，156 个测试通过；已运行 python scripts\rollout_github.py --repo UseGEO 预演；已运行 git diff --check。
+- 待运行: `python -m unittest discover -s tests -v`
+- 待运行: `git diff --check`
 
 ## 风险与回滚
 
-风险点：新增绑定校验会让缺少 .agentgate/mr-description.md 或 diff 已变化的分支在推送/创建 PR 前失败。应对：失败时重新运行 agentgate.py mr prepare；rollout 脚本默认 dry-run 且 push 前自动 verify。回滚方式：回滚本 PR 即可恢复旧流程。
+- 风险：多个分支同时修改 MR 创建与治理流程，合并后需重点验证 manifest 绑定校验、GitLab fallback 和 rollout 推送校验。
+- 回滚：回退本次 merge commit，或按具体功能回退对应分支提交。
 
 ## 关联
 
--
+- origin/feature/github-rollout-kit-20260730
+- origin/fix/gitlab-compat-url-derivation
+- origin/feat/centralized-distribution
+- origin/fix/add-dart-to-scan-extensions
 
 ---
 
 <details>
 <summary>📊 治理元数据（CI 自动采集）</summary>
 
-（未检测到治理 trailer，建议安装 hook: bash governance/scripts/install-hooks.sh）
+（未检测到治理 trailer，建议安装 hook: `bash governance/scripts/install-hooks.sh`）
 
 </details>

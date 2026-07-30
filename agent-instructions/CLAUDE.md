@@ -2,22 +2,22 @@
 
 ## 强制 MR 入口
 
-所有 AI agent 创建 MR 时必须走统一入口，不允许手写空描述或绕过本地校验：
+所有 AI agent 创建 MR 时必须走统一入口，不允许手写空描述或绕过本地校验。原则：AgentGate 可以阻止不合规合并，但不能因为缺 token、缺 CLI 或旧版 GitLab 能力不足而阻碍代码提交到分支。
+
+```bash
+python governance/scripts/create_mr.py --why "<用中文说明本次任务背景>"
+```
+
+该命令会生成中文 MR 描述并本地运行 `validate_mr.py`、`scan_risks.py` 和配置的测试命令；有 GitLab token 时自动走 API，有 `glab`/`gh` 时走 CLI，都不可用时降级打印 MR 链接和描述，供人工创建 MR，不得卡住代码提交。
+
+兼容旧安装或仅需生成 branch manifest 时，才使用 fallback：
 
 ```bash
 python governance/scripts/agentgate.py mr prepare \
   --why "<用中文说明本次任务背景>"
 ```
 
-兼容旧安装时可使用等价命令：
-
-```bash
-python governance/scripts/create_mr.py \
-  --prepare \
-  --why "<用中文说明本次任务背景>"
-```
-
-该命令会先生成规范 MR 描述并本地运行 AgentGate 描述校验；校验失败时必须修复描述、测试记录或风险回滚说明，不允许改低门禁或直接去 GitLab 页面手工创建不规范 MR。
+校验失败时必须修复描述、测试记录或风险回滚说明，不允许改低门禁；提交 MR 通道失败时走降级路径，不允许因为工具链不可用阻断分支提交。
 
 本文件由 Claude Code / Kiro 在会话启动时自动加载。所有 AI agent 在本仓库开发时必须遵守以下规则。
 
@@ -32,7 +32,7 @@ python governance/scripts/create_mr.py \
 3. **风险扫描**：对照 `docs/governance/risk-types.md` 扫描自己的 diff
 4. **补注解**：命中风险模式的代码，在上方加 `risk:*` 注解
 5. **提交**：`AI-Usage` 和 `Tested` trailer 由 git hook 自动写入，**你不需要手填**
-6. **准备 MR**：调 `agentgate.py mr prepare --why "<任务背景>"` 自动生成可提交的描述清单，**不要手填 MR 描述**
+6. **创建 MR**：调 `create_mr.py --why "<任务背景>"` 自动生成并本地校验中文 MR 描述，自动提交 MR；如 token/CLI 不可用，使用脚本打印的链接和描述人工创建
 
 ---
 
@@ -40,13 +40,11 @@ python governance/scripts/create_mr.py \
 
 **重要：所有MR描述必须使用中文撰写。**
 
-你完成任务时已经知道"为什么改、改了什么、怎么测的"——这些信息开发时就有了，不该让你再对着空模板回忆手填。提交完代码 commit 后，生成旧版 GitLab branch pipeline 可校验的描述清单：
+你完成任务时已经知道"为什么改、改了什么、怎么测的"——这些信息开发时就有了，不该让你再对着空模板回忆手填。提交完代码 commit 后，走统一 MR 创建入口：
 
 ```bash
-python governance/scripts/agentgate.py mr prepare \
+python governance/scripts/create_mr.py \
   --why "<从用户原始需求提取的任务背景，用中文描述>"
-git add .agentgate/mr-description.md
-git commit -m "docs: prepare merge request description"
 ```
 
 脚本自动拼装 MR 描述（所有内容均为中文）：
@@ -56,11 +54,11 @@ git commit -m "docs: prepare merge request description"
 - **## 风险与回滚** ← 自动判断大变更/敏感路径/schema（中文描述）
 - **治理元数据**（AI-Usage / Tested 等）← 从 commit trailer 读，放折叠块
 
-提交前可加 `--dry-run` 预览描述。你**只需提供 `--why`（中文）**，其余全自动。手工创建 MR 时将 `.agentgate/mr-description.md` 原文粘贴到描述框；门禁本身不需要个人 PAT。
+你**只需提供 `--why`（中文）**，其余全自动。脚本会先完成本地校验，再按“GitLab API → glab/gh CLI → 打印 MR 链接和描述”的顺序降级；最后一种情况需要人工创建 MR，但不能让代码提交停在本地。
 
 ---
 
-## 测试留痕（核心：没测过的生产代码不该提交）
+## 测试留痕（核心：没测过的生产代码不该合并）
 
 改了生产代码（非测试、非 DTO/迁移/生成代码）就应该有单元测试。本仓库不靠"声称测过"，而靠**真实运行留痕**：用 `record_test_run.py` 包装测试命令，它执行测试、按退出码记录通过/失败到 `.governance/test-evidence.jsonl`，提交时 hook 把结果汇总成 `Tested:` trailer 写进 commit，CI 读 trailer 判断。
 
