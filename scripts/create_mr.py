@@ -35,6 +35,7 @@ create_mr.py — 自动生成并提交 MR (描述从 git/trailer/测试证据自
 from __future__ import annotations
 
 import argparse
+import hashlib
 import fnmatch
 import json
 import os
@@ -61,6 +62,9 @@ except Exception:  # pragma: no cover
 
 EVIDENCE_PATH = ".governance/test-evidence.jsonl"
 DEFAULT_DESCRIPTION_MANIFEST = ".agentgate/mr-description.md"
+BINDING_SCHEMA = "agentgate.io/pr-description-binding/v1"
+BINDING_BEGIN = "<!-- agentgate-pr-bind "
+BINDING_END = " -->"
 GITLAB_TOKEN_ENV_NAMES = (
     "AGENTGATE_GITLAB_TOKEN",
     "GITLAB_TOKEN",
@@ -121,6 +125,21 @@ def run_git(args: list[str], check: bool = True) -> str:
         sys.exit(1)
 
 
+def run_git_bytes(args: list[str], check: bool = True) -> bytes:
+    try:
+        r = subprocess.run(["git", *args], capture_output=True, check=check)
+        return r.stdout
+    except FileNotFoundError:
+        sys.stderr.write("[create-mr] 找不到 git\n")
+        sys.exit(1)
+    except subprocess.CalledProcessError as e:
+        sys.stderr.write(
+            f"[create-mr] git 失败: git {' '.join(args)}\n"
+            f"{e.stderr.decode('utf-8', errors='replace')}\n"
+        )
+        sys.exit(1)
+
+
 def current_branch() -> str:
     return run_git(["rev-parse", "--abbrev-ref", "HEAD"]).strip()
 
@@ -139,6 +158,32 @@ def numstat(base: str) -> list[tuple[int, int, str]]:
         except ValueError:
             rows.append((0, 0, p))  # 二进制
     return rows
+
+
+def norm_path(path: str) -> str:
+    return path.replace("\\", "/")
+
+
+def changed_paths(base: str, manifest_path: str | None = None) -> list[str]:
+    out = run_git(["diff", "--name-only", f"{base}...HEAD"])
+    manifest_norm = norm_path(manifest_path) if manifest_path else None
+    paths = []
+    for line in out.splitlines():
+        path = norm_path(line.strip())
+        if not path:
+            continue
+        if manifest_norm and path == manifest_norm:
+            continue
+        paths.append(path)
+    return sorted(paths)
+
+
+def diff_fingerprint(base: str, manifest_path: str | None = None) -> str:
+    args = ["diff", "--binary", "--full-index", f"{base}...HEAD", "--", "."]
+    if manifest_path:
+        args.append(f":(exclude){norm_path(manifest_path)}")
+    payload = run_git_bytes(args)
+    return hashlib.sha256(payload).hexdigest()
 
 
 def commit_subjects(base: str) -> list[str]:
@@ -470,6 +515,89 @@ def validate_generated_description(description: str, args) -> int:
     return 1
 
 
+def build_binding(base: str, manifest_path: str) -> dict:
+    return {
+        "schema_version": BINDING_SCHEMA,
+        "base_ref": base,
+        "head_sha": run_git(["rev-parse", "HEAD"]).strip(),
+        "changed_paths": changed_paths(base, manifest_path),
+        "diff_fingerprint": diff_fingerprint(base, manifest_path),
+    }
+
+
+def add_binding_header(description: str, binding: dict) -> str:
+    clean = strip_binding_header(description).lstrip()
+    payload = json.dumps(binding, ensure_ascii=False, sort_keys=True)
+    return f"{BINDING_BEGIN}{payload}{BINDING_END}\n\n{clean}"
+
+
+def parse_binding_header(description: str) -> tuple[dict | None, str]:
+    text = description.lstrip("\ufeff")
+    if not text.startswith(BINDING_BEGIN):
+        return None, description
+    end = text.find(BINDING_END)
+    if end < 0:
+        return None, description
+    raw = text[len(BINDING_BEGIN):end]
+    rest = text[end + len(BINDING_END):].lstrip()
+    try:
+        binding = json.loads(raw)
+    except json.JSONDecodeError:
+        return None, rest
+    return binding, rest
+
+
+def strip_binding_header(description: str) -> str:
+    _, rest = parse_binding_header(description)
+    return rest
+
+
+def verify_description_manifest(path: str, args) -> int:
+    manifest = Path(path)
+    if not manifest.is_file():
+        sys.stderr.write(f"[create-mr] MR 描述清单不存在: {path}\n")
+        return 1
+
+    text = manifest.read_text(encoding="utf-8-sig")
+    binding, body = parse_binding_header(text)
+    if not binding:
+        sys.stderr.write(
+            "[create-mr] MR 描述清单缺少 agentgate-pr-bind 绑定元数据；"
+            "请重新运行 agentgate.py mr prepare。\n"
+        )
+        return 1
+    if binding.get("schema_version") != BINDING_SCHEMA:
+        sys.stderr.write("[create-mr] MR 描述清单绑定 schema 不受支持。\n")
+        return 1
+
+    expected_base = args.target_branch
+    if binding.get("base_ref") != expected_base:
+        sys.stderr.write(
+            f"[create-mr] MR 描述清单绑定的 base={binding.get('base_ref')}，"
+            f"当前校验 base={expected_base}。\n"
+        )
+        return 1
+
+    current_paths = changed_paths(expected_base, path)
+    if binding.get("changed_paths") != current_paths:
+        sys.stderr.write("[create-mr] MR 描述清单绑定的变更文件列表已过期。\n")
+        sys.stderr.write(f"  manifest: {binding.get('changed_paths')}\n")
+        sys.stderr.write(f"  current:  {current_paths}\n")
+        return 1
+
+    current_fingerprint = diff_fingerprint(expected_base, path)
+    if binding.get("diff_fingerprint") != current_fingerprint:
+        sys.stderr.write("[create-mr] MR 描述清单绑定的 diff 指纹已过期。\n")
+        return 1
+
+    rc = validate_generated_description(body, args)
+    if rc != 0:
+        return rc
+
+    sys.stderr.write("[create-mr] MR 描述清单与当前 diff 绑定校验通过。\n")
+    return 0
+
+
 def _script_path(name: str) -> str:
     return str(Path(__file__).resolve().parent / name)
 
@@ -546,11 +674,14 @@ def run_local_preflight(description: str, args, cfg: dict) -> int:
     return run_preflight_tests(args, cfg)
 
 
-def write_description_manifest(path: str, description: str) -> Path:
+def write_description_manifest(path: str, description: str, diff_base: str | None = None) -> Path:
     """Write the branch-owned MR description used by legacy GitLab CI."""
     manifest = Path(path)
     manifest.parent.mkdir(parents=True, exist_ok=True)
-    manifest.write_text(description, encoding="utf-8")
+    rendered = description
+    if diff_base:
+        rendered = add_binding_header(description, build_binding(diff_base, path))
+    manifest.write_text(rendered, encoding="utf-8")
     return manifest
 
 
@@ -884,6 +1015,11 @@ def main() -> int:
         help="生成并校验分支内的 MR 描述清单后退出",
     )
     ap.add_argument(
+        "--verify-manifest",
+        action="store_true",
+        help="校验 MR 描述清单是否合规且绑定当前 diff 后退出",
+    )
+    ap.add_argument(
         "--manifest-path",
         default=DEFAULT_DESCRIPTION_MANIFEST,
         help=f"MR 描述清单路径 (默认 {DEFAULT_DESCRIPTION_MANIFEST})",
@@ -920,6 +1056,9 @@ def main() -> int:
     except ConfigError as exc:
         sys.stderr.write(f"[create-mr] 配置错误: {exc}\n")
         return 2
+
+    if args.verify_manifest:
+        return verify_description_manifest(args.manifest_path, args)
 
     # --- 分层确定背景 (## 背景) ---
     # 优先级: 显式 --why > DeliverHQ 需求文档 > 报错要求 --why
@@ -975,7 +1114,7 @@ def main() -> int:
             return rc
 
     if args.prepare:
-        manifest = write_description_manifest(args.manifest_path, description)
+        manifest = write_description_manifest(args.manifest_path, description, args.target_branch)
         print(f"[create-mr] 已生成 MR 描述清单: {manifest.as_posix()}")
         print("[create-mr] 请将该文件与代码一起提交后再推送。")
         return 0

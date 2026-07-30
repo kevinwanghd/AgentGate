@@ -281,6 +281,34 @@ class AgentGateCliTests(unittest.TestCase):
         self.assertEqual(["--prepare", "--why", "修复门禁"], captured)
         self.assertEqual(original_argv, sys.argv)
 
+    def test_mr_verify_is_a_first_class_command(self) -> None:
+        captured = []
+
+        def delegate() -> int:
+            captured.extend(sys.argv[1:])
+            return 0
+
+        original_argv = list(sys.argv)
+        with mock.patch.object(create_mr, "main", side_effect=delegate):
+            rc = agentgate.main(["mr", "verify", "--target-branch", "origin/main"])
+
+        self.assertEqual(0, rc)
+        self.assertEqual(["--verify-manifest", "--target-branch", "origin/main"], captured)
+        self.assertEqual(original_argv, sys.argv)
+
+    def test_pr_verify_alias_is_a_first_class_command(self) -> None:
+        captured = []
+
+        def delegate() -> int:
+            captured.extend(sys.argv[1:])
+            return 0
+
+        with mock.patch.object(create_mr, "main", side_effect=delegate):
+            rc = agentgate.main(["pr", "verify", "--target-branch", "origin/main"])
+
+        self.assertEqual(0, rc)
+        self.assertEqual(["--verify-manifest", "--target-branch", "origin/main"], captured)
+
     def test_create_mr_rejects_invalid_generated_description(self) -> None:
         args = mock.Mock(config=None, target_branch="origin/master")
         with mock.patch.object(validate_mr, "load_config", return_value={}), \
@@ -624,6 +652,79 @@ class CreateMrManifestTests(unittest.TestCase):
 
             self.assertEqual(target, written)
             self.assertEqual("## 背景\n\n修复问题。\n", target.read_text(encoding="utf-8"))
+
+    def test_bound_manifest_round_trips_binding_and_body(self) -> None:
+        binding = {
+            "schema_version": create_mr.BINDING_SCHEMA,
+            "base_ref": "origin/main",
+            "changed_paths": ["scripts/create_mr.py"],
+            "diff_fingerprint": "abc123",
+        }
+        rendered = create_mr.add_binding_header("## 背景\n\n修复问题。\n", binding)
+
+        parsed, body = create_mr.parse_binding_header(rendered)
+
+        self.assertEqual(binding, parsed)
+        self.assertEqual("## 背景\n\n修复问题。\n", body)
+
+    def test_verify_manifest_rejects_missing_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            target = Path(td) / ".agentgate" / "mr-description.md"
+            target.parent.mkdir(parents=True)
+            target.write_text("## 背景\n\n修复问题。\n", encoding="utf-8")
+            args = mock.Mock(target_branch="origin/main", config=None)
+
+            rc = create_mr.verify_description_manifest(str(target), args)
+
+        self.assertEqual(1, rc)
+
+    def test_verify_manifest_rejects_stale_diff_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            target = Path(td) / ".agentgate" / "mr-description.md"
+            target.parent.mkdir(parents=True)
+            binding = {
+                "schema_version": create_mr.BINDING_SCHEMA,
+                "base_ref": "origin/main",
+                "changed_paths": ["scripts/create_mr.py"],
+                "diff_fingerprint": "old",
+            }
+            target.write_text(
+                create_mr.add_binding_header("## 背景\n\n修复问题。\n", binding),
+                encoding="utf-8",
+            )
+            args = mock.Mock(target_branch="origin/main", config=None)
+
+            with mock.patch.object(
+                create_mr, "changed_paths", return_value=["scripts/create_mr.py"]
+            ), mock.patch.object(create_mr, "diff_fingerprint", return_value="new"):
+                rc = create_mr.verify_description_manifest(str(target), args)
+
+        self.assertEqual(1, rc)
+
+    def test_verify_manifest_accepts_current_binding_and_valid_body(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            target = Path(td) / ".agentgate" / "mr-description.md"
+            target.parent.mkdir(parents=True)
+            binding = {
+                "schema_version": create_mr.BINDING_SCHEMA,
+                "base_ref": "origin/main",
+                "changed_paths": ["scripts/create_mr.py"],
+                "diff_fingerprint": "same",
+            }
+            target.write_text(
+                create_mr.add_binding_header("## 背景\n\n修复问题。\n", binding),
+                encoding="utf-8",
+            )
+            args = mock.Mock(target_branch="origin/main", config=None)
+
+            with mock.patch.object(
+                create_mr, "changed_paths", return_value=["scripts/create_mr.py"]
+            ), mock.patch.object(
+                create_mr, "diff_fingerprint", return_value="same"
+            ), mock.patch.object(create_mr, "validate_generated_description", return_value=0):
+                rc = create_mr.verify_description_manifest(str(target), args)
+
+        self.assertEqual(0, rc)
 
 
 class CreateMrCliAdapterTests(unittest.TestCase):
@@ -2315,6 +2416,20 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
         self.assertIn('"merge_when_pipeline_succeeds": "true"', template)
         self.assertIn("CI_MERGE_REQUEST_SOURCE_BRANCH_SHA", template)
 
+    def test_gitlab_template_uses_prebuilt_images_and_legacy_syntax(self) -> None:
+        template = (ROOT / "ci" / "governance-ci.yml").read_text(encoding="utf-8")
+        self.assertIn("GOVERNANCE_PY_IMAGE", template)
+        self.assertIn("GOVERNANCE_SECRET_IMAGE", template)
+        self.assertIn("git --version", template)
+        self.assertIn("python -c \"import yaml; print('pyyaml ok')\"", template)
+        self.assertIn("dependencies:", template)
+        self.assertNotIn("apt-get", template)
+        self.assertNotIn("pip install -q pyyaml", template)
+        self.assertNotIn("python:3.11-slim", template)
+        self.assertNotIn("image: python:3.11", template)
+        self.assertNotIn("rules:", template)
+        self.assertNotIn("needs:", template)
+
     def test_installer_ships_gate_decision_and_gitlab_auto_merge_jobs(self) -> None:
         installer = (ROOT / "install.sh").read_text(encoding="utf-8")
         self.assertIn('scripts/gate_decision.py"   | write_file "governance/scripts/gate_decision.py"', installer)
@@ -2324,11 +2439,7 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
         self.assertIn("scripts/evidence_bundle.py", installer)
         self.assertIn("scripts/risk_merge_decision.py", installer)
         self.assertIn("profiles/flutter-mobile.yml", installer)
-        self.assertIn("governance:gate-decision:", installer)
-        self.assertIn("governance:mr-validate-compat:", installer)
-        self.assertIn("governance:auto-merge:", installer)
-        self.assertIn("GOVERNANCE_MERGE_BOT_TOKEN", installer)
-        self.assertIn("CI_MERGE_REQUEST_SOURCE_PROJECT_ID", installer)
+        self.assertIn('fetch_or_local "ci/governance-ci.yml" | write_file "governance/ci-snippet.yml"', installer)
 
 
 if __name__ == "__main__":

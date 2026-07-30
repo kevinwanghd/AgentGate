@@ -1,0 +1,22 @@
+# AgentGate GitHub rollout inventory.
+#
+# This file is intentionally GitHub-only. Internal GitLab repositories should
+# keep using install.sh --platform gitlab or a separate private inventory.
+defaults:
+  platform: github
+  mode: thin
+  agents: claude
+  agentgate_repo: kevinwanghd/AgentGate
+  agentgate_ref: github-stable
+  branch_prefix: chore/agentgate-rollout
+
+repos:
+  - owner: kevinwanghd
+    name: deliverhq
+    platform: github
+  - owner: kevinwanghd
+    name: UseGEO
+    platform: github
+  - owner: kevinwanghd
+    name: GoodNews_Globe
+    platform: github

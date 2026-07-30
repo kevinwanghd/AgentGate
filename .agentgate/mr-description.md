@@ -1,41 +1,40 @@
 ## 背景
 
-修复 AgentGate 自举问题：创建 PR/MR 前自动生成中文合规模板，并在本地通过 MR 描述校验、风险扫描和回归测试后再提交，避免 CI 事后才暴露模板、测试删除或风险注解问题。
+合并 GitHub 上当前尚未进入 main 的 AgentGate 分支，保留 GitHub rollout kit、GitLab MR 兼容路径、CI 治理模板优化，以及 Dart 扫描支持等并行变更。
 
 ## 变更内容
 
-- `scripts/create_mr.py` (+143/-57)
-- `tests/test_regressions.py` (+67/-9)
-- `docs/07-legacy-gitlab-mr-description.md` (+7/-4)
-- `scripts/gitlab_mr_compat.py` (+5/-4)
+- 新增 GitHub rollout kit 文档、仓库清单和 `scripts/rollout_github.py`，并在 rollout 推送前校验绑定的 PR 描述。
+- `scripts/create_mr.py` 增加 MR 描述 manifest 绑定校验、GitLab API/浏览器 fallback，以及按远端平台选择 `gh`/`glab` 的提交路径。
+- 优化 GitLab 治理 CI 模板，使用预构建治理镜像并保持旧版 GitLab 兼容。
+- 将 `.dart` 纳入测试/扫描扩展名，并补充 YAML 配置校验与相关回归测试。
 
 ## 不包含的内容
 
-无
+不修改业务仓库内容；不删除远端分支。
 
 ## 自测确认
 
-- [x] python -m unittest tests.test_regressions.AgentGateCliTests -v：通过，5 个测试通过。
-- [x] python -m unittest discover -s tests -v：通过，146 个测试通过。
-- [x] python -m compileall -q scripts tests：通过。
-- [x] python scripts/scan_risks.py --diff-base origin/main --config governance.config.yml：通过。
-- [x] git diff --check：通过。
+- 待运行: `python -m unittest discover -s tests -v`
+- 待运行: `git diff --check`
 
 ## 风险与回滚
 
-- 风险：create_mr.py 的提交前检查会让不合规描述、风险扫描失败或配置的测试命令失败时提前阻断 PR/MR 创建。
-- 应对：保留 --skip-local-validate、--skip-risk-scan、--skip-tests 作为迁移/调试逃生口，但默认闭环开启。
-- 回滚：如某消费仓库测试命令不适配，可先配置 create_mr.preflight_test_command 或临时使用 --skip-tests，不影响既有 CI 门禁。
+- 风险：多个分支同时修改 MR 创建与治理流程，合并后需重点验证 manifest 绑定校验、GitLab fallback 和 rollout 推送校验。
+- 回滚：回退本次 merge commit，或按具体功能回退对应分支提交。
 
 ## 关联
 
--
+- origin/feature/github-rollout-kit-20260730
+- origin/fix/gitlab-compat-url-derivation
+- origin/feat/centralized-distribution
+- origin/fix/add-dart-to-scan-extensions
 
 ---
 
 <details>
 <summary>📊 治理元数据（CI 自动采集）</summary>
 
-（未检测到治理 trailer，建议安装 hook: bash governance/scripts/install-hooks.sh）
+（未检测到治理 trailer，建议安装 hook: `bash governance/scripts/install-hooks.sh`）
 
 </details>
