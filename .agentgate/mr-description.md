@@ -1,40 +1,35 @@
+<!-- agentgate-pr-bind {"base_ref": "origin/main", "changed_paths": ["install.sh", "scripts/rollout_github.py", "tests/test_rollout_github.py"], "diff_fingerprint": "7a18a0ce48cfdc2e1c2aab352dbbc81987bcbdc28f4b2230d886a5bbac547715", "prepared_from_sha": "ea7765d5ea299f3398e473c96371fd02e669d367", "schema_version": "agentgate.io/pr-description-binding/v1"} -->
+
 ## 背景
 
-合并 GitHub 上当前尚未进入 main 的 AgentGate 分支，保留 GitHub rollout kit、GitLab MR 兼容路径、CI 治理模板优化，以及 Dart 扫描支持等并行变更。
+GitHub rollout 在 Windows Git Bash 环境下直接执行 install.sh 时，Bash/MSYS 工具链解析不稳定；同时 install.sh 文件头存在 UTF-8 BOM，会导致 shebang 被错误识别。这个 follow-up 修复 rollout 自动化在 Windows 上安装 AgentGate 门禁时的可靠性。
 
 ## 变更内容
 
-- 新增 GitHub rollout kit 文档、仓库清单和 `scripts/rollout_github.py`，并在 rollout 推送前校验绑定的 PR 描述。
-- `scripts/create_mr.py` 增加 MR 描述 manifest 绑定校验、GitLab API/浏览器 fallback，以及按远端平台选择 `gh`/`glab` 的提交路径。
-- 优化 GitLab 治理 CI 模板，使用预构建治理镜像并保持旧版 GitLab 兼容。
-- 将 `.dart` 纳入测试/扫描扩展名，并补充 YAML 配置校验与相关回归测试。
+移除 install.sh 文件头 BOM；将 rollout_github.py 的安装命令改为通过 bash -lc 执行，并对脚本路径、目标路径和参数做 shell quoting；补充回归测试覆盖 Windows/MSYS 场景。
 
 ## 不包含的内容
 
-不修改业务仓库内容；不删除远端分支。
+无
 
 ## 自测确认
 
-- 待运行: `python -m unittest discover -s tests -v`
-- 待运行: `git diff --check`
+pass - python -m unittest tests.test_rollout_github -v；pass - python -m unittest discover -s tests -v；pass - git diff --cached --check
 
 ## 风险与回滚
 
-- 风险：多个分支同时修改 MR 创建与治理流程，合并后需重点验证 manifest 绑定校验、GitLab fallback 和 rollout 推送校验。
-- 回滚：回退本次 merge commit，或按具体功能回退对应分支提交。
+低风险。变更只影响 GitHub rollout 安装命令和脚本编码；如出现问题可回滚本提交，已由专项和全量 unittest 覆盖。
 
 ## 关联
 
-- origin/feature/github-rollout-kit-20260730
-- origin/fix/gitlab-compat-url-derivation
-- origin/feat/centralized-distribution
-- origin/fix/add-dart-to-scan-extensions
+-
 
 ---
 
 <details>
 <summary>📊 治理元数据（CI 自动采集）</summary>
 
-（未检测到治理 trailer，建议安装 hook: `bash governance/scripts/install-hooks.sh`）
+- **AI-Usage**: assisted
+- **Tested**: pass - python -m unittest tests.test_rollout_github -v
 
 </details>

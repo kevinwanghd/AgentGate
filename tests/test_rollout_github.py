@@ -76,6 +76,20 @@ class GitHubRolloutTests(unittest.TestCase):
         self.assertEqual(["python", str(REPO_ROOT / "scripts" / "agentgate.py"), "pr", "verify"], verify[:4])
         self.assertIn("origin/main", verify)
 
+    def test_install_command_uses_login_bash_for_msys_tools(self):
+        args = Namespace(
+            install_script=REPO_ROOT / "install.sh",
+            bash="bash",
+        )
+        repo = rollout_github.load_inventory(REPO_ROOT / "rollout.repos.yml")[0]
+        repo_dir = Path("work") / repo.name
+
+        command = rollout_github.install_command(args, repo, repo_dir)
+
+        self.assertEqual(["bash", "-lc"], command[:2])
+        self.assertIn("install.sh", command[2])
+        self.assertIn("--platform github", command[2])
+
 
 if __name__ == "__main__":
     unittest.main()

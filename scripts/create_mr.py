@@ -164,6 +164,42 @@ def norm_path(path: str) -> str:
     return path.replace("\\", "/")
 
 
+def _status_paths() -> list[str]:
+    raw = run_git_bytes(["status", "--porcelain=v1", "-z", "--untracked-files=all"])
+    entries = [item for item in raw.split(b"\0") if item]
+    paths: list[str] = []
+    i = 0
+    while i < len(entries):
+        entry = entries[i].decode("utf-8", errors="replace")
+        status = entry[:2]
+        path = entry[3:] if len(entry) > 3 else ""
+        if path:
+            paths.append(norm_path(path))
+        if ("R" in status or "C" in status) and i + 1 < len(entries):
+            i += 2
+        else:
+            i += 1
+    return paths
+
+
+def dirty_paths_except_manifest(manifest_path: str) -> list[str]:
+    manifest_norm = norm_path(manifest_path)
+    return sorted(path for path in _status_paths() if path != manifest_norm)
+
+
+def require_clean_bound_manifest_worktree(manifest_path: str) -> None:
+    dirty = dirty_paths_except_manifest(manifest_path)
+    if not dirty:
+        return
+    sample = ", ".join(dirty[:5])
+    if len(dirty) > 5:
+        sample += f", ... (+{len(dirty) - 5} more)"
+    raise RuntimeError(
+        "bound MR description requires committed code changes before prepare/verify; "
+        f"uncommitted non-manifest paths: {sample}"
+    )
+
+
 def changed_paths(base: str, manifest_path: str | None = None) -> list[str]:
     out = run_git(["diff", "--name-only", f"{base}...HEAD"])
     manifest_norm = norm_path(manifest_path) if manifest_path else None
@@ -516,10 +552,11 @@ def validate_generated_description(description: str, args) -> int:
 
 
 def build_binding(base: str, manifest_path: str) -> dict:
+    require_clean_bound_manifest_worktree(manifest_path)
     return {
         "schema_version": BINDING_SCHEMA,
         "base_ref": base,
-        "head_sha": run_git(["rev-parse", "HEAD"]).strip(),
+        "prepared_from_sha": run_git(["rev-parse", "HEAD"]).strip(),
         "changed_paths": changed_paths(base, manifest_path),
         "diff_fingerprint": diff_fingerprint(base, manifest_path),
     }
@@ -556,6 +593,11 @@ def verify_description_manifest(path: str, args) -> int:
     manifest = Path(path)
     if not manifest.is_file():
         sys.stderr.write(f"[create-mr] MR 描述清单不存在: {path}\n")
+        return 1
+    try:
+        require_clean_bound_manifest_worktree(path)
+    except RuntimeError as exc:
+        sys.stderr.write(f"[create-mr] {exc}\n")
         return 1
 
     text = manifest.read_text(encoding="utf-8-sig")
@@ -1127,7 +1169,11 @@ def main() -> int:
             return rc
 
     if args.prepare:
-        manifest = write_description_manifest(args.manifest_path, description, args.target_branch)
+        try:
+            manifest = write_description_manifest(args.manifest_path, description, args.target_branch)
+        except RuntimeError as exc:
+            sys.stderr.write(f"[create-mr] {exc}\n")
+            return 1
         print(f"[create-mr] 已生成 MR 描述清单: {manifest.as_posix()}")
         print("[create-mr] 请将该文件与代码一起提交后再推送。")
         return 0
