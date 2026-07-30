@@ -657,6 +657,7 @@ class CreateMrManifestTests(unittest.TestCase):
         binding = {
             "schema_version": create_mr.BINDING_SCHEMA,
             "base_ref": "origin/main",
+            "prepared_from_sha": "abc123",
             "changed_paths": ["scripts/create_mr.py"],
             "diff_fingerprint": "abc123",
         }
@@ -667,6 +668,18 @@ class CreateMrManifestTests(unittest.TestCase):
         self.assertEqual(binding, parsed)
         self.assertEqual("## 背景\n\n修复问题。\n", body)
 
+    def test_build_binding_uses_prepared_from_sha_not_final_head_claim(self) -> None:
+        with mock.patch.object(create_mr, "run_git", return_value="abc123\n"), \
+                mock.patch.object(create_mr, "dirty_paths_except_manifest", return_value=[]), \
+                mock.patch.object(
+                    create_mr, "changed_paths", return_value=["scripts/create_mr.py"]
+                ), \
+                mock.patch.object(create_mr, "diff_fingerprint", return_value="same"):
+            binding = create_mr.build_binding("origin/main", ".agentgate/mr-description.md")
+
+        self.assertEqual("abc123", binding["prepared_from_sha"])
+        self.assertNotIn("head_sha", binding)
+
     def test_verify_manifest_rejects_missing_binding(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             target = Path(td) / ".agentgate" / "mr-description.md"
@@ -674,7 +687,8 @@ class CreateMrManifestTests(unittest.TestCase):
             target.write_text("## 背景\n\n修复问题。\n", encoding="utf-8")
             args = mock.Mock(target_branch="origin/main", config=None)
 
-            rc = create_mr.verify_description_manifest(str(target), args)
+            with mock.patch.object(create_mr, "dirty_paths_except_manifest", return_value=[]):
+                rc = create_mr.verify_description_manifest(str(target), args)
 
         self.assertEqual(1, rc)
 
@@ -685,6 +699,7 @@ class CreateMrManifestTests(unittest.TestCase):
             binding = {
                 "schema_version": create_mr.BINDING_SCHEMA,
                 "base_ref": "origin/main",
+                "prepared_from_sha": "abc123",
                 "changed_paths": ["scripts/create_mr.py"],
                 "diff_fingerprint": "old",
             }
@@ -695,8 +710,34 @@ class CreateMrManifestTests(unittest.TestCase):
             args = mock.Mock(target_branch="origin/main", config=None)
 
             with mock.patch.object(
+                create_mr, "dirty_paths_except_manifest", return_value=[]
+            ), mock.patch.object(
                 create_mr, "changed_paths", return_value=["scripts/create_mr.py"]
             ), mock.patch.object(create_mr, "diff_fingerprint", return_value="new"):
+                rc = create_mr.verify_description_manifest(str(target), args)
+
+        self.assertEqual(1, rc)
+
+    def test_verify_manifest_rejects_uncommitted_non_manifest_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            target = Path(td) / ".agentgate" / "mr-description.md"
+            target.parent.mkdir(parents=True)
+            binding = {
+                "schema_version": create_mr.BINDING_SCHEMA,
+                "base_ref": "origin/main",
+                "prepared_from_sha": "abc123",
+                "changed_paths": ["scripts/create_mr.py"],
+                "diff_fingerprint": "same",
+            }
+            target.write_text(
+                create_mr.add_binding_header("## 背景\n\n修复问题。\n", binding),
+                encoding="utf-8",
+            )
+            args = mock.Mock(target_branch="origin/main", config=None)
+
+            with mock.patch.object(
+                create_mr, "dirty_paths_except_manifest", return_value=["scripts/create_mr.py"]
+            ):
                 rc = create_mr.verify_description_manifest(str(target), args)
 
         self.assertEqual(1, rc)
@@ -708,6 +749,7 @@ class CreateMrManifestTests(unittest.TestCase):
             binding = {
                 "schema_version": create_mr.BINDING_SCHEMA,
                 "base_ref": "origin/main",
+                "prepared_from_sha": "abc123",
                 "changed_paths": ["scripts/create_mr.py"],
                 "diff_fingerprint": "same",
             }
@@ -718,6 +760,8 @@ class CreateMrManifestTests(unittest.TestCase):
             args = mock.Mock(target_branch="origin/main", config=None)
 
             with mock.patch.object(
+                create_mr, "dirty_paths_except_manifest", return_value=[]
+            ), mock.patch.object(
                 create_mr, "changed_paths", return_value=["scripts/create_mr.py"]
             ), mock.patch.object(
                 create_mr, "diff_fingerprint", return_value="same"
@@ -725,6 +769,13 @@ class CreateMrManifestTests(unittest.TestCase):
                 rc = create_mr.verify_description_manifest(str(target), args)
 
         self.assertEqual(0, rc)
+
+    def test_build_binding_rejects_uncommitted_non_manifest_changes(self) -> None:
+        with mock.patch.object(
+            create_mr, "dirty_paths_except_manifest", return_value=["scripts/create_mr.py"]
+        ):
+            with self.assertRaises(RuntimeError):
+                create_mr.build_binding("origin/main", ".agentgate/mr-description.md")
 
 
 class CreateMrCliAdapterTests(unittest.TestCase):

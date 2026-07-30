@@ -60,8 +60,16 @@ python scripts/agentgate.py pr verify --target-branch origin/<base>
 ```
 
 The description manifest contains a hidden `agentgate-pr-bind` record with the
-base ref, changed files, and diff fingerprint. If code changes after the
-manifest is prepared, verification fails and the branch is not pushed.
+base ref, changed files, diff fingerprint, and the commit SHA that was current
+when the manifest was prepared. The final commit SHA may differ after the
+manifest is amended into the rollout commit, so the non-bypassable freshness
+check is the diff fingerprint. If code changes after the manifest is prepared,
+verification fails and the branch is not pushed.
+
+`agentgate.py pr prepare` and `agentgate.py pr verify` require all code changes
+to be committed first. The only allowed working-tree change during this step is
+`.agentgate/mr-description.md` itself. This prevents a prepared description from
+silently ignoring local edits that have not reached `HEAD` yet.
 
 ## GitLab Safety
 
