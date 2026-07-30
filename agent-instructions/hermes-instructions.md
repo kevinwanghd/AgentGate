@@ -5,19 +5,21 @@
 Hermes 创建 MR 时必须走统一入口，不允许手写空描述或绕过本地校验：
 
 ```bash
-python governance/scripts/agentgate.py mr prepare \
-  --why "<用中文说明本次任务背景>"
-```
-
-兼容旧安装时可使用等价命令：
-
-```bash
 python governance/scripts/create_mr.py \
-  --prepare \
+  --gitlab-api \
   --why "<用中文说明本次任务背景>"
 ```
 
-该命令会先生成规范 MR 描述并本地运行 AgentGate 描述校验；校验失败时必须修复描述、测试记录或风险回滚说明，不允许改低门禁或直接去 GitLab 页面手工创建不规范 MR。
+**不要用 glab**：glab 在自托管 GitLab（11.x）有两个已知问题——token 写不进 config、project 路径解析返回 404。必须走 `--gitlab-api` 直连 REST API。
+
+前置环境变量：
+```bash
+export AGENTGATE_GITLAB_TOKEN="你的token"       # scope: api
+export AGENTGATE_GITLAB_PROJECT_ID="123"        # 数字 project id
+export AGENTGATE_GITLAB_URL="https://gitlab.example.com"
+```
+
+校验失败时必须修复描述、测试记录或风险回滚说明，不允许改低门禁或直接去 GitLab 页面手工创建不规范 MR。
 
 > 部署路径：仓库根 `.hermes.md`
 > Hermes Agent v0.17.0 在会话启动时自动加载此文件（优先级高于 AGENTS.md / CLAUDE.md）。
@@ -97,21 +99,15 @@ Tested: pass (42/42)
 
 ### 第四步：自动创建 MR（不要手填描述）
 
-提交完代码后生成 MR 描述清单，再与代码一起推送，你只需提供任务背景：
+提交完代码后走统一入口，你只需提供任务背景：
 
 ```bash
-python governance/scripts/agentgate.py mr prepare \
-  --target-branch master \
+python governance/scripts/create_mr.py \
+  --gitlab-api \
   --why "<从用户原始需求提取的背景>"
-git add .agentgate/mr-description.md
-git commit -m "docs: prepare merge request description"
 ```
 
-脚本自动拼装：背景(--why)、变更内容(从 diff)、自测确认(从测试证据)、风险(自动评估)、AI 元数据(从 commit trailer，放折叠块)。加 `--dry-run` 可先预览。
-
-> **MR 描述不靠人/AI 手填**。背景以外的段落全部从 git/trailer/测试证据自动推断。
-> 原始 Markdown 必须保留 `## 背景`、`## 变更内容`、`## 自测确认`、`## 风险与回滚` 二级标题；普通文本标题不合规。
-> 旧版 GitLab branch pipeline 校验 `.agentgate/mr-description.md`，不需要个人 PAT；手工创建 MR 时粘贴该文件原文。
+`--gitlab-api` 模式直连 GitLab REST API，不依赖 glab/gh。若源分支已有 open MR，自动更新描述。
 
 ---
 

@@ -129,7 +129,129 @@ python governance/scripts/collect_ai_usage.py --staged
 
 ---
 
-## 第 4 步：本地预检（提交前自查）
+## 第 4 步：配置个人 token（一次性，每台机器做一次）
+
+> GitLab 地址和 project id 维护者已经在 `governance.config.yml` 里配好了，你**只需要配自己的 token**。
+
+Token 是 AgentGate 代替你调 GitLab API 的凭据，相当于你的"API 密码"，每人一个，不能共用，不能提交进仓库。
+
+### 第一步：在 GitLab 生成 token
+
+1. 用浏览器打开公司 GitLab（`https://gitlab.ushaqi.com`），登录
+2. 右上角**头像** → **User Settings** → 左侧点 **Access Tokens**
+3. 填写：
+   - **Token name**：填 `agentgate-mr`
+   - **Scopes**：勾选 **`api`**（必须勾，其他不用管）
+4. 点 **Create personal access token**
+5. 页面顶部出现一串字符（`glpat-xxxxxxxxxxxx`），**立刻复制，关页面就看不到了**
+
+### 第二步：写入环境变量
+
+**Windows（PowerShell）**
+
+按 `Win + X` 打开 PowerShell，运行（把 `粘贴你的token` 换成刚才复制的值）：
+
+```powershell
+[Environment]::SetEnvironmentVariable("AGENTGATE_GITLAB_TOKEN", "粘贴你的token", "User")
+```
+
+让当前窗口立刻生效（不用重开终端）：
+
+```powershell
+$env:AGENTGATE_GITLAB_TOKEN = [Environment]::GetEnvironmentVariable("AGENTGATE_GITLAB_TOKEN", "User")
+```
+
+**Linux / macOS（终端）**
+
+```bash
+echo 'export AGENTGATE_GITLAB_TOKEN="粘贴你的token"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+> macOS 默认用 zsh，把 `~/.bashrc` 换成 `~/.zshrc`。
+
+### 第三步：验证
+
+**Windows：**
+```powershell
+echo $env:AGENTGATE_GITLAB_TOKEN
+# 应输出你的 token 值，不为空即正确
+```
+
+**Linux / macOS：**
+```bash
+echo $AGENTGATE_GITLAB_TOKEN
+# 应输出你的 token 值，不为空即正确
+```
+
+### 第四步：运行预检
+
+进入仓库目录，跑一下预检确认能通：
+
+```bash
+python governance/scripts/create_mr.py --gitlab-api --gitlab-preflight
+# 输出: [create-mr] GitLab API 预检通过: net/netx
+```
+
+预检通过后，以后让 AI agent 提 MR 只需：
+
+```bash
+python governance/scripts/create_mr.py --gitlab-api --why "本次改动的背景"
+```
+
+> **安全提示**：token 只放环境变量，不能写进任何代码文件或 commit。
+
+---
+
+### 4.5 验证全部配置正确
+
+打开终端，进入仓库目录，运行预检命令：
+
+**Windows PowerShell**：
+
+```powershell
+# 先进入仓库目录，例如：
+cd C:\Code\netx
+
+# 运行预检
+python governance/scripts/create_mr.py --gitlab-api --gitlab-preflight
+```
+
+**Linux / macOS**：
+
+```bash
+cd ~/code/netx
+python governance/scripts/create_mr.py --gitlab-api --gitlab-preflight
+```
+
+成功输出：
+
+```
+[create-mr] GitLab API 预检通过: net/netx
+```
+
+如果报错，对照下表排查：
+
+| 报错 | 原因 | 解决 |
+|---|---|---|
+| `缺少 AGENTGATE_GITLAB_TOKEN` | token 没写进环境变量 | 重新执行 4.2，确认 `echo $env:AGENTGATE_GITLAB_TOKEN` 有输出 |
+| `401 Unauthorized` | token 无效或 scope 没勾 `api` | 回 GitLab 重新生成 token，勾选 `api` |
+| `404 Not Found` | project id 填的是路径而不是数字 | 重新执行 4.3，用数字 id |
+| `缺少 AGENTGATE_GITLAB_URL` | GitLab 地址没写进环境变量 | 重新执行 4.2 的第二条命令 |
+
+---
+
+预检通过后，以后提 MR 只需：
+
+```bash
+python governance/scripts/create_mr.py \
+  --gitlab-api \
+  --why "这次改动的背景"
+```
+
+---
+
+## 第 5 步：本地预检（提交前自查）
 
 在提 MR 前，本地先跑一遍能省去 CI 打回的来回。
 
@@ -164,6 +286,8 @@ python governance/scripts/collect_ai_usage.py --staged
 - [ ] 至少一个 AI agent 工具已安装并登录
 - [ ] 在业务仓库里，工具能读到对应的规范指令文件
 - [ ] git commit trailer 模板已配置
+- [ ] `AGENTGATE_GITLAB_TOKEN` 已写入环境变量
+- [ ] `create_mr.py --gitlab-api --gitlab-preflight` 预检通过
 - [ ] 知道在哪查 `docs/governance/risk-types.md`
 - [ ] 知道如何让 agent 自检 diff
 

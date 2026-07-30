@@ -62,24 +62,17 @@ Tested: pass (42/42)
 无需手填。hook 缺失时手动补算：
 `python governance/scripts/collect_ai_usage.py --staged --trailer-only`
 
-## 4. 创建 MR（自动生成并校验，勿手填描述）
+## 4. 创建 MR（自动生成并提交，勿手填描述）
 
-提交完后先生成 MR 描述，再用门禁校验通过后提交：
+提交完后走统一入口：
 
-```
+```bash
 python governance/scripts/create_mr.py \
-  --dry-run \
-  --target-branch master \
-  --why "<任务背景>" \
-  > .governance/mr.md
-
-sed '1,2d' .governance/mr.md \
-  | python governance/scripts/validate_mr.py \
-      --diff-base origin/master \
-      --config governance.config.yml
+  --gitlab-api \
+  --why "<任务背景>"
 ```
 
-脚本自动拼装：背景(--why) + 变更内容(从 diff) + 自测确认(从测试证据) + 风险(自动评估) + AI 元数据(从 commit trailer，折叠块)。你只需提供 `--why`。原始 Markdown 必须保留 `## 背景`、`## 变更内容`、`## 自测确认`、`## 风险与回滚` 二级标题。
+`--gitlab-api` 模式直连 GitLab REST API，不依赖 glab/gh CLI（glab 在自托管 GitLab 11.x 上 project 路径解析返回 404）。前置环境变量：`AGENTGATE_GITLAB_TOKEN`（scope: api）、`AGENTGATE_GITLAB_PROJECT_ID`（数字 project id）、`AGENTGATE_GITLAB_URL`。只需提供 `--why`，其余全自动。
 
 ## 5. 绝对禁止
 

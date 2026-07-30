@@ -2,22 +2,31 @@
 
 ## 强制 MR 入口
 
-所有 AI agent 创建 MR 时必须走统一入口，不允许手写空描述或绕过本地校验。原则：AgentGate 可以阻止不合规合并，但不能因为缺 token、缺 CLI 或旧版 GitLab 能力不足而阻碍代码提交到分支。
+所有 AI agent 创建 MR 时必须走统一入口，不允许手写空描述或绕过本地校验。
 
 ```bash
-python governance/scripts/create_mr.py --why "<用中文说明本次任务背景>"
-```
-
-该命令会生成中文 MR 描述并本地运行 `validate_mr.py`、`scan_risks.py` 和配置的测试命令；有 GitLab token 时自动走 API，有 `glab`/`gh` 时走 CLI，都不可用时降级打印 MR 链接和描述，供人工创建 MR，不得卡住代码提交。
-
-兼容旧安装或仅需生成 branch manifest 时，才使用 fallback：
-
-```bash
-python governance/scripts/agentgate.py mr prepare \
+python governance/scripts/create_mr.py \
+  --gitlab-api \
   --why "<用中文说明本次任务背景>"
 ```
 
-校验失败时必须修复描述、测试记录或风险回滚说明，不允许改低门禁；提交 MR 通道失败时走降级路径，不允许因为工具链不可用阻断分支提交。
+**不要用 glab**：glab 在自托管 GitLab（11.x）有两个已知问题——token 写不进 config、project 路径解析返回 404。必须走 `--gitlab-api` 模式直连 REST API。
+
+前置环境变量（一次性配置）：
+```bash
+export AGENTGATE_GITLAB_TOKEN="你的token"       # GitLab Access Token，scope: api
+export AGENTGATE_GITLAB_PROJECT_ID="123"        # 数字 project id（不要用 owner/repo 路径）
+export AGENTGATE_GITLAB_URL="https://gitlab.example.com"  # 不填时自动从 git remote 推导
+```
+
+数字 project id 查询方式：
+```bash
+curl -s "$AGENTGATE_GITLAB_URL/api/v4/projects?search=<仓库名>" \
+  -H "PRIVATE-TOKEN: $AGENTGATE_GITLAB_TOKEN" \
+  | python3 -c "import sys,json; [print(p['id'], p['path_with_namespace']) for p in json.load(sys.stdin)]"
+```
+
+校验失败时必须修复描述、测试记录或风险回滚说明，不允许改低门禁。
 
 本文件由 Claude Code / Kiro 在会话启动时自动加载。所有 AI agent 在本仓库开发时必须遵守以下规则。
 
@@ -32,29 +41,30 @@ python governance/scripts/agentgate.py mr prepare \
 3. **风险扫描**：对照 `docs/governance/risk-types.md` 扫描自己的 diff
 4. **补注解**：命中风险模式的代码，在上方加 `risk:*` 注解
 5. **提交**：`AI-Usage` 和 `Tested` trailer 由 git hook 自动写入，**你不需要手填**
-6. **创建 MR**：调 `create_mr.py --why "<任务背景>"` 自动生成并本地校验中文 MR 描述，自动提交 MR；如 token/CLI 不可用，使用脚本打印的链接和描述人工创建
+6. **创建 MR**：调 `create_mr.py --gitlab-api --why "<任务背景>"` 自动生成并提交 MR（走 GitLab API，不依赖 glab/gh）
 
 ---
 
 ## 自动创建 MR（核心：MR 描述是开发产物，不是事后填表）
 
-**重要：所有MR描述必须使用中文撰写。**
+**重要：所有 MR 描述必须使用中文撰写。**
 
-你完成任务时已经知道"为什么改、改了什么、怎么测的"——这些信息开发时就有了，不该让你再对着空模板回忆手填。提交完代码 commit 后，走统一 MR 创建入口：
+提交完代码 commit 后，走统一入口：
 
 ```bash
 python governance/scripts/create_mr.py \
-  --why "<从用户原始需求提取的任务背景，用中文描述>"
+  --gitlab-api \
+  --why “<从用户原始需求提取的任务背景，用中文描述>”
 ```
 
 脚本自动拼装 MR 描述（所有内容均为中文）：
-- **## 背景** ← 你传的 `--why`（从用户需求提取，用中文描述，这是唯一需要你提供的）
-- **## 变更内容** ← 从 git diff 自动生成文件清单 + 增删行数（中文描述）
-- **## 自测确认** ← 从 `.governance/test-evidence.jsonl` 读测试结果（中文描述）
-- **## 风险与回滚** ← 自动判断大变更/敏感路径/schema（中文描述）
+- **## 背景** ← 你传的 `--why`（唯一需要你提供的）
+- **## 变更内容** ← 从 git diff 自动生成文件清单 + 增删行数
+- **## 自测确认** ← 从 `.governance/test-evidence.jsonl` 读测试结果
+- **## 风险与回滚** ← 自动判断大变更/敏感路径/schema
 - **治理元数据**（AI-Usage / Tested 等）← 从 commit trailer 读，放折叠块
 
-你**只需提供 `--why`（中文）**，其余全自动。脚本会先完成本地校验，再按“GitLab API → glab/gh CLI → 打印 MR 链接和描述”的顺序降级；最后一种情况需要人工创建 MR，但不能让代码提交停在本地。
+若源分支已有 open MR，会自动更新描述而非重复创建。
 
 ---
 

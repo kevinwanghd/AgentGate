@@ -246,7 +246,12 @@ class CreateMrGitLabApiTests(unittest.TestCase):
         )
         self.assertEqual("PUT", calls[1][0])
         self.assertEqual("/projects/123/merge_requests/7", calls[1][3])
-        self.assertEqual("true", calls[1][4]["remove_source_branch"])
+        # update_payload intentionally omits target_branch and remove_source_branch:
+        # GitLab 11.4 returns 500 when these fields are included in a PUT request.
+        self.assertNotIn("remove_source_branch", calls[1][4])
+        self.assertNotIn("target_branch", calls[1][4])
+        self.assertEqual("title", calls[1][4]["title"])
+        self.assertEqual("body", calls[1][4]["description"])
 
 
 class AgentGateCliTests(unittest.TestCase):

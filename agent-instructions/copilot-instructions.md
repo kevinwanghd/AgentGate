@@ -13,20 +13,15 @@ applyTo: "**"
 3. 扫描 diff，对照 `docs/governance/risk-types.md` 检查 8 类风险模式
 4. 命中的代码上方加 `risk:*` 注解（单行格式）
 5. 提交时 `AI-Usage` 和 `Tested` trailer 由 git hook 自动写入，无需手填
-6. 创建 MR：用 `agentgate.py mr prepare` 自动生成并校验分支描述清单，**不手填描述**
+6. 创建 MR：用 `create_mr.py --gitlab-api` 自动生成并提交 MR，**不手填描述**
 
 ```bash
-python governance/scripts/agentgate.py mr prepare \
-  --target-branch master \
+python governance/scripts/create_mr.py \
+  --gitlab-api \
   --why "<任务背景>"
-git add .agentgate/mr-description.md
-git commit -m "docs: prepare merge request description"
 ```
 
-> MR 描述自动拼装：背景(--why)、变更内容(从 diff)、自测(从测试证据)、风险(自动评估)、AI 元数据(从 trailer)。
-> 旧版 GitLab branch pipeline 校验 `.agentgate/mr-description.md`，不需要个人 PAT；手工创建 MR 时粘贴该文件原文。
-> 原始 Markdown 必须保留 `## 背景`、`## 变更内容`、`## 自测确认`、`## 风险与回滚` 二级标题；普通文本标题不合规。
-> 测试放行：有全绿记录且本次改了测试文件 / 加 `// risk:untested reason:"..." owner:@team reviewed:<今天>` / 命中 config 白名单。带失败测试（`Tested: fail`）一律拒合。
+`--gitlab-api` 模式直连 GitLab REST API，不依赖 glab/gh CLI（glab 在自托管 GitLab 11.x 上 project 路径解析返回 404）。前置环境变量：`AGENTGATE_GITLAB_TOKEN`（scope: api）、`AGENTGATE_GITLAB_PROJECT_ID`（数字 id）、`AGENTGATE_GITLAB_URL`。
 
 ## AI 证据采集（自动算占比，不靠人工判断）
 

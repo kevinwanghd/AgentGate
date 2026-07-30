@@ -782,12 +782,25 @@ def _gitlab_token_from_env() -> str | None:
 
 
 def _require_gitlab_api_args(args) -> tuple[str, str, str]:
-    base_url = args.gitlab_url or os.environ.get("AGENTGATE_GITLAB_URL") or os.environ.get(
-        "CI_SERVER_URL"
+    # 优先级: 命令行参数 > 环境变量 > governance.config.yml 的 create_mr 块
+    try:
+        cfg_data = load_config(getattr(args, "config", None))
+        cfg_create_mr = cfg_data.get("create_mr", {}) if isinstance(cfg_data, dict) else {}
+    except Exception:
+        cfg_create_mr = {}
+
+    base_url = (
+        args.gitlab_url
+        or os.environ.get("AGENTGATE_GITLAB_URL")
+        or os.environ.get("CI_SERVER_URL")
+        or cfg_create_mr.get("gitlab_url")
     )
-    project_id = args.gitlab_project_id or os.environ.get(
-        "AGENTGATE_GITLAB_PROJECT_ID"
-    ) or os.environ.get("CI_PROJECT_ID")
+    project_id = (
+        args.gitlab_project_id
+        or os.environ.get("AGENTGATE_GITLAB_PROJECT_ID")
+        or os.environ.get("CI_PROJECT_ID")
+        or cfg_create_mr.get("gitlab_project_id")
+    )
     token = args.gitlab_token or _gitlab_token_from_env()
 
     missing = []
@@ -840,11 +853,11 @@ def submit_gitlab_api(title: str, description: str, target: str, args) -> int:
             "description": description,
             "remove_source_branch": "true" if args.remove_source_branch else "false",
         }
+        # GitLab 11.4: PUT /merge_requests 不接受 target_branch / remove_source_branch,
+        # 传这两个字段会返回 500。更新已有 MR 只改标题和描述。
         update_payload = {
-            "target_branch": target,
             "title": title,
             "description": description,
-            "remove_source_branch": "true" if args.remove_source_branch else "false",
         }
 
         if isinstance(existing, list) and existing:
