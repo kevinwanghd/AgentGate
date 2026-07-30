@@ -15,8 +15,8 @@
 #   GOVERNANCE_MERGE_BOT_TOKEN  受保护/Masked 的 Merge Bot token, 仅自动合并 job 使用
 
 stages:
-  - governance
-  - test
+  - governance   # 风险/密钥/MR/测试检查 + 语言 job（同 stage 以满足 GitLab 11.4 dependencies 约束）
+  - test         # gate-decision（依赖所有 governance job）
   - build
   - merge
 
@@ -206,7 +206,7 @@ governance:expired-report-manual:
 # 前提: 仓库根目录存在 go.mod 且可运行 go test。
 # Bazel 单仓需覆盖此 job 或设置 GOVERNANCE_SKIP_GO_TEST=true 跳过。
 governance:go-test:
-  stage: test
+  stage: governance
   image: golang:1.22-bookworm
   only:
     - branches
@@ -245,7 +245,7 @@ governance:go-test:
 
 # ── 7a. Flutter/Dart 测试: 无 pubspec.yaml 时自动跳过 ────────────────────────
 governance:flutter-test:
-  stage: test
+  stage: governance
   image: ghcr.io/cirruslabs/flutter:stable
   only:
     - branches
@@ -279,7 +279,7 @@ governance:flutter-test:
 
 # ── 7b. Python 测试: 无 requirements.txt / pyproject.toml / setup.py 时跳过 ──
 governance:python-test:
-  stage: test
+  stage: governance
   image: "$GOVERNANCE_PY_IMAGE"
   only:
     - branches
@@ -324,7 +324,7 @@ governance:python-test:
 
 # ── 7c. Node.js/TypeScript 测试: 无 package.json 时跳过 ──────────────────────
 governance:node-test:
-  stage: test
+  stage: governance
   image: node:20-slim
   only:
     - branches
@@ -364,7 +364,7 @@ governance:node-test:
 
 # ── 7d. Java 测试: 无 pom.xml / build.gradle 时跳过 ─────────────────────────
 governance:java-test:
-  stage: test
+  stage: governance
   image: maven:3.9-eclipse-temurin-21
   only:
     - branches
@@ -406,7 +406,7 @@ governance:java-test:
 
 # ── 7e. .NET/C# 测试: 无 .sln / .csproj 时跳过 ──────────────────────────────
 governance:dotnet-test:
-  stage: test
+  stage: governance
   image: mcr.microsoft.com/dotnet/sdk:8.0
   only:
     - branches
@@ -446,7 +446,7 @@ governance:dotnet-test:
 
 # ── 7f. Rust 测试: 无 Cargo.toml 时跳过 ─────────────────────────────────────
 governance:rust-test:
-  stage: test
+  stage: governance
   image: rust:1.78-slim
   only:
     - branches
