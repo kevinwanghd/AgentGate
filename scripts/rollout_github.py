@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import shlex
 import shutil
 import subprocess
 import sys
@@ -121,21 +122,25 @@ def ensure_clean(repo_dir: Path) -> None:
 
 
 def install_command(args: argparse.Namespace, repo: RolloutRepo, repo_dir: Path) -> list[str]:
-    return [
-        args.bash,
-        str(args.install_script),
-        str(repo_dir),
-        "--platform",
-        repo.platform,
-        "--mode",
-        repo.mode,
-        "--agents",
-        repo.agents,
-        "--agentgate-repo",
-        repo.agentgate_repo,
-        "--agentgate-ref",
-        repo.agentgate_ref,
-    ]
+    script = shlex.quote(str(args.install_script).replace("\\", "/"))
+    target = shlex.quote(str(repo_dir).replace("\\", "/"))
+    command = " ".join(
+        [
+            script,
+            target,
+            "--platform",
+            shlex.quote(repo.platform),
+            "--mode",
+            shlex.quote(repo.mode),
+            "--agents",
+            shlex.quote(repo.agents),
+            "--agentgate-repo",
+            shlex.quote(repo.agentgate_repo),
+            "--agentgate-ref",
+            shlex.quote(repo.agentgate_ref),
+        ]
+    )
+    return [args.bash, "-lc", command]
 
 
 def prepare_command(args: argparse.Namespace, repo_dir: Path, base_branch: str) -> list[str]:

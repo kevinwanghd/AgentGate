@@ -1,27 +1,24 @@
-<!-- agentgate-pr-bind {"base_ref": "origin/main", "changed_paths": ["docs/08-github-rollout-kit.md", "scripts/create_mr.py", "tests/test_regressions.py"], "diff_fingerprint": "121f324cebceab223b209a519ac65b51f6084c85a068efdbe3c1bb00e7e0f76f", "prepared_from_sha": "3ee26f201b7e6d70eb576aae14896462296b22bd", "schema_version": "agentgate.io/pr-description-binding/v1"} -->
+<!-- agentgate-pr-bind {"base_ref": "origin/main", "changed_paths": ["install.sh", "scripts/rollout_github.py", "tests/test_rollout_github.py"], "diff_fingerprint": "7a18a0ce48cfdc2e1c2aab352dbbc81987bcbdc28f4b2230d886a5bbac547715", "prepared_from_sha": "ea7765d5ea299f3398e473c96371fd02e669d367", "schema_version": "agentgate.io/pr-description-binding/v1"} -->
 
 ## 背景
 
-修复 AgentGate 自身 PR 流程可绕过治理的问题：PR 描述必须由工具生成、绑定当前代码 diff，并在 rollout 推送前强制校验；同时拒绝未提交的非 manifest 改动，避免 PR 正文遗漏本地代码变更。
+GitHub rollout 在 Windows Git Bash 环境下直接执行 install.sh 时，Bash/MSYS 工具链解析不稳定；同时 install.sh 文件头存在 UTF-8 BOM，会导致 shebang 被错误识别。这个 follow-up 修复 rollout 自动化在 Windows 上安装 AgentGate 门禁时的可靠性。
 
 ## 变更内容
 
-- `tests/test_regressions.py` (+52/-1)
-- `scripts/create_mr.py` (+48/-2)
-- `.agentgate/mr-description.md` (+6/-23)
-- `docs/08-github-rollout-kit.md` (+10/-2)
+移除 install.sh 文件头 BOM；将 rollout_github.py 的安装命令改为通过 bash -lc 执行，并对脚本路径、目标路径和参数做 shell quoting；补充回归测试覆盖 Windows/MSYS 场景。
 
 ## 不包含的内容
 
-不修改业务仓库内容；不改变 GitLab 私仓现有 CI 模板和 token 使用方式；不直接合并到 main。
+无
 
 ## 自测确认
 
-已运行 python -m py_compile scripts\create_mr.py tests\test_regressions.py；已运行 python -m unittest tests.test_regressions.CreateMrManifestTests -v，8 个测试通过；已运行 python -m unittest discover -s tests -v，160 个测试通过。
+pass - python -m unittest tests.test_rollout_github -v；pass - python -m unittest discover -s tests -v；pass - git diff --cached --check
 
 ## 风险与回滚
 
-风险点：新增绑定校验会让缺少 .agentgate/mr-description.md、diff 已变化、或存在未提交非 manifest 改动的分支在推送/创建 PR 前失败；prepared_from_sha 字段只用于审计生成时机，真正阻断依据是排除 manifest 自身后的 diff 指纹。应对：先提交代码改动，再重新运行 agentgate.py pr prepare；rollout 脚本默认 dry-run 且 push 前自动 verify。回滚方式：回滚本 PR 即可恢复旧流程。
+低风险。变更只影响 GitHub rollout 安装命令和脚本编码；如出现问题可回滚本提交，已由专项和全量 unittest 覆盖。
 
 ## 关联
 
@@ -32,6 +29,7 @@
 <details>
 <summary>📊 治理元数据（CI 自动采集）</summary>
 
-（未检测到治理 trailer，建议安装 hook: bash governance/scripts/install-hooks.sh）
+- **AI-Usage**: assisted
+- **Tested**: pass - python -m unittest tests.test_rollout_github -v
 
 </details>
