@@ -129,7 +129,7 @@ class CIPlatformCompatTests(unittest.TestCase):
         self.assertNotIn("GIT_DEPTH: 0", content)
         self.assertNotIn('find . -maxdepth 3 -name "*.sln" -not -path "*/.*" | head -1', content)
         self.assertNotIn('find . -maxdepth 3 -name "*.csproj" -not -path "*/.*" | head -1', content)
-        self.assertNotIn('git fetch -q origin "$TB"\n', content)
+        self.assertNotRegex(content, r'(?m)^\s+git fetch -q origin "\$TB"$')
         self.assertIn('refs/remotes/origin/${TB}', content)
 
 
