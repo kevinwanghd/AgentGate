@@ -40,24 +40,8 @@ auto_merge:
     - secret-scan
     - mr-validate
     - test-check
-    - go-test
-    - flutter-test
     - python-test
-    - node-test
-    - java-test
-    - dotnet-test
-    - rust-test
     - selftest
-  # 语言特定 job：这些 check 未触发（missing）或返回 skip 时均视为通过
-  # 扩展其他语言时在此追加，并在 CI 配置里加对应 job（检测各自的标记文件）
-  language_checks:
-    - go-test
-    - flutter-test
-    - python-test
-    - node-test
-    - java-test
-    - dotnet-test
-    - rust-test
   # 保护分支: 只能通过 MR 合并，禁止直接推送
   protected_branches:
     - master
@@ -92,7 +76,7 @@ auto_merge:
 
 metadata:
   enforcement: hard           # 自举: 新仓库无历史包袱, 直接硬启动
-  soft_deadline: 2026-09-27   # (已被 enforcement:hard 覆盖, 保留供参考)
+  soft_deadline: null
   mandatory_fields:
     - background
     - changes
@@ -150,7 +134,7 @@ large_change:
 
 testing:
   enforcement: hard           # 自举: 直接硬启动
-  soft_deadline: 2026-09-27   # (已被 enforcement:hard 覆盖)
+  soft_deadline: null
   accept_tested_trailer: false # Tested: 仅作开发声明，合并放行只看 CI Evidence Bundle
   untested_max_age_days: 90
   # 本仓库是工具包: 脚本目录是被测主体, 文档/模板/指令文件不要求测试
