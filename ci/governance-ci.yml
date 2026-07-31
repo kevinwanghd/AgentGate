@@ -536,7 +536,7 @@ governance:rust-test:
 
 # ── 8. GateResult 决策: 汇总 CI 独立证据, 不直接合并 ─────────────────────────
 governance:gate-decision:
-  stage: governance
+  stage: test
   image: "$GOVERNANCE_PY_IMAGE"
   only:
     - merge_requests
@@ -619,7 +619,7 @@ governance:gate-decision:
 
 # ── 8. Merge Bot: 仅消费 GateResult, 使用独立 token 设置 GitLab 自动合并 ─────
 governance:auto-merge:
-  stage: test
+  stage: build
   image: "$GOVERNANCE_PY_IMAGE"
   only:
     - merge_requests
