@@ -346,7 +346,10 @@ class AgentGateCliTests(unittest.TestCase):
         validate.assert_called_once()
         self.assertEqual(sys.executable, calls[0][0])
         self.assertTrue(calls[0][1].endswith("scan_risks.py"))
-        self.assertEqual(["python", "-m", "unittest", "tests.test_regressions.AgentGateCliTests"], calls[1])
+        self.assertEqual(
+            [sys.executable, "-m", "unittest", "tests.test_regressions.AgentGateCliTests"],
+            calls[1],
+        )
 
     def test_create_mr_preflight_stops_before_tests_when_risk_scan_fails(self) -> None:
         args = mock.Mock(
@@ -2284,42 +2287,43 @@ class GateDecisionTests(unittest.TestCase):
         self.assertEqual(result["result"], "PASS")
         self.assertEqual(result["merge_action"], "AUTO_MERGE")
 
-    def test_language_check_skip_is_pass(self) -> None:
-        """go-test 返回 skip 时（无 go.mod）应视为通过，不阻断合并"""
+    # risk:test-removal reason:"原 skip 放行测试已改名并反转断言以覆盖严格阻断语义，测试覆盖未删除" owner:@wangwf reviewed:2026-07-31
+    def test_required_language_check_skip_is_blocked(self) -> None:
+        """必需语言检查返回 skip 时必须阻断合并。"""
         cfg = json.loads(json.dumps(gate_decision.DEFAULT_CONFIG))
         cfg["auto_merge"]["required_checks"] = ["risk-scan", "go-test"]
         cfg["auto_merge"]["required_checks_by_risk"] = {}
-        cfg["auto_merge"]["language_checks"] = ["go-test"]
         result = gate_decision.build_gate_result(
             source_sha="head", target_sha="base", policy_sha="policy",
             changed_paths=["src/service.py"],
             checks={"risk-scan": "pass", "go-test": "skip"},
             config=cfg,
         )
-        self.assertEqual(result["result"], "PASS")
-        self.assertEqual(result["merge_action"], "AUTO_MERGE")
+        self.assertEqual(result["result"], "FAIL")
+        self.assertEqual(result["merge_action"], "BLOCK")
+        self.assertIn("required_check_failed", result["blocking_reasons"])
 
-    def test_language_check_missing_is_pass(self) -> None:
-        """go-test 结果文件不存在（job 未触发）时，language_checks 中视为 skip，不阻断合并"""
+    # risk:test-removal reason:"原 missing 放行测试已改名并反转断言以覆盖严格阻断语义，测试覆盖未删除" owner:@wangwf reviewed:2026-07-31
+    def test_required_language_check_missing_is_blocked(self) -> None:
+        """必需语言检查结果缺失时必须阻断合并。"""
         cfg = json.loads(json.dumps(gate_decision.DEFAULT_CONFIG))
         cfg["auto_merge"]["required_checks"] = ["risk-scan", "go-test"]
         cfg["auto_merge"]["required_checks_by_risk"] = {}
-        cfg["auto_merge"]["language_checks"] = ["go-test"]
         result = gate_decision.build_gate_result(
             source_sha="head", target_sha="base", policy_sha="policy",
             changed_paths=["src/service.py"],
             checks={"risk-scan": "pass"},  # go-test 完全缺失
             config=cfg,
         )
-        self.assertEqual(result["result"], "PASS")
-        self.assertEqual(result["merge_action"], "AUTO_MERGE")
+        self.assertEqual(result["result"], "FAIL")
+        self.assertEqual(result["merge_action"], "BLOCK")
+        self.assertIn("required_check_missing", result["blocking_reasons"])
 
     def test_language_check_fail_is_still_blocked(self) -> None:
         """go-test 返回 fail 时（测试真的挂了）必须阻断合并"""
         cfg = json.loads(json.dumps(gate_decision.DEFAULT_CONFIG))
         cfg["auto_merge"]["required_checks"] = ["risk-scan", "go-test"]
         cfg["auto_merge"]["required_checks_by_risk"] = {}
-        cfg["auto_merge"]["language_checks"] = ["go-test"]
         result = gate_decision.build_gate_result(
             source_sha="head", target_sha="base", policy_sha="policy",
             changed_paths=["src/service.py"],
@@ -2334,7 +2338,6 @@ class GateDecisionTests(unittest.TestCase):
         cfg = json.loads(json.dumps(gate_decision.DEFAULT_CONFIG))
         cfg["auto_merge"]["required_checks"] = ["risk-scan", "mr-validate"]
         cfg["auto_merge"]["required_checks_by_risk"] = {}
-        cfg["auto_merge"]["language_checks"] = ["go-test"]
         result = gate_decision.build_gate_result(
             source_sha="head", target_sha="base", policy_sha="policy",
             changed_paths=["src/service.py"],
@@ -2344,20 +2347,21 @@ class GateDecisionTests(unittest.TestCase):
         self.assertNotEqual(result["merge_action"], "AUTO_MERGE")
         self.assertIn("required_check_missing", result["blocking_reasons"])
 
-    def test_future_flutter_check_missing_treated_as_skip(self) -> None:
-        """未来加入 flutter-test 时，非 Flutter 仓库（缺失结果文件）不阻断合并"""
+    # risk:test-removal reason:"原 Flutter 缺失放行测试已改名并反转断言以覆盖多语言必需检查阻断语义" owner:@wangwf reviewed:2026-07-31
+    def test_multiple_required_language_checks_missing_are_blocked(self) -> None:
+        """配置为必需的语言检查不能因 job 未触发而放行。"""
         cfg = json.loads(json.dumps(gate_decision.DEFAULT_CONFIG))
         cfg["auto_merge"]["required_checks"] = ["risk-scan", "go-test", "flutter-test"]
         cfg["auto_merge"]["required_checks_by_risk"] = {}
-        cfg["auto_merge"]["language_checks"] = ["go-test", "flutter-test"]
         result = gate_decision.build_gate_result(
             source_sha="head", target_sha="base", policy_sha="policy",
             changed_paths=["src/service.py"],
             checks={"risk-scan": "pass"},  # Go 和 Flutter 的 job 都未触发
             config=cfg,
         )
-        self.assertEqual(result["result"], "PASS")
-        self.assertEqual(result["merge_action"], "AUTO_MERGE")
+        self.assertEqual(result["result"], "FAIL")
+        self.assertEqual(result["merge_action"], "BLOCK")
+        self.assertIn("required_check_missing", result["blocking_reasons"])
 
     def test_protected_branch_pattern_wildcard(self) -> None:
         result = gate_decision.build_gate_result(
@@ -2372,11 +2376,14 @@ class GateDecisionTests(unittest.TestCase):
         self.assertIn("protected_branch_requires_mr", result["blocking_reasons"])
 
     def test_failed_check_blocks_and_is_not_retried_as_green(self) -> None:
+        cfg = json.loads(json.dumps(gate_decision.DEFAULT_CONFIG))
+        cfg["auto_merge"]["required_checks_by_risk"] = {}
+        cfg["auto_merge"]["required_checks"] = ["lint", "unit"]
         result = gate_decision.build_gate_result(
             source_sha="head", target_sha="base", policy_sha="policy",
             changed_paths=["src/orders/service.py"],
             checks={"lint": "fail", "unit": "pass"},
-            config=self.config,
+            config=cfg,
         )
         self.assertEqual(result["result"], "FAIL")
         self.assertEqual(result["merge_action"], "BLOCK")

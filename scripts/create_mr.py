@@ -691,6 +691,8 @@ def run_preflight_tests(args, cfg: dict) -> int:
     except ValueError as exc:
         sys.stderr.write(f"[create-mr] 测试命令解析失败: {exc}\n")
         return 2
+    if cmd and cmd[0] in {"python", "python3"}:
+        cmd[0] = sys.executable
     rc = subprocess.run(cmd, text=True).returncode
     if rc != 0:
         sys.stderr.write("[create-mr] 本地测试未通过，拒绝创建 MR。请修复后重跑。\n")

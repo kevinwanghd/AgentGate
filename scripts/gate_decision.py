@@ -35,14 +35,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "high": ["risk-scan", "secret-scan", "mr-validate", "test-check", "selftest"],
             "critical": ["risk-scan", "secret-scan", "mr-validate", "test-check", "selftest"],
         },
-        # 语言特定 job 列表：这些 check 缺失（missing）时视为 skip 而非失败。
-        # 适用于只在特定语言仓库触发的 job（如 go-test、flutter-test、dotnet-test）。
-        # job 自身负责检测语言标记文件（go.mod/pubspec.yaml/.csproj 等）并在不适用时
-        # 写入 {"status": "skip"}；若 job 根本未触发，missing 也视为 skip。
-        "language_checks": [
-            "go-test", "flutter-test", "python-test",
-            "node-test", "java-test", "dotnet-test", "rust-test",
-        ],
         # critical 风险时需要的人工审批数（默认 1）
         "high_approvals": 0,
         "critical_approvals": 1,
@@ -152,14 +144,8 @@ def build_gate_result(
         reasons.append("protected_branch_direct_push")
 
     required = _required_checks_for_risk(auto, risk_level, checks)
-    language_checks = set(str(c) for c in auto.get("language_checks", ["go-test"]))
-
-    missing = [name for name in required if name not in checks
-               and name not in language_checks]
-    # skip 和 pass 都算通过；language_checks 中 missing 也视为 skip（job 未触发 = 不适用）
-    failed = [name for name in required
-              if checks.get(name) not in ("pass", "skip")
-              and not (name in language_checks and name not in checks)]
+    missing = [name for name in required if name not in checks]
+    failed = [name for name in required if name in checks and checks.get(name) != "pass"]
     if missing:
         reasons.append("required_check_missing")
     if failed:
