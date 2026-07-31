@@ -197,8 +197,7 @@ governance:expired-report-manual:
   stage: governance
   image: "$GOVERNANCE_PY_IMAGE"
   only:
-    - branches
-    - merge_requests
+    - schedules
   when: manual
   before_script:
     - git --version
