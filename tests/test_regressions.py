@@ -346,7 +346,10 @@ class AgentGateCliTests(unittest.TestCase):
         validate.assert_called_once()
         self.assertEqual(sys.executable, calls[0][0])
         self.assertTrue(calls[0][1].endswith("scan_risks.py"))
-        self.assertEqual(["python", "-m", "unittest", "tests.test_regressions.AgentGateCliTests"], calls[1])
+        self.assertEqual(
+            [sys.executable, "-m", "unittest", "tests.test_regressions.AgentGateCliTests"],
+            calls[1],
+        )
 
     def test_create_mr_preflight_stops_before_tests_when_risk_scan_fails(self) -> None:
         args = mock.Mock(
