@@ -13,6 +13,19 @@
 #   GOVERNANCE_CONFIG_PATH    governance.config.yml 的仓库内路径
 #   GOVERNANCE_REPORT_OUTPUT  周报输出路径, 默认 governance/reports/expired-annotations.md
 #   GOVERNANCE_MERGE_BOT_TOKEN  受保护/Masked 的 Merge Bot token, 仅自动合并 job 使用
+#
+# ── 镜像要求 ─────────────────────────────────────────────────────────────────
+# GOVERNANCE_PY_IMAGE: 必须包含 python3, git, pyyaml
+#   默认值: swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest
+#   若企业使用不同的镜像仓库, 在项目/组级 CI/CD Variables 里覆盖此变量
+#   镜像拉取失败会导致所有 governance job 无法运行, 请确保:
+#     1. Runner 能访问镜像仓库 (内网 registry 或配置了 imagePullSecrets)
+#     2. 镜像存在且标签正确
+#     3. 有拉取权限
+#
+# GOVERNANCE_SECRET_IMAGE: gitleaks 镜像, 用于密钥扫描
+#   默认值: swr.cn-north-4.myhuaweicloud.com/adbidding/governance/gitleaks:latest
+# ─────────────────────────────────────────────────────────────────────────────
 
 stages:
   - governance   # 风险/密钥/MR/测试检查 + 语言 job（同 stage 以满足 GitLab 11.4 dependencies 约束）
