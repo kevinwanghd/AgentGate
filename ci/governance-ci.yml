@@ -39,7 +39,7 @@ governance:risk-scan:
     - python -c "import yaml; print('pyyaml ok')"
   script:
     - |
-      TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
+      TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-${CI_DEFAULT_BRANCH:-master}}"
       git fetch -q origin "$TB"
       BASE="origin/$TB"
       CONFIG_ARG=""
@@ -72,7 +72,7 @@ governance:secret-scan:
     - gitleaks version
   script:
     - |
-      TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
+      TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-${CI_DEFAULT_BRANCH:-master}}"
       git fetch -q origin "$TB"
       BASE="origin/$TB"
       gitleaks detect \
@@ -105,7 +105,7 @@ governance:mr-validate:
     - python -c "import yaml; print('pyyaml ok')"
   script:
     - |
-      TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
+      TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-${CI_DEFAULT_BRANCH:-master}}"
       git fetch -q origin "$TB"
       BASE="origin/$TB"
       CONFIG_ARG=""
@@ -140,7 +140,7 @@ governance:test-check:
     - python -c "import yaml; print('pyyaml ok')"
   script:
     - |
-      TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
+      TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-${CI_DEFAULT_BRANCH:-master}}"
       git fetch -q origin "$TB"
       BASE="origin/$TB"
       CONFIG_ARG=""
@@ -227,7 +227,7 @@ governance:go-test:
         echo "{\"status\": \"skip\"}" > governance-go-test-result.json
         exit 0
       fi
-      TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
+      TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-${CI_DEFAULT_BRANCH:-master}}"
       git fetch -q origin "$TB"
       BASE="origin/$TB"
       python governance/scripts/run_affected_tests.py \
@@ -508,7 +508,7 @@ governance:gate-decision:
     - python -c "import yaml; print('pyyaml ok')"
   script:
     - |
-      TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-$CI_DEFAULT_BRANCH}"
+      TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-${CI_DEFAULT_BRANCH:-master}}"
       git fetch -q origin "$TB"
       SOURCE_SHA="${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA:-$CI_COMMIT_SHA}"
       TARGET_SHA="${CI_MERGE_REQUEST_TARGET_BRANCH_SHA:-$(git rev-parse "origin/$TB")}"
@@ -567,7 +567,7 @@ governance:gate-decision:
 
 # ── 8. Merge Bot: 仅消费 GateResult, 使用独立 token 设置 GitLab 自动合并 ─────
 governance:auto-merge:
-  stage: merge
+  stage: test
   image: "$GOVERNANCE_PY_IMAGE"
   only:
     - merge_requests
