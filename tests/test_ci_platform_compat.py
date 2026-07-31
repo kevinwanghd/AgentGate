@@ -122,6 +122,14 @@ class CIPlatformCompatTests(unittest.TestCase):
         # 没有 summary path 时应该静默跳过，不报错
         self.assertIn(result.returncode, [0, 1])
 
+    def test_gitlab_11_compatible_checkout_and_dotnet_discovery(self):
+        """CI 模板不能使用旧 Runner 不支持的 depth=0 或 pipefail 敏感查找。"""
+        content = (REPO_ROOT / "ci/governance-ci.yml").read_text(encoding="utf-8")
+
+        self.assertNotIn("GIT_DEPTH: 0", content)
+        self.assertNotIn('find . -maxdepth 3 -name "*.sln" -not -path "*/.*" | head -1', content)
+        self.assertNotIn('find . -maxdepth 3 -name "*.csproj" -not -path "*/.*" | head -1', content)
+
 
 if __name__ == "__main__":
     unittest.main()

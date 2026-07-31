@@ -45,7 +45,7 @@ governance:risk-scan:
     - branches
     - merge_requests
   variables:
-    GIT_DEPTH: 0
+    GIT_DEPTH: "1000"
   before_script:
     - git --version
     - python --version
@@ -79,7 +79,7 @@ governance:secret-scan:
     - branches
     - merge_requests
   variables:
-    GIT_DEPTH: 0
+    GIT_DEPTH: "1000"
   before_script:
     - git --version
     - gitleaks version
@@ -111,7 +111,7 @@ governance:mr-validate:
   only:
     - merge_requests
   variables:
-    GIT_DEPTH: 0          # 需完整历史以读取 commit 里的 AI-Usage trailer
+    GIT_DEPTH: "1000"     # GitLab Runner 11 不接受 0；脚本会主动 fetch 目标分支
   before_script:
     - git --version
     - python --version
@@ -146,7 +146,7 @@ governance:test-check:
     - branches
     - merge_requests
   variables:
-    GIT_DEPTH: 0
+    GIT_DEPTH: "1000"
   before_script:
     - git --version
     - python --version
@@ -224,7 +224,7 @@ governance:go-test:
     - branches
     - merge_requests
   variables:
-    GIT_DEPTH: 0
+    GIT_DEPTH: "1000"
   script:
     - |
       if [ "${GOVERNANCE_SKIP_GO_TEST:-false}" = "true" ]; then
@@ -461,8 +461,8 @@ governance:dotnet-test:
         echo "{\"status\": \"skip\"}" > governance-dotnet-test-result.json
         exit 0
       fi
-      SLN=$(find . -maxdepth 3 -name "*.sln" -not -path "*/.*" | head -1)
-      CSPROJ=$(find . -maxdepth 3 -name "*.csproj" -not -path "*/.*" | head -1)
+      SLN=$(find . -maxdepth 3 -name "*.sln" -not -path "*/.*" -print -quit)
+      CSPROJ=$(find . -maxdepth 3 -name "*.csproj" -not -path "*/.*" -print -quit)
       if [ -z "$SLN" ] && [ -z "$CSPROJ" ]; then
         echo "[dotnet-test] 未找到 .sln / .csproj, 跳过 .NET 测试。"
         echo "{\"status\": \"skip\"}" > governance-dotnet-test-result.json
@@ -553,7 +553,7 @@ governance:gate-decision:
   only:
     - merge_requests
   variables:
-    GIT_DEPTH: 0
+    GIT_DEPTH: "1000"
   dependencies:
     - governance:risk-scan
     - governance:secret-scan
