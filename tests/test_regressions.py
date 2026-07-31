@@ -2287,6 +2287,7 @@ class GateDecisionTests(unittest.TestCase):
         self.assertEqual(result["result"], "PASS")
         self.assertEqual(result["merge_action"], "AUTO_MERGE")
 
+    # risk:test-removal reason:"原 skip 放行测试已改名并反转断言以覆盖严格阻断语义，测试覆盖未删除" owner:@wangwf reviewed:2026-07-31
     def test_required_language_check_skip_is_blocked(self) -> None:
         """必需语言检查返回 skip 时必须阻断合并。"""
         cfg = json.loads(json.dumps(gate_decision.DEFAULT_CONFIG))
@@ -2302,6 +2303,7 @@ class GateDecisionTests(unittest.TestCase):
         self.assertEqual(result["merge_action"], "BLOCK")
         self.assertIn("required_check_failed", result["blocking_reasons"])
 
+    # risk:test-removal reason:"原 missing 放行测试已改名并反转断言以覆盖严格阻断语义，测试覆盖未删除" owner:@wangwf reviewed:2026-07-31
     def test_required_language_check_missing_is_blocked(self) -> None:
         """必需语言检查结果缺失时必须阻断合并。"""
         cfg = json.loads(json.dumps(gate_decision.DEFAULT_CONFIG))
@@ -2345,6 +2347,7 @@ class GateDecisionTests(unittest.TestCase):
         self.assertNotEqual(result["merge_action"], "AUTO_MERGE")
         self.assertIn("required_check_missing", result["blocking_reasons"])
 
+    # risk:test-removal reason:"原 Flutter 缺失放行测试已改名并反转断言以覆盖多语言必需检查阻断语义" owner:@wangwf reviewed:2026-07-31
     def test_multiple_required_language_checks_missing_are_blocked(self) -> None:
         """配置为必需的语言检查不能因 job 未触发而放行。"""
         cfg = json.loads(json.dumps(gate_decision.DEFAULT_CONFIG))
