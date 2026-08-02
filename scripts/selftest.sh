@@ -404,7 +404,7 @@ else
 fi
 EOF
 ( cd ct_dir && TEST_RESULT=fail python3 "$RECORD" -- "$BASH_BIN" -c './fixable-test.sh' ) >/dev/null 2>&1
-( cd ct_dir && TEST_RESULT=pass python3 "$RECORD" -- "$BASH_BIN" -c './fixable-test.sh' ) >/dev/null 2>&1
+( cd ct_dir && TEST_RESULT=pass python3 "$RECORD" --covers src/Foo.cs -- "$BASH_BIN" -c './fixable-test.sh' ) >/dev/null 2>&1
 ( cd ct_dir && python3 "$CHECK" --diff-file d.diff --evidence .governance/test-evidence.jsonl ) >/dev/null 2>&1
 expect "同命令修复后全绿不再硬拦" 0 $?
 
