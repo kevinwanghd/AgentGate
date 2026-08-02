@@ -20,6 +20,9 @@ stages:
   - build
   - merge
 
+variables:
+  GOVERNANCE_FLUTTER_IMAGE: "ghcr.io/cirruslabs/flutter:stable"
+
 # ── 1. 风险扫描: 硬阻断 ──────────────────────────────────────────────────────
 governance:risk-scan:
   stage: governance
@@ -241,7 +244,8 @@ governance:go-test:
 # ── 7a. Flutter/Dart 测试: 无 pubspec.yaml 时自动跳过 ────────────────────────
 governance:flutter-test:
   stage: test
-  image: ghcr.io/cirruslabs/flutter:stable
+  image: "$GOVERNANCE_FLUTTER_IMAGE"
+  timeout: 30m
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $GOVERNANCE_SKIP_FLUTTER_TEST != "true"
     - if: $CI_COMMIT_BRANCH && $GOVERNANCE_SKIP_FLUTTER_TEST != "true"

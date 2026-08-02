@@ -36,6 +36,7 @@ stages:
 variables:
   GOVERNANCE_PY_IMAGE: "swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest"
   GOVERNANCE_SECRET_IMAGE: "swr.cn-north-4.myhuaweicloud.com/adbidding/governance/gitleaks:latest"
+  GOVERNANCE_FLUTTER_IMAGE: "ghcr.io/cirruslabs/flutter:stable"
 
 # ── 1. 风险扫描: 硬阻断 ──────────────────────────────────────────────────────
 governance:risk-scan:
@@ -265,6 +266,7 @@ governance:go-test:
 governance:flutter-test:
   stage: governance
   image: "$GOVERNANCE_PY_IMAGE"
+  timeout: 30m
   only:
     - branches
     - merge_requests
