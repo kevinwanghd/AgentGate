@@ -634,14 +634,14 @@ CFG
   python3 "$SCANP" --diff-file v.diff --config hard.yml >/dev/null 2>&1 )
 expect "P0 vendor路径豁免不拦" 0 $?
 
-# [P0-default-soft] 默认无 config = 软, 命中风险只警告不拦
+# [P0-default-hard] 默认无 config = 硬, 命中风险直接阻断
 SD="$(mktemp -d)"
 ( cd "$SD" && git init -q && git config user.email t@t && git config user.name t
   echo 'bool f(string u){ return u == "626786582b50ab8ec08b0fa0"; }' > a.cs
   git add a.cs && git commit -qm x >/dev/null 2>&1
   git diff --unified=0 --no-color "$EMPTY_TREE" HEAD -- a.cs > a.diff
   python3 "$SCANP" --diff-file a.diff >/dev/null 2>&1 )
-expect "P0 默认soft命中风险不拦" 0 $?
+expect "P0 默认hard命中风险应拦截" 1 $?
 
 # [P1-preexisting] -w 忽略空格: 只重缩进他人风险行不误报
 WS="$(mktemp -d)"

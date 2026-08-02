@@ -54,7 +54,7 @@ except Exception:  # pragma: no cover
 
 DEFAULT_CONFIG = {
     "metadata": {
-        "enforcement": "soft",
+        "enforcement": "hard",
         "soft_deadline": None,
         "mandatory_fields": ["background", "changes", "self_test"],
     },

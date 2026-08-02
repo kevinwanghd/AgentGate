@@ -283,8 +283,8 @@ else
 version: ${VERSION}
 
 metadata:
-  enforcement: soft           # v1 软启动, 缺字段仅警告
-  soft_deadline: ${SOFT_DEADLINE}   # 到期自动转 hard, 距今最多 90 天
+  enforcement: hard           # 缺字段直接阻断；治理检查默认禁止违规
+  soft_deadline: ${SOFT_DEADLINE}   # 仅供显式 soft 过渡配置使用
   mandatory_fields:
     - background          # ## 背景
     - changes             # ## 变更内容
@@ -292,7 +292,7 @@ metadata:
     - self_test           # ## 自测确认
 
 risk_annotations:
-  enforcement: soft           # 默认软启动(只警告); 团队稳定后显式改 hard
+  enforcement: hard           # 风险注解不合规直接阻断
   reviewed_max_age_days: 90   # 3 个月 (推荐: 与季度 review 节奏对齐)
   # 路径豁免: 生成/引入/第三方代码不扫 (开发者不为这些代码负责)
   scan_exclude_paths:
@@ -414,8 +414,8 @@ auto_merge:
       - governance/**
 
 testing:
-  enforcement: soft           # v1 软启动: 未测代码仅警告; soft_deadline 后转硬
-  soft_deadline: ${SOFT_DEADLINE}
+  enforcement: hard           # 生产代码缺少测试证据直接阻断
+  soft_deadline: ${SOFT_DEADLINE}   # 仅供显式 soft 过渡配置使用
   accept_tested_trailer: false # Tested: 仅作开发声明，合并放行只看 CI Evidence Bundle
   untested_max_age_days: 90   # risk:untested 注解有效期 (推荐: 与季度 review 节奏对齐)
   exclude_paths:              # 整目录/模式免测试检查 (DTO/迁移/生成代码/启动引导)

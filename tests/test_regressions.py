@@ -373,13 +373,13 @@ class AgentGateCliTests(unittest.TestCase):
 class GitLabMrCompatTests(unittest.TestCase):
     def test_derives_gitlab_url_from_legacy_ci_variables(self) -> None:
         args = mock.Mock(gitlab_url=None)
-        with mock.patch.dict(os.environ, {"CI_API_V4_URL": "https://gitlab.example.com/api/v4"}, clear=False):
+        with mock.patch.dict(os.environ, {"CI_API_V4_URL": "https://gitlab.example.com/api/v4"}, clear=True):
             self.assertEqual(
                 "https://gitlab.example.com",
                 gitlab_mr_compat._derive_gitlab_url(args),
             )
 
-        with mock.patch.dict(os.environ, {"CI_API_V4_URL": "", "CI_PROJECT_URL": "https://gitlab.example.com/group/project"}, clear=False):
+        with mock.patch.dict(os.environ, {"CI_API_V4_URL": "", "CI_PROJECT_URL": "https://gitlab.example.com/group/project"}, clear=True):
             self.assertEqual(
                 "https://gitlab.example.com",
                 gitlab_mr_compat._derive_gitlab_url(args),
@@ -2478,6 +2478,26 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
         # merge bot uses Python urllib, not curl --data-urlencode
         self.assertIn('"merge_when_pipeline_succeeds": "true"', template)
         self.assertIn("CI_MERGE_REQUEST_SOURCE_BRANCH_SHA", template)
+        self.assertIn('"source_sha": os.environ["SOURCE_SHA"]', template)
+        self.assertIn('"target_sha": os.environ["TARGET_SHA"]', template)
+        self.assertIn('"policy_sha": os.environ["POLICY_SHA"]', template)
+        for check in (
+            "risk-scan", "secret-scan", "mr-validate", "test-check",
+            "go-test", "flutter-test", "python-test", "node-test",
+            "java-test", "dotnet-test", "rust-test",
+        ):
+            self.assertIn(f'read_check_result("{check}")', template)
+        self.assertNotIn('if [ "$DECISION_EXIT" -gt 1 ]', template)
+        self.assertNotIn("DECISION_EXIT=$?", template)
+
+    def test_installed_policy_defaults_are_hard(self) -> None:
+        installer = (ROOT / "install.sh").read_text(encoding="utf-8")
+        self.assertIn("metadata:\n  enforcement: hard", installer)
+        self.assertIn("risk_annotations:\n  enforcement: hard", installer)
+        self.assertIn("testing:\n  enforcement: hard", installer)
+        self.assertEqual("hard", scan_risks.DEFAULT_CONFIG["risk_annotations"]["enforcement"])
+        self.assertEqual("hard", validate_mr.DEFAULT_CONFIG["metadata"]["enforcement"])
+        self.assertEqual("hard", check_tested.DEFAULT_CONFIG["testing"]["enforcement"])
 
     def test_gitlab_template_uses_prebuilt_images_and_legacy_syntax(self) -> None:
         template = (ROOT / "ci" / "governance-ci.yml").read_text(encoding="utf-8")

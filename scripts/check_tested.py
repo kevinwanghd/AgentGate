@@ -54,7 +54,7 @@ EVIDENCE_PATH = ".governance/test-evidence.jsonl"
 
 DEFAULT_CONFIG = {
     "testing": {
-        "enforcement": "soft",          # v1 软启动
+        "enforcement": "hard",
         "soft_deadline": None,
         "accept_tested_trailer": True,
         "exclude_paths": [              # 整目录/模式免测试检查
