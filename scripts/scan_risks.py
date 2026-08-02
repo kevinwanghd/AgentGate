@@ -39,7 +39,7 @@ except Exception:  # pragma: no cover
 # ============================================================
 DEFAULT_CONFIG = {
     "risk_annotations": {
-        "enforcement": "soft",  # 默认软启动(只警告); 团队显式配 hard 才硬拦
+        "enforcement": "hard",
         "reviewed_max_age_days": 180,
         # 路径豁免: 生成/引入/第三方代码不扫 (开发者不为这些代码负责)
         "scan_exclude_paths": [

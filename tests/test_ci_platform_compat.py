@@ -18,6 +18,9 @@ class CIPlatformCompatTests(unittest.TestCase):
         """scan_risks.py 在 GitHub Actions 环境下写入 GITHUB_STEP_SUMMARY"""
         with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".md") as f:
             summary_path = f.name
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".yml") as f:
+            f.write("risk_annotations:\n  enforcement: soft\n")
+            config_path = f.name
 
         # 创建并追踪临时测试文件，触发一个 warn 规则（不阻断）
         test_file = REPO_ROOT / "test_temp_github_summary.py"
@@ -32,7 +35,13 @@ class CIPlatformCompatTests(unittest.TestCase):
 
             # 运行 scan_risks，使用 --staged 扫描 staged changes
             result = subprocess.run(
-                [sys.executable, str(REPO_ROOT / "scripts/scan_risks.py"), "--staged"],
+                [
+                    sys.executable,
+                    str(REPO_ROOT / "scripts/scan_risks.py"),
+                    "--staged",
+                    "--config",
+                    config_path,
+                ],
                 env=env,
                 capture_output=True,
                 text=True,
@@ -54,6 +63,7 @@ class CIPlatformCompatTests(unittest.TestCase):
             subprocess.run(["git", "reset", "HEAD", str(test_file)], cwd=str(REPO_ROOT))
             test_file.unlink(missing_ok=True)
             os.unlink(summary_path)
+            os.unlink(config_path)
 
     def test_scan_risks_gitlab_no_summary(self):
         """scan_risks.py 在 GitLab CI 环境下（无 GITHUB_STEP_SUMMARY）不报错"""

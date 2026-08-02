@@ -477,6 +477,7 @@ governance:gate-decision:
       python - <<'PY' > gate-evidence.json
       import json
       import os
+      import sys
 
       def read_check_result(name):
           """读取前置 job 的结果文件，返回 pass/fail/skip/missing"""
@@ -497,13 +498,22 @@ governance:gate-decision:
           "mr-validate": read_check_result("mr-validate"),
           "test-check":  read_check_result("test-check"),
           "go-test":     read_check_result("go-test"),
+          "flutter-test": read_check_result("flutter-test"),
+          "python-test": read_check_result("python-test"),
+          "node-test":   read_check_result("node-test"),
+          "java-test":   read_check_result("java-test"),
+          "dotnet-test": read_check_result("dotnet-test"),
+          "rust-test":   read_check_result("rust-test"),
       }
 
-      import sys
       print(f"[gate-decision] 各检查结果: {checks}", file=sys.stderr)
-      print(json.dumps({"checks": checks}, ensure_ascii=False))
+      print(json.dumps({
+          "source_sha": os.environ["SOURCE_SHA"],
+          "target_sha": os.environ["TARGET_SHA"],
+          "policy_sha": os.environ["POLICY_SHA"],
+          "checks": checks,
+      }, ensure_ascii=False))
       PY
-      set +e
       python governance/scripts/gate_decision.py \
         --evidence gate-evidence.json \
         --source-sha "$SOURCE_SHA" \
@@ -513,11 +523,6 @@ governance:gate-decision:
         --target-branch "$TB" \
         --config "$CONFIG_PATH" \
         --output gate-result.json
-      DECISION_EXIT=$?
-      set -e
-      if [ "$DECISION_EXIT" -gt 1 ]; then
-        exit "$DECISION_EXIT"
-      fi
   artifacts:
     paths:
       - gate-result.json
