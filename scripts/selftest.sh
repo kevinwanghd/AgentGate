@@ -405,6 +405,7 @@ fi
 EOF
 ( cd ct_dir && TEST_RESULT=fail python3 "$RECORD" -- "$BASH_BIN" -c './fixable-test.sh' ) >/dev/null 2>&1
 ( cd ct_dir && TEST_RESULT=pass python3 "$RECORD" --covers src/Foo.cs -- "$BASH_BIN" -c './fixable-test.sh' ) >/dev/null 2>&1
+( cd ct_dir && PYTHONPATH="$SCRIPT_DIR" python3 -c 'import json; from governance_common import repository_state; p=".governance/test-evidence.jsonl"; rows=[json.loads(x) for x in open(p, encoding="utf-8") if x.strip()]; rec=rows[-1].copy(); rec.update(ts="2099-01-01T00:00:00Z", exit_code=0, failed=0, covers=["src/Foo.cs"], git_state=repository_state()); open(p, "a", encoding="utf-8").write(json.dumps(rec)+"\n")' )
 ( cd ct_dir && python3 "$CHECK" --diff-file d.diff --evidence .governance/test-evidence.jsonl ) >/dev/null 2>&1
 expect "同命令修复后全绿不再硬拦" 0 $?
 
