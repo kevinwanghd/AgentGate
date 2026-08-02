@@ -395,15 +395,17 @@ expect "全绿记录+改测试文件放行" 0 $?
 ( cd ct_dir && python3 "$CHECK" --diff-file d.diff --evidence .governance/test-evidence.jsonl ) >/dev/null 2>&1
 expect "失败测试记录硬拦(exit1)" 1 $?
 
-# 同命令修复后全绿 -> 不再硬拦 (只看每命令最新)
-( cd ct_dir && python3 "$RECORD" -- "$BASH_BIN" -c 'echo "Failed: 2, Passed: 3"; exit 1' ) >/dev/null 2>&1
-sleep 1
-# 注意: record 用相同 cmd 文本, 最新一条覆盖旧的失败
-CURRENT_STATE="$(cd ct_dir && PYTHONPATH="$SCRIPT_DIR" python3 -c 'from governance_common import repository_state; print(repository_state())')"
-cat >> ct_dir/.governance/test-evidence.jsonl <<EOF
-{"ts":"2099-01-01T00:00:00Z","cmd":"bash -c echo \\"Failed: 2, Passed: 3\\"; exit 1","exit_code":0,"total":5,"passed":5,"failed":0,"covers":[],"git_state":"${CURRENT_STATE}"}
+cat > ct_dir/fixable-test.sh <<'EOF'
+if [ "${TEST_RESULT:-fail}" = "pass" ]; then
+  echo "Passed! - Failed: 0, Passed: 5"
+else
+  echo "Failed: 2, Passed: 3"
+  exit 1
+fi
 EOF
-python3 "$CHECK" --diff-file ct_dir/d.diff --evidence ct_dir/.governance/test-evidence.jsonl >/dev/null 2>&1
+( cd ct_dir && TEST_RESULT=fail python3 "$RECORD" -- "$BASH_BIN" -c './fixable-test.sh' ) >/dev/null 2>&1
+( cd ct_dir && TEST_RESULT=pass python3 "$RECORD" -- "$BASH_BIN" -c './fixable-test.sh' ) >/dev/null 2>&1
+( cd ct_dir && python3 "$CHECK" --diff-file d.diff --evidence .governance/test-evidence.jsonl ) >/dev/null 2>&1
 expect "同命令修复后全绿不再硬拦" 0 $?
 
 # record_test_run 透传退出码: 被包装命令失败则脚本也非0
@@ -582,6 +584,7 @@ COLLAB="$(mktemp -d)"
   git checkout -q feature
   git merge -q main -m "merge main"
   # 模拟 CI 修复后行为: diff-base = 目标分支最新 tip (main)
+  python3 "$RECORD" -- "$BASH_BIN" -c 'echo "Passed! - Failed: 0, Passed: 2"' >/dev/null 2>&1
   python3 "$CHECK" --diff-base main >/dev/null 2>&1
 )
 expect "merge他人代码后只检查自己的改动(不误拦)" 0 $?
