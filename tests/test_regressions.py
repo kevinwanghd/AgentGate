@@ -2495,6 +2495,7 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
         self.assertIn("metadata:\n  enforcement: hard", installer)
         self.assertIn("risk_annotations:\n  enforcement: hard", installer)
         self.assertIn("testing:\n  enforcement: hard", installer)
+        self.assertIn('- "governance/scripts/**"', installer)
         self.assertEqual("hard", scan_risks.DEFAULT_CONFIG["risk_annotations"]["enforcement"])
         self.assertEqual("hard", validate_mr.DEFAULT_CONFIG["metadata"]["enforcement"])
         self.assertEqual("hard", check_tested.DEFAULT_CONFIG["testing"]["enforcement"])

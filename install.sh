@@ -419,6 +419,7 @@ testing:
   accept_tested_trailer: false # Tested: 仅作开发声明，合并放行只看 CI Evidence Bundle
   untested_max_age_days: 90   # risk:untested 注解有效期 (推荐: 与季度 review 节奏对齐)
   exclude_paths:              # 整目录/模式免测试检查 (DTO/迁移/生成代码/启动引导)
+    - "governance/scripts/**"  # AgentGate vendored tooling is tested upstream
     - "**/Migrations/**"
     - "**/*.Designer.cs"
     - "**/*.generated.*"
