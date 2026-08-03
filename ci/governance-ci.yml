@@ -265,7 +265,6 @@ governance:go-test:
 governance:flutter-test:
   stage: governance
   image: "$GOVERNANCE_PY_IMAGE"
-  timeout: 30m
   only:
     - branches
     - merge_requests

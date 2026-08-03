@@ -2513,6 +2513,16 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
         self.assertNotIn("image: python:3.11", template)
         self.assertNotIn("rules:", template)
         self.assertNotIn("needs:", template)
+        self.assertNotRegex(template, r"(?m)^\s+timeout:")
+        self.assertNotIn("dotenv:", template)
+
+    def test_gitlab_legacy_lessons_are_recorded(self) -> None:
+        lessons = (ROOT / "lessons" / "gitlab-legacy-ci.yml").read_text(encoding="utf-8")
+        self.assertIn("agentgate.io/lessons/v1", lessons)
+        self.assertIn("gitlab_legacy.job_timeout_unsupported", lessons)
+        self.assertIn("gitlab_legacy.modern_schema_unsupported", lessons)
+        self.assertIn("gitlab_legacy.optional_language_image_pull", lessons)
+        self.assertIn("enforcement: hard", lessons)
 
     def test_installer_ships_gate_decision_and_gitlab_auto_merge_jobs(self) -> None:
         installer = (ROOT / "install.sh").read_text(encoding="utf-8")

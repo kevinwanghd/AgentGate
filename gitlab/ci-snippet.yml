@@ -242,7 +242,6 @@ governance:go-test:
 governance:flutter-test:
   stage: test
   image: ghcr.io/cirruslabs/flutter:stable
-  timeout: 30m
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $GOVERNANCE_SKIP_FLUTTER_TEST != "true"
     - if: $CI_COMMIT_BRANCH && $GOVERNANCE_SKIP_FLUTTER_TEST != "true"
