@@ -502,7 +502,7 @@ def main() -> int:
     print("  放行任一即可:")
     print("    1) 用 record_test_run.py 跑单元测试, 并在本次 MR 改动对应测试文件")
     print('    2) 确无法单测的代码加注解: '
-          '// risk:untested reason:"..." owner:@team reviewed:今天')
+          f'// risk:untested reason:"..." owner:@team reviewed:{dt.date.today().isoformat()}')
     print("    3) DTO/迁移/生成代码等可在 governance.config.yml 的 "
           "testing.exclude_paths 白名单")
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import importlib
+import io
 import json
 import os
 import shutil
@@ -9,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -144,6 +146,27 @@ class RiskAnnotationTests(unittest.TestCase):
 
 
 class EvidenceBindingTests(unittest.TestCase):
+    def test_untested_hint_uses_iso_reviewed_date(self) -> None:
+        diff = (
+            "+++ b/src/app.py\n"
+            "@@ -0,0 +1 @@\n"
+            "+print('changed')\n"
+        )
+        with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as f:
+            f.write(diff)
+            diff_path = f.name
+        try:
+            out = io.StringIO()
+            with mock.patch.object(sys, "argv", ["check_tested.py", "--diff-file", diff_path]), \
+                    redirect_stdout(out):
+                self.assertEqual(1, check_tested.main())
+
+            text = out.getvalue()
+            self.assertIn(f"reviewed:{dt.date.today().isoformat()}", text)
+            self.assertNotIn("reviewed:今天", text)
+        finally:
+            os.unlink(diff_path)
+
     def test_failed_trailer_cannot_be_hidden_by_pass(self) -> None:
         completed = mock.Mock(stdout="Tested: fail\n\nTested: pass (10/10)\n")
         with mock.patch.object(check_tested.subprocess, "run", return_value=completed):
