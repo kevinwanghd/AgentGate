@@ -2585,6 +2585,16 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
         self.assertIn("never overwrite pre-existing repository instructions", lessons)
         self.assertIn("AGENTS.md must be a protected path", lessons)
 
+    def test_lessons_capture_operational_mistakes(self) -> None:
+        lessons = (ROOT / "lessons" / "agentgate-operations.yml").read_text(encoding="utf-8")
+        self.assertIn("agentgate_operations.sensitive_pr_requires_risk_rollback", lessons)
+        self.assertIn("enforcement: hard", lessons)
+        self.assertIn("## 风险与回滚", lessons)
+        self.assertIn("agentgate_operations.recheck_cli_auth_in_keyring_context", lessons)
+        self.assertIn("Git credentials from gh CLI credentials", lessons)
+        self.assertIn("agentgate_operations.do_not_chase_local_shell_path_before_product_goal", lessons)
+        self.assertIn("local shell plumbing", lessons)
+
     def test_hard_lessons_have_executable_checks(self) -> None:
         self.assertEqual(0, validate_lessons.main(["--root", str(ROOT)]))
 
@@ -2642,6 +2652,7 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
         self.assertIn('scripts/validate_lessons.py" | write_file "governance/scripts/validate_lessons.py"', installer)
         self.assertIn('lessons/gitlab-legacy-ci.yml" | write_file "governance/lessons/gitlab-legacy-ci.yml"', installer)
         self.assertIn('lessons/agent-instructions.yml" | write_file "governance/lessons/agent-instructions.yml"', installer)
+        self.assertIn('lessons/agentgate-operations.yml" | write_file "governance/lessons/agentgate-operations.yml"', installer)
         self.assertIn("scripts/gitlab_controller.py", installer)
         self.assertIn("scripts/gitlab_mr_compat.py", installer)
         self.assertIn("scripts/agentgate.py", installer)

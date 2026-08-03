@@ -572,6 +572,7 @@ fetch_or_local "patterns/dart.yml" | write_file "governance/patterns/dart.yml"
 log "安装硬教训规则 -> governance/lessons/"
 fetch_or_local "lessons/gitlab-legacy-ci.yml" | write_file "governance/lessons/gitlab-legacy-ci.yml"
 fetch_or_local "lessons/agent-instructions.yml" | write_file "governance/lessons/agent-instructions.yml"
+fetch_or_local "lessons/agentgate-operations.yml" | write_file "governance/lessons/agentgate-operations.yml"
 
 # ---------- 4c. 语言验证 profile ----------
 log "安装语言验证 profile -> governance/profiles/"

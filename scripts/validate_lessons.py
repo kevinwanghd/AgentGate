@@ -101,6 +101,24 @@ def check_agent_instructions_preserve_repository_agents_md(root: Path, errors: l
                 _fail(errors, f"agent_instructions.preserve_repository_agents_md: missing {needle}")
 
 
+def check_agentgate_sensitive_pr_requires_risk_rollback(root: Path, errors: list[str]) -> None:
+    validate_mr = _read_first(root, "scripts/validate_mr.py", "governance/scripts/validate_mr.py")
+    policy = _read_first(root, "governance.config.yml", "governance/governance.config.yml")
+    required = {
+        "detect_large_change": validate_mr,
+        "风险与回滚": validate_mr,
+        "大变更需填 ## 风险与回滚": validate_mr,
+    }
+    for needle, haystack in required.items():
+        if needle not in haystack:
+            _fail(errors, f"agentgate_operations.sensitive_pr_requires_risk_rollback: missing {needle}")
+    if ".github/" not in policy and ".github/workflows" not in policy:
+        _fail(
+            errors,
+            "agentgate_operations.sensitive_pr_requires_risk_rollback: workflow paths are not sensitive",
+        )
+
+
 LESSON_CHECKS: dict[str, Callable[[Path, list[str]], None]] = {
     "gitlab_legacy.job_timeout_unsupported": check_gitlab_job_timeout_unsupported,
     "gitlab_legacy.modern_schema_unsupported": check_gitlab_modern_schema_unsupported,
@@ -108,6 +126,7 @@ LESSON_CHECKS: dict[str, Callable[[Path, list[str]], None]] = {
     "gitlab_legacy.governance_core_required_checks": check_gitlab_governance_core_required_checks,
     "gitlab_legacy.secret_history_hard_block": check_gitlab_secret_history_hard_block,
     "agent_instructions.preserve_repository_agents_md": check_agent_instructions_preserve_repository_agents_md,
+    "agentgate_operations.sensitive_pr_requires_risk_rollback": check_agentgate_sensitive_pr_requires_risk_rollback,
 }
 
 
