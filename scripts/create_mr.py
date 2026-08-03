@@ -1050,6 +1050,49 @@ def submit_mr(title: str, description: str, target: str, cli: str) -> int:
         os.unlink(desc_file)
 
 
+def validate_submitted_cli_description(cli: str, args) -> int:
+    """Validate the actual submitted GitHub PR body after CLI creation."""
+    if cli != "gh":
+        return 0
+
+    try:
+        result = subprocess.run(
+            ["gh", "pr", "view", "--json", "body,url"],
+            capture_output=True,
+            text=True,
+            check=False,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except OSError as exc:
+        sys.stderr.write(f"[create-mr] failed to read GitHub PR body: {exc}\n")
+        return 1
+
+    if result.returncode != 0:
+        sys.stderr.write("[create-mr] failed to read GitHub PR body after creation.\n")
+        if result.stderr:
+            sys.stderr.write(result.stderr)
+        return 1
+
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        sys.stderr.write(f"[create-mr] GitHub PR body response was not JSON: {exc}\n")
+        return 1
+
+    rc = validate_generated_description(str(payload.get("body") or ""), args)
+    url = payload.get("url")
+    if rc != 0:
+        if url:
+            sys.stderr.write(f"[create-mr] submitted GitHub PR body failed validation: {url}\n")
+        return rc
+    if url:
+        sys.stderr.write(f"[create-mr] submitted GitHub PR body validated: {url}\n")
+    else:
+        sys.stderr.write("[create-mr] submitted GitHub PR body validated.\n")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="自动生成并提交 MR")
     ap.add_argument("--why", help="## 背景: 为什么做这个变更 (AI 从任务上下文提取)")
@@ -1231,7 +1274,7 @@ def _submit_with_fallback(title: str, description: str, args) -> int:
     if cli:
         rc = submit_mr(title, description, args.target_branch, cli)
         if rc == 0:
-            return 0
+            return validate_submitted_cli_description(cli, args)
         return open_gitlab_mr_fallback(
             title,
             description,
