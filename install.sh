@@ -64,6 +64,45 @@ write_file() {
   ok "写入 $rel"
 }
 
+upsert_governance_section() {
+  local rel="$1"
+  local source_rel="$2"
+  local abs="${TARGET_DIR}/${rel}"
+  mkdir -p "$(dirname "$abs")"
+  if [[ -e "$abs" ]]; then
+    if grep -q '<!-- governance-v1-begin -->' "$abs"; then
+      local section_tmp output_tmp
+      section_tmp="$(mktemp)"
+      output_tmp="$(mktemp)"
+      fetch_or_local "$source_rel" > "$section_tmp"
+      awk -v section="$section_tmp" '
+        /<!-- governance-v1-begin -->/ {
+          print
+          while ((getline line < section) > 0) print line
+          close(section)
+          replacing=1
+          next
+        }
+        /<!-- governance-v1-end -->/ && replacing { replacing=0; print; next }
+        !replacing { print }
+      ' "$abs" > "$output_tmp"
+      cat "$output_tmp" > "$abs"
+      rm -f "$section_tmp" "$output_tmp"
+      ok "updated existing governance section in $rel"
+    else
+      warn "$rel exists; appending governance section instead of overwriting repository instructions"
+      {
+        printf '\n\n---\n<!-- governance-v1-begin -->\n'
+        fetch_or_local "$source_rel"
+        printf '\n<!-- governance-v1-end -->\n'
+      } >> "$abs"
+      ok "appended governance section to $rel"
+    fi
+  else
+    fetch_or_local "$source_rel" | write_file "$rel"
+  fi
+}
+
 fetch_or_local() {
   # 优先用本地 SOURCE_DIR, 否则从 SOURCE_BASE 拉取
   local rel="$1"
@@ -252,8 +291,7 @@ fi
 
 # OpenAI Codex / generic agent fallback
 if [[ "$AGENTS" == "all" || "$AGENTS" == "codex" ]]; then
-  fetch_or_local "agent-instructions/AGENTS.md" \
-    | write_file "AGENTS.md"
+  upsert_governance_section "AGENTS.md" "agent-instructions/AGENTS.md"
 fi
 
 # ---------- 3. governance.config.yml ----------
@@ -384,6 +422,7 @@ auto_merge:
     - mr-validate
     - test-check
   protected_paths:
+    - AGENTS.md
     - governance.config.yml
     - .github/workflows/**
     - .gitlab-ci.yml

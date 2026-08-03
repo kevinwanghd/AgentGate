@@ -48,6 +48,7 @@ auto_merge:
     - main
     - release/*
   protected_paths:
+    - AGENTS.md
     - governance.config.yml
     - .github/workflows/**
     - .gitlab-ci.yml

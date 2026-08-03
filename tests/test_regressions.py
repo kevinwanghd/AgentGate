@@ -4,6 +4,8 @@ import datetime as dt
 import importlib
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -2498,9 +2500,45 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
         self.assertIn("required_checks:\n    - risk-scan\n    - secret-scan\n    - mr-validate\n    - test-check", installer)
         self.assertNotIn("required_checks:\n    - risk-scan\n    - secret-scan\n    - mr-validate\n    - test-check\n    - go-test", installer)
         self.assertIn('- "governance/scripts/**"', installer)
+        self.assertIn("    - AGENTS.md", installer)
+        self.assertIn("AGENTS.md", gate_decision.DEFAULT_CONFIG["auto_merge"]["protected_paths"])
         self.assertEqual("hard", scan_risks.DEFAULT_CONFIG["risk_annotations"]["enforcement"])
         self.assertEqual("hard", validate_mr.DEFAULT_CONFIG["metadata"]["enforcement"])
         self.assertEqual("hard", check_tested.DEFAULT_CONFIG["testing"]["enforcement"])
+
+    def test_installer_preserves_existing_agents_md(self) -> None:
+        bash = os.environ.get("AGENTGATE_BASH")
+        git_bash = Path(r"C:\Program Files\Git\bin\bash.exe")
+        if not bash and git_bash.exists():
+            bash = str(git_bash)
+        if not bash:
+            bash = shutil.which("bash")
+        if not bash:
+            self.skipTest("bash is required for install.sh integration coverage")
+
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            agents = target / "AGENTS.md"
+            agents.write_text(
+                "# Product instructions\n\nKeep this repository-specific guidance.\n",
+                encoding="utf-8",
+            )
+
+            subprocess.run(
+                [bash, str(ROOT / "install.sh"), str(target), "--agents", "codex"],
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+
+            installed = agents.read_text(encoding="utf-8")
+            self.assertIn("# Product instructions", installed)
+            self.assertIn("Keep this repository-specific guidance.", installed)
+            self.assertIn("<!-- governance-v1-begin -->", installed)
+            self.assertIn("<!-- governance-v1-end -->", installed)
+            self.assertIn("# AgentGate Workflow", installed)
 
     def test_gitlab_template_uses_prebuilt_images_and_legacy_syntax(self) -> None:
         template = (ROOT / "ci" / "governance-ci.yml").read_text(encoding="utf-8")
@@ -2537,6 +2575,14 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
         self.assertIn("legacy GitLab templates must not contain a job-level timeout key", lessons)
         self.assertIn("installed policy defaults must not require language/runtime checks", lessons)
         self.assertIn("do not downgrade the finding to advisory", lessons)
+
+    def test_lessons_capture_agent_instruction_preservation(self) -> None:
+        lessons = (ROOT / "lessons" / "agent-instructions.yml").read_text(encoding="utf-8")
+        self.assertIn("agentgate.io/lessons/v1", lessons)
+        self.assertIn("agent_instructions.preserve_repository_agents_md", lessons)
+        self.assertIn("enforcement: hard", lessons)
+        self.assertIn("never overwrite pre-existing repository instructions", lessons)
+        self.assertIn("AGENTS.md must be a protected path", lessons)
 
     def test_installer_ships_gate_decision_and_gitlab_auto_merge_jobs(self) -> None:
         installer = (ROOT / "install.sh").read_text(encoding="utf-8")
