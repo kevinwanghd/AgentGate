@@ -1,0 +1,51 @@
+version: agentgate.io/lessons/v1
+scope: gitlab-legacy-ci
+lessons:
+  - id: gitlab_legacy.job_timeout_unsupported
+    enforcement: hard
+    applies_to:
+      - ci/governance-ci.yml
+      - generated governance/ci-snippet.yml
+    trigger: job-level timeout key in a GitLab legacy CI job
+    risk: GitLab 11.x rejects the pipeline as yaml invalid before any gate can run.
+    fix: Use runner or project timeout settings, or script-level command timeouts that do not change CI schema.
+    regression: legacy GitLab templates must not contain a job-level timeout key.
+
+  - id: gitlab_legacy.modern_schema_unsupported
+    enforcement: hard
+    applies_to:
+      - ci/governance-ci.yml
+      - generated governance/ci-snippet.yml
+    trigger: rules, needs, or artifacts reports dotenv in a GitLab legacy CI template
+    risk: Older GitLab servers and runners reject or mis-schedule modern DAG/pipeline syntax.
+    fix: Use only, except, dependencies, and ordinary artifacts for legacy profiles.
+    regression: legacy GitLab templates must stay free of rules, needs, and dotenv reports.
+
+  - id: gitlab_legacy.optional_language_image_pull
+    enforcement: hard
+    applies_to:
+      - language-specific CI jobs
+    trigger: optional branch pipeline job pulls a language image that is not already available to the runner
+    risk: Governance delivery is blocked by image pull latency instead of an actual policy violation.
+    fix: Reuse the repository or governance image and skip when the language runtime is absent, or restrict the expensive language image job to the intended MR gate.
+    regression: rollout fixes must not introduce new external images for legacy GitLab targets without explicit approval.
+
+  - id: gitlab_legacy.governance_core_required_checks
+    enforcement: hard
+    applies_to:
+      - install.sh
+      - generated governance.config.yml
+    trigger: default required checks include Go, Flutter, or another language/runtime job
+    risk: AgentGate blocks an otherwise valid CI flow because a project runtime or large image is unavailable.
+    fix: Keep default required checks to risk-scan, secret-scan, mr-validate, and test-check; projects may explicitly opt into runtime checks once their runner path is proven stable.
+    regression: installed policy defaults must not require language/runtime checks.
+
+  - id: gitlab_legacy.secret_history_hard_block
+    enforcement: hard
+    applies_to:
+      - governance:secret-scan
+      - merge request commit range
+    trigger: gitleaks reports a secret in any commit in the scanned MR range
+    risk: Removing the secret only in a later commit leaves exposed credentials in reviewable branch history.
+    fix: Rotate the exposed credential and remove the leaked commit from the MR range; do not downgrade the finding to advisory.
+    regression: secret findings remain hard blockers even when the final file content no longer contains the value.

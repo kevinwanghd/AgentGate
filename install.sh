@@ -368,25 +368,21 @@ auto_merge:
       - secret-scan
       - mr-validate
       - test-check
-      - go-test
     high:
       - risk-scan
       - secret-scan
       - mr-validate
       - test-check
-      - go-test
     critical:
       - risk-scan
       - secret-scan
       - mr-validate
       - test-check
-      - go-test
   required_checks:
     - risk-scan
     - secret-scan
     - mr-validate
     - test-check
-    - go-test
   protected_paths:
     - governance.config.yml
     - .github/workflows/**
