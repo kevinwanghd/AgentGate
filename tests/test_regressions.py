@@ -866,6 +866,42 @@ class CreateMrCliAdapterTests(unittest.TestCase):
         self.assertIn("--yes", command)
         self.assertNotIn("--fill", command)
 
+    def test_github_submit_validates_actual_pr_body(self) -> None:
+        args = mock.Mock(config=None, target_branch="main")
+        completed = mock.Mock(
+            returncode=0,
+            stdout=json.dumps({
+                "body": "## 背景\n\n修复门禁描述校验流程，确保真实 PR 正文也会被检查。\n\n"
+                        "## 变更内容\n\n增加远端正文回读校验。\n\n"
+                        "## 自测确认\n\n已运行单元测试。",
+                "url": "https://github.com/example/repo/pull/1",
+            }),
+            stderr="",
+        )
+        with mock.patch.object(create_mr.subprocess, "run", return_value=completed) as run:
+            rc = create_mr.validate_submitted_cli_description("gh", args)
+
+        self.assertEqual(0, rc)
+        self.assertIn(
+            ["gh", "pr", "view", "--json", "body,url"],
+            [call.args[0] for call in run.call_args_list],
+        )
+
+    def test_github_submit_rejects_invalid_actual_pr_body(self) -> None:
+        args = mock.Mock(config=None, target_branch="main")
+        completed = mock.Mock(
+            returncode=0,
+            stdout=json.dumps({"body": "## Summary\nEnglish only.", "url": "u"}),
+            stderr="",
+        )
+        with mock.patch.object(create_mr.subprocess, "run", return_value=completed):
+            rc = create_mr.validate_submitted_cli_description("gh", args)
+
+        self.assertEqual(1, rc)
+
+    def test_non_github_submit_skips_remote_body_validation(self) -> None:
+        self.assertEqual(0, create_mr.validate_submitted_cli_description("glab", mock.Mock()))
+
 
 class CreateMrSubmitFallbackTests(unittest.TestCase):
     """测试 _submit_with_fallback 的优先级回退链: explicit API > token env > CLI > print"""
@@ -955,6 +991,21 @@ class CreateMrSubmitFallbackTests(unittest.TestCase):
             rc = create_mr._submit_with_fallback("title", "desc", args)
         self.assertEqual(0, rc)
         cli_submit.assert_called_once_with("title", "desc", "master", "glab")
+
+    def test_github_cli_success_requires_remote_body_validation(self):
+        args = self._args(target_branch="main")
+        with mock.patch.dict(os.environ, self._clear_env(), clear=False), \
+                mock.patch.object(create_mr, "detect_cli", return_value="gh"), \
+                mock.patch.object(create_mr, "submit_mr", return_value=0), \
+                mock.patch.object(
+                    create_mr,
+                    "validate_submitted_cli_description",
+                    return_value=1,
+                ) as validate_remote:
+            rc = create_mr._submit_with_fallback("title", "desc", args)
+
+        self.assertEqual(1, rc)
+        validate_remote.assert_called_once_with("gh", args)
 
     def test_falls_back_to_print_when_no_token_no_cli(self):
         """No token or CLI falls back to the browser MR page helper."""
