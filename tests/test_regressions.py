@@ -27,6 +27,7 @@ scan_risks = importlib.import_module("scan_risks")
 validate_mr = importlib.import_module("validate_mr")
 gate_decision = importlib.import_module("gate_decision")
 gitlab_controller = importlib.import_module("gitlab_controller")
+validate_lessons = importlib.import_module("validate_lessons")
 
 
 class ConfigFailureTests(unittest.TestCase):
@@ -2584,9 +2585,63 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
         self.assertIn("never overwrite pre-existing repository instructions", lessons)
         self.assertIn("AGENTS.md must be a protected path", lessons)
 
+    def test_hard_lessons_have_executable_checks(self) -> None:
+        self.assertEqual(0, validate_lessons.main(["--root", str(ROOT)]))
+
+    def test_hard_lessons_validate_installed_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            shutil.copytree(ROOT / "lessons", target / "governance" / "lessons")
+            shutil.copytree(ROOT / "scripts", target / "governance" / "scripts")
+            (target / "governance").mkdir(exist_ok=True)
+            shutil.copy(ROOT / "ci" / "governance-ci.yml", target / "governance" / "ci-snippet.yml")
+            shutil.copy(ROOT / "governance.config.yml", target / "governance.config.yml")
+            self.assertEqual(0, validate_lessons.main(["--root", str(target)]))
+
+    def test_lesson_validation_runs_in_selftest_and_ci(self) -> None:
+        selftest = (ROOT / "scripts" / "selftest.sh").read_text(encoding="utf-8")
+        workflow = (ROOT / ".github" / "workflows" / "governance.yml").read_text(encoding="utf-8")
+        validate_yaml = (ROOT / "scripts" / "validate_yaml.py").read_text(encoding="utf-8")
+        self.assertIn("validate_lessons.py", selftest)
+        self.assertIn("validate hard lessons", workflow)
+        self.assertIn("python scripts/validate_lessons.py --root .", workflow)
+        self.assertIn('"lessons/"', validate_yaml)
+        self.assertIn('"governance/lessons/"', validate_yaml)
+
+    def test_unknown_hard_lesson_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            lesson_file = Path(directory) / "unknown.yml"
+            lesson_file.write_text(
+                "\n".join([
+                    "version: agentgate.io/lessons/v1",
+                    "scope: future",
+                    "lessons:",
+                    "  - id: future.must_be_executable",
+                    "    enforcement: hard",
+                    "    applies_to: [install.sh]",
+                    "    trigger: a regression pattern appears",
+                    "    risk: the lesson becomes documentation only",
+                    "    fix: add an executable validation check",
+                    "    regression: hard lessons must fail without executable checks",
+                    "",
+                ]),
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                1,
+                validate_lessons.main([
+                    "--root",
+                    str(ROOT),
+                    str(lesson_file),
+                ]),
+            )
+
     def test_installer_ships_gate_decision_and_gitlab_auto_merge_jobs(self) -> None:
         installer = (ROOT / "install.sh").read_text(encoding="utf-8")
         self.assertIn('scripts/gate_decision.py"   | write_file "governance/scripts/gate_decision.py"', installer)
+        self.assertIn('scripts/validate_lessons.py" | write_file "governance/scripts/validate_lessons.py"', installer)
+        self.assertIn('lessons/gitlab-legacy-ci.yml" | write_file "governance/lessons/gitlab-legacy-ci.yml"', installer)
+        self.assertIn('lessons/agent-instructions.yml" | write_file "governance/lessons/agent-instructions.yml"', installer)
         self.assertIn("scripts/gitlab_controller.py", installer)
         self.assertIn("scripts/gitlab_mr_compat.py", installer)
         self.assertIn("scripts/agentgate.py", installer)

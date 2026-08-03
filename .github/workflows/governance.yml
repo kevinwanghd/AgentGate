@@ -30,6 +30,8 @@ jobs:
       - run: pip install -q pyyaml==6.0.3
       - name: validate YAML config files
         run: python scripts/validate_yaml.py --ci
+      - name: validate hard lessons
+        run: python scripts/validate_lessons.py --root .
 
   # 风险扫描: 硬阻断 (命中风险模式且缺合法注解 → 拒合)
   risk-scan:

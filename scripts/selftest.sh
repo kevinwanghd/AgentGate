@@ -28,6 +28,13 @@ python3() { "$PYTHON_BIN" "$@"; }
 BASH_BIN="$(command -v bash)"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SOURCE_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+INSTALLED_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+if [[ -f "${SOURCE_ROOT}/install.sh" || -d "${SOURCE_ROOT}/lessons" ]]; then
+  REPO_ROOT="$SOURCE_ROOT"
+else
+  REPO_ROOT="$INSTALLED_ROOT"
+fi
 SCAN="${SCRIPT_DIR}/scan_risks.py"
 VAL="${SCRIPT_DIR}/validate_mr.py"
 TODAY="$(date +%Y-%m-%d)"
@@ -60,6 +67,24 @@ if [[ -f "$VALIDATE_YAML" ]]; then
   fi
 else
   echo "  ⊘ validate_yaml.py 不存在, 跳过"
+fi
+echo ""
+
+# ==================== 前置检查: lessons 必须有可执行硬约束 ====================
+echo "== Lessons 硬约束检查 =="
+VALIDATE_LESSONS="${SCRIPT_DIR}/validate_lessons.py"
+if [[ -f "$VALIDATE_LESSONS" ]]; then
+  if python3 "$VALIDATE_LESSONS" --root "$REPO_ROOT" >/dev/null 2>&1; then
+    echo "  ✓ hard lessons 均有可执行检查"
+    PASS=$((PASS+1))
+  else
+    echo "  ✗ lesson 硬约束检查失败:"
+    python3 "$VALIDATE_LESSONS" --root "$REPO_ROOT" 2>&1 | sed 's/^/    /'
+    FAIL=$((FAIL+1))
+  fi
+else
+  echo "  ✗ validate_lessons.py 不存在"
+  FAIL=$((FAIL+1))
 fi
 echo ""
 
