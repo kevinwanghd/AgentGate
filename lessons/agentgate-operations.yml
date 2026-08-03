@@ -1,0 +1,36 @@
+version: agentgate.io/lessons/v1
+scope: agentgate-operations
+lessons:
+  - id: agentgate_operations.sensitive_pr_requires_risk_rollback
+    enforcement: hard
+    applies_to:
+      - .github/workflows/**
+      - ci/**
+      - governance.config.yml
+      - pull request description
+    trigger: A pull request changes CI, workflow, or another high-sensitivity governance path without a non-empty risk and rollback section.
+    risk: The MR/PR validation gate fails late even when code and tests are correct, and reviewers lose the explicit rollback plan for governance changes.
+    fix: Before pushing or after adding sensitive-path changes, update the PR description with a concrete ## 风险与回滚 section covering risk, mitigation, and rollback.
+    regression: validate_mr must keep enforcing ## 风险与回滚 for large or sensitive changes, and the repository policy must classify workflow/CI paths as sensitive.
+
+  - id: agentgate_operations.recheck_cli_auth_in_keyring_context
+    enforcement: soft
+    applies_to:
+      - gh CLI usage
+      - sandboxed command execution
+      - PR maintenance workflow
+    trigger: A GitHub CLI command reports an invalid token in a restricted execution context after git push or another authenticated operation succeeded.
+    risk: The operator may incorrectly tell the user that credentials are invalid and stop instead of retrying in the keyring-enabled execution context.
+    fix: Distinguish Git credentials from gh CLI credentials; retry gh auth/status or PR commands in the approved keyring-capable context before declaring auth broken.
+    regression: Operational reviews should capture credential-context mismatches instead of treating one failed sandbox probe as definitive.
+
+  - id: agentgate_operations.do_not_chase_local_shell_path_before_product_goal
+    enforcement: soft
+    applies_to:
+      - Windows local validation
+      - Git Bash based tests
+      - task triage
+    trigger: A Windows Git Bash invocation cannot find Unix tools such as date, dirname, mktemp, grep, or sed.
+    risk: Work drifts into local shell plumbing while the actual product or PR gate issue remains unresolved.
+    fix: Record the environment limitation, use a known Git Bash login context when validation is needed, and return to the primary AgentGate failure before changing tests.
+    regression: Do not commit environment-only test harness changes unless they protect a supported execution path and are covered by a product-level check.
