@@ -64,6 +64,45 @@ write_file() {
   ok "写入 $rel"
 }
 
+upsert_governance_section() {
+  local rel="$1"
+  local source_rel="$2"
+  local abs="${TARGET_DIR}/${rel}"
+  mkdir -p "$(dirname "$abs")"
+  if [[ -e "$abs" ]]; then
+    if grep -q '<!-- governance-v1-begin -->' "$abs"; then
+      local section_tmp output_tmp
+      section_tmp="$(mktemp)"
+      output_tmp="$(mktemp)"
+      fetch_or_local "$source_rel" > "$section_tmp"
+      awk -v section="$section_tmp" '
+        /<!-- governance-v1-begin -->/ {
+          print
+          while ((getline line < section) > 0) print line
+          close(section)
+          replacing=1
+          next
+        }
+        /<!-- governance-v1-end -->/ && replacing { replacing=0; print; next }
+        !replacing { print }
+      ' "$abs" > "$output_tmp"
+      cat "$output_tmp" > "$abs"
+      rm -f "$section_tmp" "$output_tmp"
+      ok "updated existing governance section in $rel"
+    else
+      warn "$rel exists; appending governance section instead of overwriting repository instructions"
+      {
+        printf '\n\n---\n<!-- governance-v1-begin -->\n'
+        fetch_or_local "$source_rel"
+        printf '\n<!-- governance-v1-end -->\n'
+      } >> "$abs"
+      ok "appended governance section to $rel"
+    fi
+  else
+    fetch_or_local "$source_rel" | write_file "$rel"
+  fi
+}
+
 fetch_or_local() {
   # 优先用本地 SOURCE_DIR, 否则从 SOURCE_BASE 拉取
   local rel="$1"
@@ -252,8 +291,7 @@ fi
 
 # OpenAI Codex / generic agent fallback
 if [[ "$AGENTS" == "all" || "$AGENTS" == "codex" ]]; then
-  fetch_or_local "agent-instructions/AGENTS.md" \
-    | write_file "AGENTS.md"
+  upsert_governance_section "AGENTS.md" "agent-instructions/AGENTS.md"
 fi
 
 # ---------- 3. governance.config.yml ----------
@@ -384,6 +422,7 @@ auto_merge:
     - mr-validate
     - test-check
   protected_paths:
+    - AGENTS.md
     - governance.config.yml
     - .github/workflows/**
     - .gitlab-ci.yml
@@ -507,6 +546,7 @@ fetch_or_local "scripts/collect_ai_usage.py" | write_file "governance/scripts/co
 fetch_or_local "scripts/record_test_run.py" | write_file "governance/scripts/record_test_run.py"
 fetch_or_local "scripts/check_tested.py"    | write_file "governance/scripts/check_tested.py"
 fetch_or_local "scripts/gate_decision.py"   | write_file "governance/scripts/gate_decision.py"
+fetch_or_local "scripts/validate_lessons.py" | write_file "governance/scripts/validate_lessons.py"
 fetch_or_local "scripts/gitlab_controller.py" | write_file "governance/scripts/gitlab_controller.py"
 fetch_or_local "scripts/gitlab_mr_compat.py" | write_file "governance/scripts/gitlab_mr_compat.py"
 fetch_or_local "scripts/evidence_bundle.py" | write_file "governance/scripts/evidence_bundle.py"
@@ -527,6 +567,11 @@ fetch_or_local "patterns/python.yml" | write_file "governance/patterns/python.ym
 fetch_or_local "patterns/javascript.yml" | write_file "governance/patterns/javascript.yml"
 fetch_or_local "patterns/java.yml" | write_file "governance/patterns/java.yml"
 fetch_or_local "patterns/dart.yml" | write_file "governance/patterns/dart.yml"
+
+# ---------- 4b2. 硬教训规则 ----------
+log "安装硬教训规则 -> governance/lessons/"
+fetch_or_local "lessons/gitlab-legacy-ci.yml" | write_file "governance/lessons/gitlab-legacy-ci.yml"
+fetch_or_local "lessons/agent-instructions.yml" | write_file "governance/lessons/agent-instructions.yml"
 
 # ---------- 4c. 语言验证 profile ----------
 log "安装语言验证 profile -> governance/profiles/"
@@ -567,6 +612,7 @@ cat <<EOF
   governance/scripts/record_test_run.py (测试运行记录器 -> 留痕)
   governance/scripts/check_tested.py    (测试痕迹检测, 软门禁)
   governance/scripts/gate_decision.py   (GateResult 决策 -> 自动合并/等待审批/阻断)
+  governance/scripts/validate_lessons.py (hard lesson 可执行约束校验)
   governance/scripts/gitlab_controller.py (GitLab 11.4 Bot/API/P0 预检 + 自动 MR)
   governance/scripts/evidence_bundle.py (Evidence Plan/Bundle v2 生成与校验)
   governance/scripts/risk_merge_decision.py (风险分级/审批/自动合并决策 + 审计)
@@ -580,6 +626,7 @@ cat <<EOF
   governance/patterns/javascript.yml    (JavaScript/TypeScript 专属风险规则包: warn 模式)
   governance/patterns/java.yml          (Java 专属风险规则包: warn 模式)
   governance/patterns/dart.yml          (Dart/Flutter 专属风险规则包: warn 模式)
+  governance/lessons/*.yml              (hard lesson 可执行约束)
   governance/profiles/flutter-mobile.yml (Flutter 真实验证 profile)
   CLAUDE.md                     (Claude Code / Kiro)
   .hermes.md                    (Hermes Agent v0.17.0)

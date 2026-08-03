@@ -1,0 +1,13 @@
+version: agentgate.io/lessons/v1
+scope: agent-instructions
+lessons:
+  - id: agent_instructions.preserve_repository_agents_md
+    enforcement: hard
+    applies_to:
+      - install.sh
+      - AGENTS.md
+      - generated governance.config.yml
+    trigger: AgentGate install or MR-entry rollout replaces, truncates, or deletes an existing repository AGENTS.md
+    risk: Repository-specific engineering instructions are lost, causing AI agents to ignore local architecture, workflow, safety, or review rules.
+    fix: Maintain only the AgentGate section between governance markers; append the section when no marker exists and never overwrite pre-existing repository instructions.
+    regression: AGENTS.md must be a protected path, and installer coverage must prove existing repository content is preserved.

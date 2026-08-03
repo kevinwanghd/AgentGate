@@ -22,6 +22,8 @@ DEFAULT_PATHS = [
     "governance/ci-snippet.yml",
     "governance/patterns/",
     "governance/profiles/",
+    "lessons/",
+    "governance/lessons/",
     ".gitlab-ci.yml",
 ]
 
@@ -76,9 +78,9 @@ def main():
     for f in files:
         ok, err = validate_file(f)
         if ok:
-            print(f"  ✓ {f}")
+            print(f"  OK {f}")
         else:
-            print(f"  ✗ {f}")
+            print(f"  FAIL {f}")
             print(f"    {err}")
             errors.append((f, err))
     

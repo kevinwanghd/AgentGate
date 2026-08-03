@@ -50,6 +50,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "release/*",
         ],
         "protected_paths": [
+            "AGENTS.md",
             "governance.config.yml",
             ".github/workflows/**",
             ".gitlab-ci.yml",
