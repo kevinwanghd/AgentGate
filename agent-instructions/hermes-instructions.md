@@ -30,6 +30,12 @@ export AGENTGATE_GITLAB_URL="https://gitlab.example.com"
 
 在本仓库做任何代码修改前，先完成以下自检。
 
+### 第零步之零：读取仓库 Lessons
+
+开始任何修改前，必须读取 `governance/lessons/*.yml`。其中 `enforcement: hard` 是不可违反约束；`enforcement: soft` 是仓库经验和操作提醒。
+
+如果本次修复来自重复错误、门禁失败、线上事故或仓库约束误解，必须补充 `governance/lessons/repository.yml`。能用测试、扫描或门禁验证的写成 `hard` 并绑定可执行检查；暂时只能提醒的写成 `soft`。
+
 ### 第零步：记录 AI 证据（每次编辑后）
 
 本仓库的 AI 使用程度由机器自动统计，**不靠人或你主观判断**。你只需在每次成功修改一个源码文件后，向 `.governance/ai-evidence.jsonl` **追加一行** JSON：

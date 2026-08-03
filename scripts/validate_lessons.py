@@ -81,24 +81,51 @@ def check_gitlab_secret_history_hard_block(root: Path, errors: list[str]) -> Non
 def check_agent_instructions_preserve_repository_agents_md(root: Path, errors: list[str]) -> None:
     gate_decision = _read_first(root, "scripts/gate_decision.py", "governance/scripts/gate_decision.py")
     policy = _read_first(root, "install.sh", "governance.config.yml")
-    required = {
-        "    - AGENTS.md": policy,
-        '"AGENTS.md"': gate_decision,
-    }
+    protected_paths = (
+        "AGENTS.md",
+        "CLAUDE.md",
+        ".hermes.md",
+        ".github/copilot-instructions.md",
+        ".cursor/rules/**",
+    )
+    required = {f'"{path}"': gate_decision for path in protected_paths}
+    required.update({f"    - {path}": policy for path in protected_paths[:4]})
+    required["    - .cursor/rules/**"] = policy
     for needle, haystack in required.items():
         if needle not in haystack:
             _fail(errors, f"agent_instructions.preserve_repository_agents_md: missing {needle}")
+    repository_lessons = root / "governance" / "lessons" / "repository.yml"
+    if not (root / "install.sh").exists() and not repository_lessons.exists():
+        _fail(errors, "agent_instructions.preserve_repository_agents_md: missing governance/lessons/repository.yml")
     installer_path = root / "install.sh"
     if installer_path.exists():
         installer = installer_path.read_text(encoding="utf-8")
         tests = _read(root, "tests/test_regressions.py")
         source_required = {
+            'upsert_governance_section "CLAUDE.md"': installer,
+            'upsert_governance_section ".github/copilot-instructions.md"': installer,
+            'upsert_governance_section ".cursor/rules/governance.mdc"': installer,
+            'upsert_governance_section ".hermes.md"': installer,
             'upsert_governance_section "AGENTS.md"': installer,
+            "create_repository_lessons_file": installer,
+            "governance/lessons/repository.yml": installer,
             "test_installer_preserves_existing_agents_md": tests,
         }
         for needle, haystack in source_required.items():
             if needle not in haystack:
                 _fail(errors, f"agent_instructions.preserve_repository_agents_md: missing {needle}")
+        for rel in (
+            "agent-instructions/AGENTS.md",
+            "agent-instructions/CLAUDE.md",
+            "agent-instructions/hermes-instructions.md",
+            "agent-instructions/copilot-instructions.md",
+            "agent-instructions/cursor-rules.mdc",
+        ):
+            template = _read(root, rel)
+            if "governance/lessons/*.yml" not in template:
+                _fail(errors, f"agent_instructions.preserve_repository_agents_md: {rel} does not require reading lessons")
+            if "governance/lessons/repository.yml" not in template:
+                _fail(errors, f"agent_instructions.preserve_repository_agents_md: {rel} does not mention repository lessons")
 
 
 def check_agentgate_sensitive_pr_requires_risk_rollback(root: Path, errors: list[str]) -> None:
@@ -150,7 +177,12 @@ def validate_file(path: Path, root: Path, errors: list[str]) -> int:
     if data.get("version") != "agentgate.io/lessons/v1":
         _fail(errors, f"{path}: version must be agentgate.io/lessons/v1")
     lessons = data.get("lessons")
-    if not isinstance(lessons, list) or not lessons:
+    if not isinstance(lessons, list):
+        _fail(errors, f"{path}: lessons must be a list")
+        return 0
+    if not lessons:
+        if data.get("scope") == "repository":
+            return 0
         _fail(errors, f"{path}: lessons must be a non-empty list")
         return 0
 

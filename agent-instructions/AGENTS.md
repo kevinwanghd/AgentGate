@@ -23,6 +23,12 @@ export AGENTGATE_GITLAB_URL="https://gitlab.example.com"  # 不填时自动从 g
 
 所有 AI agent 在本仓库提交代码时必须走 AgentGate 流程。不要手写 commit trailer，不要手写单行 MR 描述，不要绕过本地校验。
 
+## 仓库 Lessons 必读
+
+开始任何修改前，必须读取 `governance/lessons/*.yml`。其中 `enforcement: hard` 是不可违反约束；`enforcement: soft` 是仓库经验和操作提醒。
+
+如果本次修复来自重复错误、门禁失败、线上事故或仓库约束误解，必须补充 `governance/lessons/repository.yml`。能用测试、扫描或门禁验证的写成 `hard` 并绑定可执行检查；暂时只能提醒的写成 `soft`。
+
 ## 提交前
 
 1. 修改代码后，如实记录 AI 编辑证据到 `.governance/ai-evidence.jsonl`。

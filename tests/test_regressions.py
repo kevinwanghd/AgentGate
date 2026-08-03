@@ -2501,8 +2501,15 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
         self.assertIn("required_checks:\n    - risk-scan\n    - secret-scan\n    - mr-validate\n    - test-check", installer)
         self.assertNotIn("required_checks:\n    - risk-scan\n    - secret-scan\n    - mr-validate\n    - test-check\n    - go-test", installer)
         self.assertIn('- "governance/scripts/**"', installer)
-        self.assertIn("    - AGENTS.md", installer)
-        self.assertIn("AGENTS.md", gate_decision.DEFAULT_CONFIG["auto_merge"]["protected_paths"])
+        for protected_agent_path in (
+            "AGENTS.md",
+            "CLAUDE.md",
+            ".hermes.md",
+            ".github/copilot-instructions.md",
+            ".cursor/rules/**",
+        ):
+            self.assertIn(f"    - {protected_agent_path}", installer)
+            self.assertIn(protected_agent_path, gate_decision.DEFAULT_CONFIG["auto_merge"]["protected_paths"])
         self.assertEqual("hard", scan_risks.DEFAULT_CONFIG["risk_annotations"]["enforcement"])
         self.assertEqual("hard", validate_mr.DEFAULT_CONFIG["metadata"]["enforcement"])
         self.assertEqual("hard", check_tested.DEFAULT_CONFIG["testing"]["enforcement"])
@@ -2583,7 +2590,8 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
         self.assertIn("agent_instructions.preserve_repository_agents_md", lessons)
         self.assertIn("enforcement: hard", lessons)
         self.assertIn("never overwrite pre-existing repository instructions", lessons)
-        self.assertIn("AGENTS.md must be a protected path", lessons)
+        self.assertIn("Agent instruction files must be protected from overwrite", lessons)
+        self.assertIn("repository.yml is created only when absent", lessons)
 
     def test_lessons_capture_operational_mistakes(self) -> None:
         lessons = (ROOT / "lessons" / "agentgate-operations.yml").read_text(encoding="utf-8")
@@ -2604,9 +2612,32 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
             shutil.copytree(ROOT / "lessons", target / "governance" / "lessons")
             shutil.copytree(ROOT / "scripts", target / "governance" / "scripts")
             (target / "governance").mkdir(exist_ok=True)
+            (target / "governance" / "lessons" / "repository.yml").write_text(
+                "version: agentgate.io/lessons/v1\nscope: repository\nlessons: []\n",
+                encoding="utf-8",
+            )
             shutil.copy(ROOT / "ci" / "governance-ci.yml", target / "governance" / "ci-snippet.yml")
             shutil.copy(ROOT / "governance.config.yml", target / "governance.config.yml")
             self.assertEqual(0, validate_lessons.main(["--root", str(target)]))
+
+    def test_empty_repository_lessons_are_valid_only_for_repository_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            repository_lessons = target / "repository.yml"
+            repository_lessons.write_text(
+                "version: agentgate.io/lessons/v1\nscope: repository\nlessons: []\n",
+                encoding="utf-8",
+            )
+            global_lessons = target / "global.yml"
+            global_lessons.write_text(
+                "version: agentgate.io/lessons/v1\nscope: global\nlessons: []\n",
+                encoding="utf-8",
+            )
+            errors: list[str] = []
+            self.assertEqual(0, validate_lessons.validate_file(repository_lessons, ROOT, errors))
+            self.assertEqual([], errors)
+            self.assertEqual(0, validate_lessons.validate_file(global_lessons, ROOT, errors))
+            self.assertTrue(any("non-empty list" in error for error in errors))
 
     def test_lesson_validation_runs_in_selftest_and_ci(self) -> None:
         selftest = (ROOT / "scripts" / "selftest.sh").read_text(encoding="utf-8")
@@ -2617,6 +2648,18 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
         self.assertIn("python scripts/validate_lessons.py --root .", workflow)
         self.assertIn('"lessons/"', validate_yaml)
         self.assertIn('"governance/lessons/"', validate_yaml)
+
+    def test_agent_instruction_templates_require_repository_lessons(self) -> None:
+        for rel in (
+            "AGENTS.md",
+            "CLAUDE.md",
+            "hermes-instructions.md",
+            "copilot-instructions.md",
+            "cursor-rules.mdc",
+        ):
+            template = (ROOT / "agent-instructions" / rel).read_text(encoding="utf-8")
+            self.assertIn("governance/lessons/*.yml", template, rel)
+            self.assertIn("governance/lessons/repository.yml", template, rel)
 
     def test_unknown_hard_lesson_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2653,6 +2696,9 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
         self.assertIn('lessons/gitlab-legacy-ci.yml" | write_file "governance/lessons/gitlab-legacy-ci.yml"', installer)
         self.assertIn('lessons/agent-instructions.yml" | write_file "governance/lessons/agent-instructions.yml"', installer)
         self.assertIn('lessons/agentgate-operations.yml" | write_file "governance/lessons/agentgate-operations.yml"', installer)
+        self.assertIn("create_repository_lessons_file", installer)
+        self.assertIn("scope: repository", installer)
+        self.assertIn("lessons: []", installer)
         self.assertIn("scripts/gitlab_controller.py", installer)
         self.assertIn("scripts/gitlab_mr_compat.py", installer)
         self.assertIn("scripts/agentgate.py", installer)

@@ -6,6 +6,12 @@ alwaysApply: true
 
 # 提交代码前必须完成
 
+## 0. 读取仓库 Lessons
+
+开始任何修改前，必须读取 `governance/lessons/*.yml`。其中 `enforcement: hard` 是不可违反约束；`enforcement: soft` 是仓库经验和操作提醒。
+
+如果本次修复来自重复错误、门禁失败、线上事故或仓库约束误解，必须补充 `governance/lessons/repository.yml`。能用测试、扫描或门禁验证的写成 `hard` 并绑定可执行检查；暂时只能提醒的写成 `soft`。
+
 ## 0. 记录 AI 证据（每次编辑后追加，不靠人工判断 AI 占比）
 
 成段生成代码后向 `.governance/ai-evidence.jsonl` 追加一行：

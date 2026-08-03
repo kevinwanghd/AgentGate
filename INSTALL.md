@@ -57,11 +57,12 @@ bash ~/agentgate/install.sh .
 ```
 
 **脚本会自动:**
-- 在 `governance/` 下生成 9 个检查脚本
+- 在 `governance/` 下生成治理检查脚本
 - 生成 `governance/config.yml`(配置文件)
 - 生成 `governance/ci-snippet.yml`(GitLab CI 片段)
+- 生成 `governance/lessons/repository.yml`(本仓库本地 lessons, 已存在则保留)
 - 生成 `.gitlab/merge_request_templates/default.md`(MR 模板)
-- 写入 `CLAUDE.md` 等 AI 指令文件
+- 追加或更新 `CLAUDE.md` 等 AI 指令文件中的 AgentGate 标记段, 不覆盖原有仓库说明
 - 安装 git hook(提交时自动盖 AI-Usage/Tested trailer)
 
 完成后看到:
@@ -70,6 +71,8 @@ bash ~/agentgate/install.sh .
  AgentGate 安装完成
 ============================================================
 ```
+
+`governance/lessons/repository.yml` 是本仓库自己的经验库。任何 agent 在该仓库踩过的重复错误、门禁失败、线上事故或仓库约束误解，都应该记录到这里。`hard` lesson 必须绑定可执行检查；暂时只能提醒的写 `soft`。安装器只在文件不存在时创建它，永远不覆盖已有仓库 lessons。
 
 ### 4. 接入 GitLab CI
 
