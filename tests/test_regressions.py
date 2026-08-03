@@ -2495,6 +2495,8 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
         self.assertIn("metadata:\n  enforcement: hard", installer)
         self.assertIn("risk_annotations:\n  enforcement: hard", installer)
         self.assertIn("testing:\n  enforcement: hard", installer)
+        self.assertIn("required_checks:\n    - risk-scan\n    - secret-scan\n    - mr-validate\n    - test-check", installer)
+        self.assertNotIn("required_checks:\n    - risk-scan\n    - secret-scan\n    - mr-validate\n    - test-check\n    - go-test", installer)
         self.assertIn('- "governance/scripts/**"', installer)
         self.assertEqual("hard", scan_risks.DEFAULT_CONFIG["risk_annotations"]["enforcement"])
         self.assertEqual("hard", validate_mr.DEFAULT_CONFIG["metadata"]["enforcement"])
@@ -2504,9 +2506,11 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
         template = (ROOT / "ci" / "governance-ci.yml").read_text(encoding="utf-8")
         self.assertIn("GOVERNANCE_PY_IMAGE", template)
         self.assertIn("GOVERNANCE_SECRET_IMAGE", template)
+        self.assertIn("governance:flutter-test:", template)
         self.assertIn("git --version", template)
         self.assertIn("python -c \"import yaml; print('pyyaml ok')\"", template)
         self.assertIn("dependencies:", template)
+        self.assertNotIn("timeout:", template)
         self.assertNotIn("apt-get", template)
         self.assertNotIn("pip install -q pyyaml", template)
         self.assertNotIn("python:3.11-slim", template)
@@ -2523,6 +2527,16 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
         self.assertIn("gitlab_legacy.modern_schema_unsupported", lessons)
         self.assertIn("gitlab_legacy.optional_language_image_pull", lessons)
         self.assertIn("enforcement: hard", lessons)
+
+    def test_lessons_capture_legacy_ci_and_secret_history_rules(self) -> None:
+        lessons = (ROOT / "lessons" / "gitlab-legacy-ci.yml").read_text(encoding="utf-8")
+        self.assertIn("gitlab_legacy.job_timeout_unsupported", lessons)
+        self.assertIn("gitlab_legacy.modern_schema_unsupported", lessons)
+        self.assertIn("gitlab_legacy.governance_core_required_checks", lessons)
+        self.assertIn("gitlab_legacy.secret_history_hard_block", lessons)
+        self.assertIn("legacy GitLab templates must not contain a job-level timeout key", lessons)
+        self.assertIn("installed policy defaults must not require language/runtime checks", lessons)
+        self.assertIn("do not downgrade the finding to advisory", lessons)
 
     def test_installer_ships_gate_decision_and_gitlab_auto_merge_jobs(self) -> None:
         installer = (ROOT / "install.sh").read_text(encoding="utf-8")
