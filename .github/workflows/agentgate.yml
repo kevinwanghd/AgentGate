@@ -73,9 +73,15 @@ jobs:
           BASE_REF="${{ github.event.pull_request.base.ref }}"
           if [ -z "$BASE_REF" ]; then echo "::error::pull_request.base.ref is required"; exit 1; fi
           git fetch -q origin "$BASE_REF"
-          docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.30.1 \
-            detect --source /repo --log-opts="origin/${BASE_REF}..HEAD" \
-            --redact --no-banner --verbose
+          for attempt in 1 2 3; do
+            docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.30.1 \
+              detect --source /repo --log-opts="origin/${BASE_REF}..HEAD" \
+              --redact --no-banner --verbose && exit 0
+            rc=$?
+            if [ "$attempt" -eq 3 ]; then exit "$rc"; fi
+            echo "gitleaks docker run failed with exit $rc; retrying ($attempt/3)..."
+            sleep $((attempt * 10))
+          done
 
   mr-validate:
     runs-on: ubuntu-latest
