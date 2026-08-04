@@ -2343,6 +2343,7 @@ class GateDecisionTests(unittest.TestCase):
             },
             config=self.config,
             target_branch="master",
+            pipeline_kind="push",
         )
         self.assertEqual(result["result"], "FAIL")
         self.assertEqual(result["merge_action"], "BLOCK")
@@ -2360,6 +2361,47 @@ class GateDecisionTests(unittest.TestCase):
             },
             config=self.config,
             target_branch="feature/my-feature",
+        )
+        self.assertEqual(result["result"], "PASS")
+        self.assertEqual(result["merge_action"], "AUTO_MERGE")
+
+    def test_mr_pipeline_to_protected_branch_allows_auto_merge(self) -> None:
+        """MR 流水线合入受保护分支是正常路径，不触发 direct-push 阻断。
+
+        回归：gate-decision job 是 MR-only，CI 恒传 --target-branch master，
+        若保护分支检查不区分流水线类型，所有合向 master 的 MR 都会被误判 FAIL/BLOCK。
+        """
+        result = gate_decision.build_gate_result(
+            source_sha="head", target_sha="base", policy_sha="policy",
+            changed_paths=["src/service.py"],
+            checks={
+                "risk-scan": "pass",
+                "secret-scan": "pass",
+                "mr-validate": "pass",
+                "test-check": "pass",
+            },
+            config=self.config,
+            target_branch="master",
+            pipeline_kind="mr",
+        )
+        self.assertEqual(result["result"], "PASS")
+        self.assertEqual(result["merge_action"], "AUTO_MERGE")
+        self.assertNotIn("protected_branch_requires_mr", result["blocking_reasons"])
+        self.assertNotIn("protected_branch_direct_push", result["blocking_reasons"])
+
+    def test_pipeline_kind_defaults_to_mr_for_existing_callers(self) -> None:
+        """未显式传 pipeline_kind 的既有调用方按 MR 流水线处理，行为不被保护分支拦截。"""
+        result = gate_decision.build_gate_result(
+            source_sha="head", target_sha="base", policy_sha="policy",
+            changed_paths=["src/service.py"],
+            checks={
+                "risk-scan": "pass",
+                "secret-scan": "pass",
+                "mr-validate": "pass",
+                "test-check": "pass",
+            },
+            config=self.config,
+            target_branch="master",
         )
         self.assertEqual(result["result"], "PASS")
         self.assertEqual(result["merge_action"], "AUTO_MERGE")
@@ -2447,6 +2489,7 @@ class GateDecisionTests(unittest.TestCase):
             checks={"lint": "pass", "unit": "pass"},
             config=self.config,
             target_branch="release/v1.0.0",
+            pipeline_kind="push",
         )
         self.assertEqual(result["result"], "FAIL")
         self.assertEqual(result["merge_action"], "BLOCK")

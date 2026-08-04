@@ -13,6 +13,8 @@
 #   GOVERNANCE_CONFIG_PATH    governance.config.yml 的仓库内路径
 #   GOVERNANCE_REPORT_OUTPUT  周报输出路径, 默认 governance/reports/expired-annotations.md
 #   GOVERNANCE_MERGE_BOT_TOKEN  受保护/Masked 的 Merge Bot token, 仅自动合并 job 使用
+#   GOVERNANCE_AUTO_MERGE_REQUIRE_TOKEN  设为 true 时, 未配置 bot token 的自动合并 job 直接失败;
+#                                        默认告警并跳过(流水线保持绿, 人工合并)
 
 stages:
   - governance
@@ -521,6 +523,7 @@ governance:gate-decision:
         --policy-sha "$POLICY_SHA" \
         --diff-base "origin/$TB" \
         --target-branch "$TB" \
+        --pipeline-kind mr \
         --config "$CONFIG_PATH" \
         --output gate-result.json
   artifacts:
@@ -561,8 +564,12 @@ governance:auto-merge:
 
       token = os.getenv("GOVERNANCE_MERGE_BOT_TOKEN")
       if not token:
-          print("[auto-merge] GOVERNANCE_MERGE_BOT_TOKEN is required for GitLab auto merge.", file=sys.stderr)
-          raise SystemExit(1)
+          if os.getenv("GOVERNANCE_AUTO_MERGE_REQUIRE_TOKEN", "").lower() in ("1", "true", "yes"):
+              print("[auto-merge] GOVERNANCE_MERGE_BOT_TOKEN is required for GitLab auto merge.", file=sys.stderr)
+              raise SystemExit(1)
+          print("[auto-merge] WARN: GOVERNANCE_MERGE_BOT_TOKEN 未配置，跳过 bot 自动合并；"
+                "请人工合并本 MR，或在 CI/CD Variables 配置该 token 后启用自动合并。")
+          raise SystemExit(0)
 
       api = "{}/projects/{}/merge_requests/{}/merge".format(
           os.environ["CI_API_V4_URL"].rstrip("/"),
