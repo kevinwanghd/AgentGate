@@ -43,7 +43,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "high": ["**/auth/**", "**/payment/**", "**/deploy/**"],
             "critical": [],
         },
-        # 保护分支: 只能通过 MR 合并，禁止直接推送
+        # 保护分支: 仅对直推（pipeline_kind="push"）流水线生效，命中时禁止 bot 自动合并。
+        # MR 流水线合入受保护分支是正常路径，不触发阻断；真正的"禁止直推"由平台侧
+        # 保护分支设置兜底（GitLab Protected Branches / GitHub Branch Protection）。
         "protected_branches": [
             "master",
             "main",
@@ -133,6 +135,7 @@ def build_gate_result(
     config: dict[str, Any],
     valid_approvals: int = 0,
     target_branch: str = "",
+    pipeline_kind: str = "mr",
 ) -> dict[str, Any]:
     auto = config.get("auto_merge", {})
     protected = [str(item) for item in auto.get("protected_paths", [])]
@@ -141,11 +144,13 @@ def build_gate_result(
     is_protected_branch = bool(target_branch) and any(
         fnmatch.fnmatch(target_branch, pattern) for pattern in protected_branches
     )
+    # 只有直推（push）流水线命中保护分支才需要门禁拦截；MR 合入受保护分支是正常路径。
+    is_direct_push_on_protected = is_protected_branch and pipeline_kind == "push"
     risk_level = _classify_risk(changed_paths, auto, critical_paths)
     reasons: list[str] = []
     if critical_paths:
         reasons.append("protected_paths_changed")
-    if is_protected_branch:
+    if is_direct_push_on_protected:
         reasons.append("protected_branch_direct_push")
 
     required = _required_checks_for_risk(auto, risk_level, checks)
@@ -168,15 +173,15 @@ def build_gate_result(
         reasons.append("approval_missing")
 
     checks_pass = not missing and not failed
-    pass_result = checks_pass and not critical_paths and not is_protected_branch and valid_approvals >= required_approvals
+    pass_result = checks_pass and not critical_paths and not is_direct_push_on_protected and valid_approvals >= required_approvals
     enabled = bool(auto.get("enabled", True))
     if not enabled:
         reasons.append("auto_merge_disabled")
     if not enabled:
         result = "WAITING_APPROVAL"
         action = "WAIT"
-    elif is_protected_branch:
-        # 受保护分支必须通过 MR 才能合并，禁止直接推送合并
+    elif is_direct_push_on_protected:
+        # 受保护分支必须通过 MR 才能合并，直推流水线上禁止 bot 自动合并
         result = "FAIL"
         action = "BLOCK"
         reasons.append("protected_branch_requires_mr")
@@ -191,6 +196,7 @@ def build_gate_result(
         "schema_version": "v2",
         "result": result,
         "merge_action": action,
+        "pipeline_kind": pipeline_kind,
         "source_sha": source_sha,
         "target_sha": target_sha,
         "policy_sha": policy_sha,
@@ -220,7 +226,13 @@ def main() -> int:
     parser.add_argument("--config", default=None)
     parser.add_argument("--output", required=True)
     parser.add_argument("--valid-approvals", type=int, default=0)
-    parser.add_argument("--target-branch", default="", help="目标分支名，用于检查分支保护")
+    parser.add_argument("--target-branch", default="", help="目标分支名；配合 --pipeline-kind push 做保护分支检查")
+    parser.add_argument(
+        "--pipeline-kind",
+        choices=("mr", "push"),
+        default="mr",
+        help="流水线类型：mr=MR/PR 流水线（默认）；push=直推流水线，命中保护分支时阻断 bot 自动合并",
+    )
     args = parser.parse_args()
 
     try:
@@ -248,6 +260,7 @@ def main() -> int:
             config=config,
             valid_approvals=args.valid_approvals,
             target_branch=args.target_branch,
+            pipeline_kind=args.pipeline_kind,
         )
         Path(args.output).write_text(json.dumps(gate, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         print(json.dumps(gate, ensure_ascii=False))

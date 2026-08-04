@@ -142,6 +142,23 @@ class CIPlatformCompatTests(unittest.TestCase):
         self.assertNotRegex(content, r'(?m)^\s+git fetch -q origin "\$TB"$')
         self.assertIn('refs/remotes/origin/${TB}', content)
 
+    def test_gate_decision_jobs_declare_mr_pipeline_kind(self):
+        """两个 GitLab CI 模板的 gate-decision job 必须显式声明 MR 流水线类型。
+
+        回归：gate-decision job 是 MR-only，CI 恒传 --target-branch master；
+        缺少 --pipeline-kind mr 时，所有合向 master 的 MR 会被误判为直推而 FAIL/BLOCK。
+        """
+        for rel in ("ci/governance-ci.yml", "gitlab/ci-snippet.yml"):
+            content = (REPO_ROOT / rel).read_text(encoding="utf-8")
+            self.assertIn("--pipeline-kind mr", content, rel)
+
+    def test_auto_merge_missing_token_warns_and_skips_by_default(self):
+        """缺 GOVERNANCE_MERGE_BOT_TOKEN 时自动合并 job 默认告警跳过，硬失败需显式开启。"""
+        for rel in ("ci/governance-ci.yml", "gitlab/ci-snippet.yml"):
+            content = (REPO_ROOT / rel).read_text(encoding="utf-8")
+            self.assertIn("GOVERNANCE_AUTO_MERGE_REQUIRE_TOKEN", content, rel)
+            self.assertIn("跳过 bot 自动合并", content, rel)
+
 
 if __name__ == "__main__":
     unittest.main()

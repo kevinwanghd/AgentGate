@@ -45,8 +45,11 @@ case "$COMMIT_SOURCE" in
 esac
 
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo .)"
+# 兼容两种仓库形态: 下游仓库为 governance/scripts/, AgentGate 源仓库自身为 scripts/
 AI_SCRIPT="${REPO_ROOT}/governance/scripts/collect_ai_usage.py"
+[ -f "$AI_SCRIPT" ] || AI_SCRIPT="${REPO_ROOT}/scripts/collect_ai_usage.py"
 TEST_SCRIPT="${REPO_ROOT}/governance/scripts/check_tested.py"
+[ -f "$TEST_SCRIPT" ] || TEST_SCRIPT="${REPO_ROOT}/scripts/check_tested.py"
 
 PY="$(command -v python3 || command -v python || true)"
 [ -n "$PY" ] || exit 0
