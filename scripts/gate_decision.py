@@ -51,6 +51,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         ],
         "protected_paths": [
             "AGENTS.md",
+            "CLAUDE.md",
+            ".hermes.md",
+            ".github/copilot-instructions.md",
+            ".cursor/rules/**",
             "governance.config.yml",
             ".github/workflows/**",
             ".gitlab-ci.yml",

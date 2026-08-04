@@ -177,12 +177,13 @@ if (req.Headers["X-Internal"] == "true") return true;
 | 改了代码没跑测试 | test-check 要求测试痕迹 |
 | 提交了密钥到仓库 | secret-scan 立刻拦截 |
 | MR 描述写得太随意 | mr-validate 强制写背景/变更/自测，**且必须使用中文** |
+| 同一个仓库反复踩同一个坑 | `governance/lessons/repository.yml` 记录仓库本地 lessons，所有 agent 开始修改前必须读取 |
 
 ---
 
 ## 🛠️ 核心脚本
 
-AgentGate 包含 14 个 Python 脚本(在 `scripts/` 目录):
+AgentGate 包含 15 个 Python 脚本(在 `scripts/` 目录):
 
 | 脚本 | 功能 |
 |---|---|
@@ -200,6 +201,7 @@ AgentGate 包含 14 个 Python 脚本(在 `scripts/` 目录):
 | `evidence_bundle.py` | 生成 Evidence Plan/Bundle v2，校验证据与 source/target/merge/policy/profile 绑定 |
 | `risk_merge_decision.py` | 基于证据包做风险分级、审批校验、自动合并动作和审计记录 |
 | `report_expired.py` | 过期注解周报(找 90 天未复查的风险注解) |
+| `validate_lessons.py` | 校验 hard lessons 是否绑定可执行治理检查 |
 | `install-hooks.sh` | 安装 git hook |
 | `selftest.sh` | 工具自检(48 个用例) |
 
@@ -303,6 +305,9 @@ auto_merge:
 │   ├── ci-snippet.yml         # GitLab CI 片段
 │   ├── mr-spec.md             # MR 规范说明
 │   ├── risk-types.md          # 风险类型清单
+│   ├── lessons/               # 仓库记忆: 全局 lessons + 本仓库 repository.yml
+│   │   ├── repository.yml     # 本仓库本地 lessons, 安装时创建且不覆盖
+│   │   └── ...
 │   ├── patterns/              # 语言专属风险规则包(可选 include)
 │   │   ├── go.yml             # Go (10条 warn 规则)
 │   │   ├── csharp.yml         # C# / .NET (6条)
@@ -323,6 +328,8 @@ auto_merge:
 ```
 
 **减少根目录散落**:用 `--agents claude` 只装 Claude,根目录只有 1 个 `CLAUDE.md`,不装 `.hermes.md` / `AGENTS.md` / `.cursor/` / `.github/copilot-instructions.md`。
+
+**仓库 lessons**:安装器会创建 `governance/lessons/repository.yml`。任何 agent 在这个仓库踩过的重复错误、门禁失败或本地约束误解，都应记录到这里；能用测试/扫描/门禁验证的写 `enforcement: hard` 并绑定可执行检查，暂时只能提醒的写 `soft`。所有 agent 指令入口都会要求开工前读取 `governance/lessons/*.yml`。
 
 ---
 

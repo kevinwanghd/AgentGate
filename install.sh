@@ -103,6 +103,22 @@ upsert_governance_section() {
   fi
 }
 
+create_repository_lessons_file() {
+  local rel="governance/lessons/repository.yml"
+  local abs="${TARGET_DIR}/${rel}"
+  mkdir -p "$(dirname "$abs")"
+  if [[ -e "$abs" ]]; then
+    ok "保留已有 $rel"
+    return
+  fi
+  cat > "$abs" <<'EOF'
+version: agentgate.io/lessons/v1
+scope: repository
+lessons: []
+EOF
+  ok "创建 $rel"
+}
+
 fetch_or_local() {
   # 优先用本地 SOURCE_DIR, 否则从 SOURCE_BASE 拉取
   local rel="$1"
@@ -238,55 +254,22 @@ esac
 
 # Claude Code / Kiro
 if [[ "$AGENTS" == "all" || "$AGENTS" == "claude" ]]; then
-  if [[ -e "${TARGET_DIR}/CLAUDE.md" ]]; then
-    if grep -q '<!-- governance-v1-begin -->' "${TARGET_DIR}/CLAUDE.md"; then
-      section_tmp="$(mktemp)"
-      output_tmp="$(mktemp)"
-      fetch_or_local "agent-instructions/CLAUDE.md" > "$section_tmp"
-      awk -v section="$section_tmp" '
-        /<!-- governance-v1-begin -->/ {
-          print
-          while ((getline line < section) > 0) print line
-          close(section)
-          replacing=1
-          next
-        }
-        /<!-- governance-v1-end -->/ && replacing { replacing=0; print; next }
-        !replacing { print }
-      ' "${TARGET_DIR}/CLAUDE.md" > "$output_tmp"
-      cat "$output_tmp" > "${TARGET_DIR}/CLAUDE.md"
-      rm -f "$section_tmp" "$output_tmp"
-      ok "更新 CLAUDE.md 中已有的 governance 规范"
-    else
-      warn "CLAUDE.md 已存在, 追加治理规范 section 而非覆盖"
-      {
-        printf '\n\n---\n<!-- governance-v1-begin -->\n'
-        fetch_or_local "agent-instructions/CLAUDE.md"
-        printf '\n<!-- governance-v1-end -->\n'
-      } >> "${TARGET_DIR}/CLAUDE.md"
-      ok "追加 governance 规范到 CLAUDE.md"
-    fi
-  else
-    fetch_or_local "agent-instructions/CLAUDE.md" | write_file "CLAUDE.md"
-  fi
+  upsert_governance_section "CLAUDE.md" "agent-instructions/CLAUDE.md"
 fi
 
 # GitHub Copilot
 if [[ "$AGENTS" == "all" || "$AGENTS" == "copilot" ]]; then
-  fetch_or_local "agent-instructions/copilot-instructions.md" \
-    | write_file ".github/copilot-instructions.md"
+  upsert_governance_section ".github/copilot-instructions.md" "agent-instructions/copilot-instructions.md"
 fi
 
 # Cursor
 if [[ "$AGENTS" == "all" || "$AGENTS" == "cursor" ]]; then
-  fetch_or_local "agent-instructions/cursor-rules.mdc" \
-    | write_file ".cursor/rules/governance.mdc"
+  upsert_governance_section ".cursor/rules/governance.mdc" "agent-instructions/cursor-rules.mdc"
 fi
 
 # Hermes Agent
 if [[ "$AGENTS" == "all" || "$AGENTS" == "hermes" ]]; then
-  fetch_or_local "agent-instructions/hermes-instructions.md" \
-    | write_file ".hermes.md"
+  upsert_governance_section ".hermes.md" "agent-instructions/hermes-instructions.md"
 fi
 
 # OpenAI Codex / generic agent fallback
@@ -423,6 +406,10 @@ auto_merge:
     - test-check
   protected_paths:
     - AGENTS.md
+    - CLAUDE.md
+    - .hermes.md
+    - .github/copilot-instructions.md
+    - .cursor/rules/**
     - governance.config.yml
     - .github/workflows/**
     - .gitlab-ci.yml
@@ -573,6 +560,7 @@ log "安装硬教训规则 -> governance/lessons/"
 fetch_or_local "lessons/gitlab-legacy-ci.yml" | write_file "governance/lessons/gitlab-legacy-ci.yml"
 fetch_or_local "lessons/agent-instructions.yml" | write_file "governance/lessons/agent-instructions.yml"
 fetch_or_local "lessons/agentgate-operations.yml" | write_file "governance/lessons/agentgate-operations.yml"
+create_repository_lessons_file
 
 # ---------- 4c. 语言验证 profile ----------
 log "安装语言验证 profile -> governance/profiles/"
@@ -628,6 +616,7 @@ cat <<EOF
   governance/patterns/java.yml          (Java 专属风险规则包: warn 模式)
   governance/patterns/dart.yml          (Dart/Flutter 专属风险规则包: warn 模式)
   governance/lessons/*.yml              (hard lesson 可执行约束)
+  governance/lessons/repository.yml     (本仓库本地 lessons, 已存在则保留)
   governance/profiles/flutter-mobile.yml (Flutter 真实验证 profile)
   CLAUDE.md                     (Claude Code / Kiro)
   .hermes.md                    (Hermes Agent v0.17.0)

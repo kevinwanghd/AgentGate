@@ -6,8 +6,13 @@ lessons:
     applies_to:
       - install.sh
       - AGENTS.md
+      - CLAUDE.md
+      - .hermes.md
+      - .github/copilot-instructions.md
+      - .cursor/rules/governance.mdc
       - generated governance.config.yml
-    trigger: AgentGate install or MR-entry rollout replaces, truncates, or deletes an existing repository AGENTS.md
-    risk: Repository-specific engineering instructions are lost, causing AI agents to ignore local architecture, workflow, safety, or review rules.
-    fix: Maintain only the AgentGate section between governance markers; append the section when no marker exists and never overwrite pre-existing repository instructions.
-    regression: AGENTS.md must be a protected path, and installer coverage must prove existing repository content is preserved.
+      - governance/lessons/repository.yml
+    trigger: AgentGate install or MR-entry rollout replaces, truncates, or deletes an existing repository agent instruction file.
+    risk: Repository-specific engineering instructions and accumulated lessons are lost, causing AI agents to ignore local architecture, workflow, safety, or review rules.
+    fix: Maintain only the AgentGate section between governance markers; append the section when no marker exists and never overwrite pre-existing repository instructions. Agent instruction entries must require reading governance/lessons/*.yml before code changes.
+    regression: Agent instruction files must be protected from overwrite, AGENTS.md must remain a protected path, and installer coverage must prove existing repository content is preserved while repository.yml is created only when absent.

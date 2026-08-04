@@ -32,6 +32,14 @@ curl -s "$AGENTGATE_GITLAB_URL/api/v4/projects?search=<仓库名>" \
 
 ---
 
+## 仓库 Lessons 必读
+
+开始任何修改前，必须读取 `governance/lessons/*.yml`。其中 `enforcement: hard` 是不可违反约束；`enforcement: soft` 是仓库经验和操作提醒。
+
+如果本次修复来自重复错误、门禁失败、线上事故或仓库约束误解，必须补充 `governance/lessons/repository.yml`。能用测试、扫描或门禁验证的写成 `hard` 并绑定可执行检查；暂时只能提醒的写成 `soft`。
+
+---
+
 ## 提交代码前的自检清单（每次必做）
 
 在创建 MR 或提交 commit 之前，按顺序完成：

@@ -8,12 +8,13 @@ applyTo: "**"
 
 ## 提交前必做
 
-1. 每次编辑源码文件后，向 `.governance/ai-evidence.jsonl` 追加一行证据（见下）
-2. 改了生产代码就写测试，用 `python governance/scripts/record_test_run.py -- <测试命令>` 跑，留痕
-3. 扫描 diff，对照 `docs/governance/risk-types.md` 检查 8 类风险模式
-4. 命中的代码上方加 `risk:*` 注解（单行格式）
-5. 提交时 `AI-Usage` 和 `Tested` trailer 由 git hook 自动写入，无需手填
-6. 创建 MR：用 `create_mr.py --gitlab-api` 自动生成并提交 MR，**不手填描述**
+1. 开始任何修改前，读取 `governance/lessons/*.yml`。`hard` lessons 不可违反；`soft` lessons 是仓库经验。
+2. 每次编辑源码文件后，向 `.governance/ai-evidence.jsonl` 追加一行证据（见下）
+3. 改了生产代码就写测试，用 `python governance/scripts/record_test_run.py -- <测试命令>` 跑，留痕
+4. 扫描 diff，对照 `docs/governance/risk-types.md` 检查 8 类风险模式
+5. 命中的代码上方加 `risk:*` 注解（单行格式）
+6. 提交时 `AI-Usage` 和 `Tested` trailer 由 git hook 自动写入，无需手填
+7. 创建 MR：用 `create_mr.py --gitlab-api` 自动生成并提交 MR，**不手填描述**
 
 ```bash
 python governance/scripts/create_mr.py \
@@ -22,6 +23,8 @@ python governance/scripts/create_mr.py \
 ```
 
 `--gitlab-api` 模式直连 GitLab REST API，不依赖 glab/gh CLI（glab 在自托管 GitLab 11.x 上 project 路径解析返回 404）。前置环境变量：`AGENTGATE_GITLAB_TOKEN`（scope: api）、`AGENTGATE_GITLAB_PROJECT_ID`（数字 id）、`AGENTGATE_GITLAB_URL`。
+
+如果本次修复来自重复错误、门禁失败、线上事故或仓库约束误解，必须补充 `governance/lessons/repository.yml`。能验证的写成 `hard` 并绑定可执行检查；暂时只能提醒的写成 `soft`。
 
 ## AI 证据采集（自动算占比，不靠人工判断）
 
