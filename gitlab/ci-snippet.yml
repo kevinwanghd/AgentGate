@@ -22,6 +22,19 @@ stages:
   - build
   - merge
 
+# ── 0. Hard lessons: installation and policy invariants ──────────────────────
+governance:lessons-validate:
+  stage: governance
+  image: python:3.11
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH
+  before_script:
+    - pip install -q pyyaml==6.0.3
+  script:
+    - python governance/scripts/validate_lessons.py --root .
+  allow_failure: false
+
 # ── 1. 风险扫描: 硬阻断 ──────────────────────────────────────────────────────
 governance:risk-scan:
   stage: governance
@@ -39,8 +52,10 @@ governance:risk-scan:
       git fetch -q origin "$TB"
       BASE="origin/$TB"
       CONFIG_ARG=""
-      CONFIG_PATH="${GOVERNANCE_CONFIG_PATH:-governance/governance.config.yml}"
-      [ -f "$CONFIG_PATH" ] && CONFIG_ARG="--config $CONFIG_PATH"
+      CONFIG_PATH="${GOVERNANCE_CONFIG_PATH:-governance.config.yml}"
+      [ -f "$CONFIG_PATH" ] || CONFIG_PATH="governance/governance.config.yml"
+      [ -f "$CONFIG_PATH" ] || { echo "[governance] policy file not found" >&2; exit 2; }
+      CONFIG_ARG="--config $CONFIG_PATH"
       python governance/scripts/scan_risks.py --diff-base "$BASE" $CONFIG_ARG
       EXIT_CODE=$?
       echo "{\"status\": \"$([ $EXIT_CODE -eq 0 ] && echo 'pass' || echo 'fail')\"}" \
@@ -100,8 +115,10 @@ governance:mr-validate:
       git fetch -q origin "$TB"
       BASE="origin/$TB"
       CONFIG_ARG=""
-      [ -f "${GOVERNANCE_CONFIG_PATH:-governance/governance.config.yml}" ] \
-        && CONFIG_ARG="--config ${GOVERNANCE_CONFIG_PATH:-governance/governance.config.yml}"
+      CONFIG_PATH="${GOVERNANCE_CONFIG_PATH:-governance.config.yml}"
+      [ -f "$CONFIG_PATH" ] || CONFIG_PATH="governance/governance.config.yml"
+      [ -f "$CONFIG_PATH" ] || { echo "[governance] policy file not found" >&2; exit 2; }
+      CONFIG_ARG="--config $CONFIG_PATH"
       echo "$CI_MERGE_REQUEST_DESCRIPTION" \
         | python governance/scripts/validate_mr.py --diff-base "$BASE" $CONFIG_ARG
       EXIT_CODE=$?
@@ -132,8 +149,10 @@ governance:mr-validate-compat:
       git fetch -q origin "$TB"
       BASE="origin/$TB"
       CONFIG_ARG=""
-      [ -f "${GOVERNANCE_CONFIG_PATH:-governance/governance.config.yml}" ] \
-        && CONFIG_ARG="--config ${GOVERNANCE_CONFIG_PATH:-governance/governance.config.yml}"
+      CONFIG_PATH="${GOVERNANCE_CONFIG_PATH:-governance.config.yml}"
+      [ -f "$CONFIG_PATH" ] || CONFIG_PATH="governance/governance.config.yml"
+      [ -f "$CONFIG_PATH" ] || { echo "[governance] policy file not found" >&2; exit 2; }
+      CONFIG_ARG="--config $CONFIG_PATH"
       python governance/scripts/gitlab_mr_compat.py \
         --diff-base "$BASE" \
         --target-branch "$TB" \
@@ -162,8 +181,10 @@ governance:test-check:
       git fetch -q origin "$TB"
       BASE="origin/$TB"
       CONFIG_ARG=""
-      [ -f "${GOVERNANCE_CONFIG_PATH:-governance/governance.config.yml}" ] \
-        && CONFIG_ARG="--config ${GOVERNANCE_CONFIG_PATH:-governance/governance.config.yml}"
+      CONFIG_PATH="${GOVERNANCE_CONFIG_PATH:-governance.config.yml}"
+      [ -f "$CONFIG_PATH" ] || CONFIG_PATH="governance/governance.config.yml"
+      [ -f "$CONFIG_PATH" ] || { echo "[governance] policy file not found" >&2; exit 2; }
+      CONFIG_ARG="--config $CONFIG_PATH"
       python governance/scripts/check_tested.py --diff-base "$BASE" $CONFIG_ARG
       EXIT_CODE=$?
       echo "{\"status\": \"$([ $EXIT_CODE -eq 0 ] && echo 'pass' || echo 'fail')\"}" \
@@ -475,6 +496,7 @@ governance:gate-decision:
       TARGET_SHA="${CI_MERGE_REQUEST_TARGET_BRANCH_SHA:-$(git rev-parse "origin/$TB")}"
       CONFIG_PATH="${GOVERNANCE_CONFIG_PATH:-governance.config.yml}"
       [ -f "$CONFIG_PATH" ] || CONFIG_PATH="governance/governance.config.yml"
+      [ -f "$CONFIG_PATH" ] || { echo "[governance] policy file not found" >&2; exit 2; }
       POLICY_SHA="$(git rev-parse "${SOURCE_SHA}:${CONFIG_PATH}" 2>/dev/null || echo "$SOURCE_SHA")"
       python - <<'PY' > gate-evidence.json
       import json

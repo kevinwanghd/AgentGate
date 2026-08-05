@@ -56,6 +56,7 @@ def check_gitlab_optional_language_image_pull(root: Path, errors: list[str]) -> 
 
 
 def check_gitlab_governance_core_required_checks(root: Path, errors: list[str]) -> None:
+    installer = root / "install.sh"
     policy = _read_first(root, "install.sh", "governance.config.yml")
     default_block = (
         "required_checks:\n"
@@ -66,16 +67,64 @@ def check_gitlab_governance_core_required_checks(root: Path, errors: list[str]) 
     )
     if default_block not in policy:
         _fail(errors, "gitlab_legacy.governance_core_required_checks: default checks changed")
-    forbidden_block = default_block + "\n    - go-test"
-    if forbidden_block in policy:
-        _fail(errors, "gitlab_legacy.governance_core_required_checks: policy requires go-test by default")
+    if installer.exists():
+        forbidden_block = default_block + "\n    - go-test"
+        if forbidden_block in policy:
+            _fail(
+                errors,
+                "gitlab_legacy.governance_core_required_checks: "
+                "installer requires go-test by default",
+            )
 
 
 def check_gitlab_secret_history_hard_block(root: Path, errors: list[str]) -> None:
     template = _read_first(root, "ci/governance-ci.yml", "governance/ci-snippet.yml")
-    required = '--log-opts="${BASE}..HEAD"'
-    if required not in template:
-        _fail(errors, f"gitlab_legacy.secret_history_hard_block: gitleaks must scan {required}")
+    if not all(needle in template for needle in ("gitleaks detect", "--log-opts=", "..HEAD")):
+        _fail(
+            errors,
+            "gitlab_legacy.secret_history_hard_block: "
+            "gitleaks must scan the target-branch-to-HEAD commit range",
+        )
+
+
+def check_gitlab_actual_mr_description_authoritative(root: Path, errors: list[str]) -> None:
+    compat = _read_first(
+        root,
+        "scripts/gitlab_mr_compat.py",
+        "governance/scripts/gitlab_mr_compat.py",
+    )
+    tests_path = root / "tests" / "test_regressions.py"
+    tests = tests_path.read_text(encoding="utf-8") if tests_path.exists() else ""
+    required = {
+        'source="gitlab-api"': compat,
+        "actual_mr_verified=True": compat,
+        "actual GitLab MR description does not match the branch manifest": compat,
+    }
+    if tests:
+        required[
+            "test_branch_pipeline_rejects_empty_actual_mr_even_with_valid_manifest"
+        ] = tests
+        required[
+            "test_deprecated_allow_missing_description_cannot_bypass_gate"
+        ] = tests
+    for needle, haystack in required.items():
+        if needle not in haystack:
+            _fail(
+                errors,
+                "gitlab_legacy.actual_mr_description_authoritative: "
+                f"missing {needle}",
+            )
+    forbidden = (
+        'source="repository-manifest"',
+        'verification = "actual MR" if resolution.actual_mr_verified else',
+    )
+    for needle in forbidden:
+        if needle in compat:
+            _fail(
+                errors,
+                "gitlab_legacy.actual_mr_description_authoritative: "
+                f"unsafe success path contains {needle}",
+            )
 
 
 def check_agent_instructions_preserve_repository_agents_md(root: Path, errors: list[str]) -> None:
@@ -102,18 +151,22 @@ def check_agent_instructions_preserve_repository_agents_md(root: Path, errors: l
         installer = installer_path.read_text(encoding="utf-8")
         tests = _read(root, "tests/test_regressions.py")
         source_required = {
-            'upsert_governance_section "CLAUDE.md"': installer,
-            'upsert_governance_section ".github/copilot-instructions.md"': installer,
-            'upsert_governance_section ".cursor/rules/governance.mdc"': installer,
-            'upsert_governance_section ".hermes.md"': installer,
-            'upsert_governance_section "AGENTS.md"': installer,
+            'append_governance_section "CLAUDE.md"': installer,
+            'append_governance_section ".github/copilot-instructions.md"': installer,
+            'append_governance_section ".cursor/rules/governance.mdc"': installer,
+            'append_governance_section ".hermes.md"': installer,
+            'append_governance_section "AGENTS.md"': installer,
+            "leaving the file unchanged": installer,
             "create_repository_lessons_file": installer,
             "governance/lessons/repository.yml": installer,
             "test_installer_preserves_existing_agents_md": tests,
+            "test_installer_never_rewrites_an_existing_agents_md": tests,
         }
         for needle, haystack in source_required.items():
             if needle not in haystack:
                 _fail(errors, f"agent_instructions.preserve_repository_agents_md: missing {needle}")
+        if "upsert_governance_section" in installer:
+            _fail(errors, "agent_instructions.preserve_repository_agents_md: installer must be append-only")
         for rel in (
             "agent-instructions/AGENTS.md",
             "agent-instructions/CLAUDE.md",
@@ -152,6 +205,7 @@ LESSON_CHECKS: dict[str, Callable[[Path, list[str]], None]] = {
     "gitlab_legacy.optional_language_image_pull": check_gitlab_optional_language_image_pull,
     "gitlab_legacy.governance_core_required_checks": check_gitlab_governance_core_required_checks,
     "gitlab_legacy.secret_history_hard_block": check_gitlab_secret_history_hard_block,
+    "gitlab_legacy.actual_mr_description_authoritative": check_gitlab_actual_mr_description_authoritative,
     "agent_instructions.preserve_repository_agents_md": check_agent_instructions_preserve_repository_agents_md,
     "agentgate_operations.sensitive_pr_requires_risk_rollback": check_agentgate_sensitive_pr_requires_risk_rollback,
 }

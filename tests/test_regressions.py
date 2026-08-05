@@ -397,6 +397,15 @@ class AgentGateCliTests(unittest.TestCase):
 
 
 class GitLabMrCompatTests(unittest.TestCase):
+    def setUp(self) -> None:
+        patcher = mock.patch.object(
+            gitlab_mr_compat,
+            "_ensure_target_ref",
+            side_effect=lambda target: f"origin/{target}",
+        )
+        self.ensure_target_ref = patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_derives_gitlab_url_from_legacy_ci_variables(self) -> None:
         args = mock.Mock(gitlab_url=None)
         with mock.patch.dict(os.environ, {"CI_API_V4_URL": "https://gitlab.example.com/api/v4"}, clear=True):
@@ -404,12 +413,31 @@ class GitLabMrCompatTests(unittest.TestCase):
                 "https://gitlab.example.com",
                 gitlab_mr_compat._derive_gitlab_url(args),
             )
-
         with mock.patch.dict(os.environ, {"CI_API_V4_URL": "", "CI_PROJECT_URL": "https://gitlab.example.com/group/project"}, clear=True):
             self.assertEqual(
                 "https://gitlab.example.com",
                 gitlab_mr_compat._derive_gitlab_url(args),
             )
+
+    def test_open_mr_lookup_rejects_ambiguous_targets(self) -> None:
+        opened = [
+            {"iid": 1, "target_branch": "master"},
+            {"iid": 2, "target_branch": "release"},
+        ]
+        with mock.patch.object(
+            create_mr, "_gitlab_api_request", return_value=opened
+        ):
+            with self.assertRaisesRegex(
+                gitlab_mr_compat.DescriptionSourceError,
+                "multiple opened MRs",
+            ):
+                gitlab_mr_compat._find_open_mr(
+                    "https://gitlab.example.com",
+                    "123",
+                    "read-token",
+                    "fix/bug",
+                    None,
+                )
 
     def test_mr_pipeline_prefers_actual_description(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -510,7 +538,8 @@ class GitLabMrCompatTests(unittest.TestCase):
             self.assertTrue(payload["actual_mr_verified"])
             api.assert_called_once()
 
-    def test_branch_pipeline_uses_current_manifest_without_any_api_call(self) -> None:
+    # risk:test-removal reason:"replaced manifest-only pass behavior with authoritative actual-MR fail-closed coverage" owner:@agentgate reviewed:2026-08-05
+    def test_branch_pipeline_rejects_empty_actual_mr_even_with_valid_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             output = Path(td) / "result.json"
             manifest = Path(td) / "mr-description.md"
@@ -522,17 +551,33 @@ class GitLabMrCompatTests(unittest.TestCase):
             )
             env = {
                 "CI_COMMIT_REF_NAME": "fix/bug",
-                "GOVERNANCE_MERGE_BOT_TOKEN": "must-not-be-used",
-                "PRIVATE_TOKEN": "must-not-be-used",
+                "CI_SERVER_URL": "https://gitlab.example.com",
+                "CI_PROJECT_ID": "123",
+                "AGENTGATE_GITLAB_READ_TOKEN": "read-token",
             }
             with mock.patch.dict(os.environ, env, clear=True), \
                     mock.patch.object(
                         gitlab_mr_compat,
                         "_manifest_changed",
                         return_value=True,
-                    ), \
-                    mock.patch.object(gitlab_mr_compat, "validate_description", return_value=[]) as validate, \
-                    mock.patch.object(gitlab_mr_compat, "_find_open_mr") as api, \
+                    ) as changed, \
+                    mock.patch.object(
+                        gitlab_mr_compat,
+                        "validate_description",
+                        side_effect=lambda text, *_: (
+                            [] if text else ["missing ## Background section"]
+                        ),
+                    ) as validate, \
+                    mock.patch.object(
+                        create_mr,
+                        "_gitlab_api_request",
+                        return_value=[{
+                            "iid": 2171,
+                            "description": "",
+                            "web_url": "https://gitlab.example.com/group/project/merge_requests/2171",
+                            "target_branch": "feature/reborn-testnew",
+                        }],
+                    ) as api, \
                     mock.patch.object(sys, "argv", [
                         "gitlab_mr_compat.py",
                         "--target-branch", "master",
@@ -542,14 +587,21 @@ class GitLabMrCompatTests(unittest.TestCase):
                     ]):
                 rc = gitlab_mr_compat.main()
 
-            self.assertEqual(0, rc)
+            self.assertEqual(1, rc)
             payload = json.loads(output.read_text(encoding="utf-8"))
-            self.assertEqual("pass", payload["status"])
-            self.assertEqual("repository-manifest", payload["source"])
-            self.assertFalse(payload["actual_mr_verified"])
-            self.assertEqual(str(manifest).replace("\\", "/"), payload["manifest_path"])
-            validate.assert_called_once()
-            api.assert_not_called()
+            self.assertEqual("fail", payload["status"])
+            self.assertEqual("gitlab-api", payload["source"])
+            self.assertTrue(payload["actual_mr_verified"])
+            self.assertEqual(2171, payload["iid"])
+            self.assertEqual("feature/reborn-testnew", payload["target_branch"])
+            self.assertEqual("origin/feature/reborn-testnew", payload["diff_base"])
+            self.assertIn("does not match", payload["reason"])
+            validate.assert_not_called()
+            api.assert_called_once()
+            self.assertNotIn("target_branch", api.call_args.kwargs["query"])
+            changed.assert_called_once_with(
+                str(manifest), "origin/feature/reborn-testnew"
+            )
 
     def test_branch_pipeline_rejects_stale_repository_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -558,8 +610,16 @@ class GitLabMrCompatTests(unittest.TestCase):
             manifest.write_text("## 背景\n\n旧内容。\n", encoding="utf-8")
             env = {
                 "CI_COMMIT_REF_NAME": "fix/bug",
+                "CI_SERVER_URL": "https://gitlab.example.com",
+                "CI_PROJECT_ID": "123",
+                "AGENTGATE_GITLAB_READ_TOKEN": "read-token",
             }
             with mock.patch.dict(os.environ, env, clear=True), \
+                    mock.patch.object(create_mr, "_gitlab_api_request", return_value=[{
+                        "iid": 25,
+                        "description": "## Background\n\nCurrent content.\n",
+                        "target_branch": "master",
+                    }]), \
                     mock.patch.object(gitlab_mr_compat, "_manifest_changed", return_value=False), \
                     mock.patch.object(sys, "argv", [
                         "gitlab_mr_compat.py",
@@ -575,8 +635,46 @@ class GitLabMrCompatTests(unittest.TestCase):
             self.assertEqual("fail", payload["status"])
             self.assertIn("was not changed", payload["reason"])
 
-    # risk:test-removal reason:"replaced by fail-closed missing manifest coverage" owner:@agentgate reviewed:2026-07-29
-    def test_missing_manifest_fails_without_implicit_api_fallback(self) -> None:
+    def test_branch_pipeline_validates_against_actual_non_default_target(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            output = Path(td) / "result.json"
+            env = {
+                "CI_COMMIT_REF_NAME": "fix/bug",
+                "CI_SERVER_URL": "https://gitlab.example.com",
+                "CI_PROJECT_ID": "123",
+                "AGENTGATE_GITLAB_READ_TOKEN": "read-token",
+            }
+            with mock.patch.dict(os.environ, env, clear=True), \
+                    mock.patch.object(create_mr, "_gitlab_api_request", return_value=[{
+                        "iid": 2171,
+                        "description": "## Background\n\nActual MR body.\n",
+                        "target_branch": "feature/reborn-testnew",
+                    }]), \
+                    mock.patch.object(
+                        gitlab_mr_compat,
+                        "validate_description",
+                        return_value=[],
+                    ) as validate, \
+                    mock.patch.object(sys, "argv", [
+                        "gitlab_mr_compat.py",
+                        "--target-branch", "master",
+                        "--diff-base", "origin/master",
+                        "--manifest-path", str(Path(td) / "missing.md"),
+                        "--output", str(output),
+                    ]):
+                rc = gitlab_mr_compat.main()
+
+            self.assertEqual(0, rc)
+            payload = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual("origin/feature/reborn-testnew", payload["diff_base"])
+            validate.assert_called_once_with(
+                "## Background\n\nActual MR body.\n",
+                None,
+                "origin/feature/reborn-testnew",
+            )
+
+    # risk:test-removal reason:"replaced disabled API fallback behavior with mandatory API fail-closed coverage" owner:@agentgate reviewed:2026-08-05
+    def test_branch_pipeline_fails_closed_when_api_lookup_is_unavailable(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             output = Path(td) / "result.json"
             missing = Path(td) / "missing.md"
@@ -588,7 +686,11 @@ class GitLabMrCompatTests(unittest.TestCase):
                 "PRIVATE_TOKEN": "personal-token",
             }
             with mock.patch.dict(os.environ, env, clear=True), \
-                    mock.patch.object(gitlab_mr_compat, "_find_open_mr") as api, \
+                    mock.patch.object(
+                        create_mr,
+                        "_gitlab_api_request",
+                        side_effect=RuntimeError("service unavailable"),
+                    ) as api, \
                     mock.patch.object(sys, "argv", [
                         "gitlab_mr_compat.py",
                         "--target-branch", "master",
@@ -600,8 +702,10 @@ class GitLabMrCompatTests(unittest.TestCase):
             self.assertEqual(1, rc)
             payload = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual("fail", payload["status"])
-            self.assertIn("API fallback is disabled", payload["reason"])
-            api.assert_not_called()
+            self.assertEqual("gitlab-api", payload["source"])
+            self.assertFalse(payload["actual_mr_verified"])
+            self.assertIn("API lookup unavailable", payload["reason"])
+            api.assert_called_once()
 
     # risk:test-removal reason:"replaced obsolete token-source rejection with authorized-token acceptance coverage" owner:@agentgate reviewed:2026-07-29
     def test_api_fallback_accepts_any_available_gitlab_token(self) -> None:
@@ -639,7 +743,8 @@ class GitLabMrCompatTests(unittest.TestCase):
             self.assertTrue(payload["actual_mr_verified"])
             self.assertEqual("merge-token", api.call_args.args[2])
 
-    def test_allow_missing_description_is_explicit(self) -> None:
+    # risk:test-removal reason:"replaced explicit missing-description skip behavior with non-bypassable failure coverage" owner:@agentgate reviewed:2026-08-05
+    def test_deprecated_allow_missing_description_cannot_bypass_gate(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             output = Path(td) / "result.json"
             env = {
@@ -655,9 +760,9 @@ class GitLabMrCompatTests(unittest.TestCase):
                     ]):
                 rc = gitlab_mr_compat.main()
 
-            self.assertEqual(0, rc)
+            self.assertEqual(1, rc)
             payload = json.loads(output.read_text(encoding="utf-8"))
-            self.assertEqual("skip", payload["status"])
+            self.assertEqual("fail", payload["status"])
 
     def test_target_branch_pipeline_skips_description_validation(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -2652,7 +2757,7 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
             )
 
             subprocess.run(
-                [bash, str(ROOT / "install.sh"), str(target), "--agents", "codex"],
+                [bash, "-l", (ROOT / "install.sh").as_posix(), target.as_posix(), "--agents", "codex"],
                 check=True,
                 capture_output=True,
                 text=True,
@@ -2666,6 +2771,40 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
             self.assertIn("<!-- governance-v1-begin -->", installed)
             self.assertIn("<!-- governance-v1-end -->", installed)
             self.assertIn("# AgentGate Workflow", installed)
+
+    def test_installer_never_rewrites_an_existing_agents_md(self) -> None:
+        bash = os.environ.get("AGENTGATE_BASH")
+        git_bash = Path(r"C:\Program Files\Git\bin\bash.exe")
+        if not bash and git_bash.exists():
+            bash = str(git_bash)
+        if not bash:
+            bash = shutil.which("bash")
+        if not bash:
+            self.skipTest("bash is required for install.sh integration coverage")
+
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            agents = target / "AGENTS.md"
+            original = (
+                "# Product instructions\n\n"
+                "Keep this repository-specific guidance.\n\n"
+                "<!-- governance-v1-begin -->\n"
+                "# Existing AgentGate policy\n\n"
+                "This managed section must remain byte-for-byte unchanged.\n"
+                "<!-- governance-v1-end -->\n"
+            )
+            agents.write_text(original, encoding="utf-8")
+
+            subprocess.run(
+                [bash, "-l", (ROOT / "install.sh").as_posix(), target.as_posix(), "--agents", "codex"],
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+
+            self.assertEqual(original, agents.read_text(encoding="utf-8"))
 
     def test_gitlab_template_uses_prebuilt_images_and_legacy_syntax(self) -> None:
         template = (ROOT / "ci" / "governance-ci.yml").read_text(encoding="utf-8")
@@ -2708,7 +2847,8 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
         self.assertIn("agentgate.io/lessons/v1", lessons)
         self.assertIn("agent_instructions.preserve_repository_agents_md", lessons)
         self.assertIn("enforcement: hard", lessons)
-        self.assertIn("never overwrite pre-existing repository instructions", lessons)
+        self.assertIn("Treat every existing agent instruction file as append-only", lessons)
+        self.assertIn("leave the file byte-for-byte unchanged", lessons)
         self.assertIn("Agent instruction files must be protected from overwrite", lessons)
         self.assertIn("repository.yml is created only when absent", lessons)
 
@@ -2738,6 +2878,40 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
             shutil.copy(ROOT / "ci" / "governance-ci.yml", target / "governance" / "ci-snippet.yml")
             shutil.copy(ROOT / "governance.config.yml", target / "governance.config.yml")
             self.assertEqual(0, validate_lessons.main(["--root", str(target)]))
+
+    def test_business_policy_may_explicitly_require_language_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            (target / "governance.config.yml").write_text(
+                "auto_merge:\n"
+                "  required_checks:\n"
+                "    - risk-scan\n"
+                "    - secret-scan\n"
+                "    - mr-validate\n"
+                "    - test-check\n"
+                "    - go-test\n",
+                encoding="utf-8",
+            )
+            errors: list[str] = []
+            validate_lessons.check_gitlab_governance_core_required_checks(
+                target, errors
+            )
+            self.assertEqual([], errors)
+
+    def test_secret_history_accepts_equivalent_target_branch_diff(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            snippet = target / "governance" / "ci-snippet.yml"
+            snippet.parent.mkdir(parents=True)
+            snippet.write_text(
+                'gitleaks detect --log-opts="origin/${TB}..HEAD"\n',
+                encoding="utf-8",
+            )
+            errors: list[str] = []
+            validate_lessons.check_gitlab_secret_history_hard_block(
+                target, errors
+            )
+            self.assertEqual([], errors)
 
     def test_empty_repository_lessons_are_valid_only_for_repository_scope(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

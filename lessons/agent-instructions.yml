@@ -14,5 +14,5 @@ lessons:
       - governance/lessons/repository.yml
     trigger: AgentGate install or MR-entry rollout replaces, truncates, or deletes an existing repository agent instruction file.
     risk: Repository-specific engineering instructions and accumulated lessons are lost, causing AI agents to ignore local architecture, workflow, safety, or review rules.
-    fix: Maintain only the AgentGate section between governance markers; append the section when no marker exists and never overwrite pre-existing repository instructions. Agent instruction entries must require reading governance/lessons/*.yml before code changes.
-    regression: Agent instruction files must be protected from overwrite, AGENTS.md must remain a protected path, and installer coverage must prove existing repository content is preserved while repository.yml is created only when absent.
+    fix: Treat every existing agent instruction file as append-only. Append one marked AgentGate section when no marker exists; when a marker already exists, leave the file byte-for-byte unchanged. Never replace, truncate, delete, or rewrite an existing instruction file. Agent instruction entries must require reading governance/lessons/*.yml before code changes.
+    regression: Agent instruction files must be protected from overwrite, AGENTS.md must remain a protected path, and installer coverage must prove both append-once behavior and byte-for-byte stability on repeated installation while repository.yml is created only when absent.

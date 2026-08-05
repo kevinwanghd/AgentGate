@@ -64,31 +64,15 @@ write_file() {
   ok "写入 $rel"
 }
 
-upsert_governance_section() {
+append_governance_section() {
   local rel="$1"
   local source_rel="$2"
   local abs="${TARGET_DIR}/${rel}"
   mkdir -p "$(dirname "$abs")"
   if [[ -e "$abs" ]]; then
     if grep -q '<!-- governance-v1-begin -->' "$abs"; then
-      local section_tmp output_tmp
-      section_tmp="$(mktemp)"
-      output_tmp="$(mktemp)"
-      fetch_or_local "$source_rel" > "$section_tmp"
-      awk -v section="$section_tmp" '
-        /<!-- governance-v1-begin -->/ {
-          print
-          while ((getline line < section) > 0) print line
-          close(section)
-          replacing=1
-          next
-        }
-        /<!-- governance-v1-end -->/ && replacing { replacing=0; print; next }
-        !replacing { print }
-      ' "$abs" > "$output_tmp"
-      cat "$output_tmp" > "$abs"
-      rm -f "$section_tmp" "$output_tmp"
-      ok "updated existing governance section in $rel"
+      ok "$rel already contains an AgentGate section; leaving the file unchanged"
+      return 0
     else
       warn "$rel exists; appending governance section instead of overwriting repository instructions"
       {
@@ -254,27 +238,27 @@ esac
 
 # Claude Code / Kiro
 if [[ "$AGENTS" == "all" || "$AGENTS" == "claude" ]]; then
-  upsert_governance_section "CLAUDE.md" "agent-instructions/CLAUDE.md"
+  append_governance_section "CLAUDE.md" "agent-instructions/CLAUDE.md"
 fi
 
 # GitHub Copilot
 if [[ "$AGENTS" == "all" || "$AGENTS" == "copilot" ]]; then
-  upsert_governance_section ".github/copilot-instructions.md" "agent-instructions/copilot-instructions.md"
+  append_governance_section ".github/copilot-instructions.md" "agent-instructions/copilot-instructions.md"
 fi
 
 # Cursor
 if [[ "$AGENTS" == "all" || "$AGENTS" == "cursor" ]]; then
-  upsert_governance_section ".cursor/rules/governance.mdc" "agent-instructions/cursor-rules.mdc"
+  append_governance_section ".cursor/rules/governance.mdc" "agent-instructions/cursor-rules.mdc"
 fi
 
 # Hermes Agent
 if [[ "$AGENTS" == "all" || "$AGENTS" == "hermes" ]]; then
-  upsert_governance_section ".hermes.md" "agent-instructions/hermes-instructions.md"
+  append_governance_section ".hermes.md" "agent-instructions/hermes-instructions.md"
 fi
 
 # OpenAI Codex / generic agent fallback
 if [[ "$AGENTS" == "all" || "$AGENTS" == "codex" ]]; then
-  upsert_governance_section "AGENTS.md" "agent-instructions/AGENTS.md"
+  append_governance_section "AGENTS.md" "agent-instructions/AGENTS.md"
 fi
 
 # ---------- 3. governance.config.yml ----------
