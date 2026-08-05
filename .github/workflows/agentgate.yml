@@ -46,18 +46,14 @@ jobs:
           repository: ${{ inputs.agentgate-repository }}
           ref: ${{ inputs.agentgate-ref }}
           path: .agentgate
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
       - name: Verify preinstalled Python dependencies
-        run: python -c "import yaml; print('pyyaml ok')"
+        run: python3 -c "import yaml; print('pyyaml ok')"
       - name: Scan risk annotations
         run: |
           BASE_REF="${{ github.event.pull_request.base.ref }}"
           if [ -z "$BASE_REF" ]; then echo "::error::pull_request.base.ref is required"; exit 1; fi
           git fetch -q origin "$BASE_REF"
-          python .agentgate/scripts/scan_risks.py \
+          python3 .agentgate/scripts/scan_risks.py \
             --diff-base "origin/$BASE_REF" \
             --config "${{ inputs.config-path }}"
 
@@ -93,12 +89,8 @@ jobs:
           repository: ${{ inputs.agentgate-repository }}
           ref: ${{ inputs.agentgate-ref }}
           path: .agentgate
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
       - name: Verify preinstalled Python dependencies
-        run: python -c "import yaml; print('pyyaml ok')"
+        run: python3 -c "import yaml; print('pyyaml ok')"
       - name: Validate PR description
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
@@ -107,7 +99,7 @@ jobs:
           if [ -z "$BASE_REF" ]; then echo "::error::pull_request.base.ref is required"; exit 1; fi
           git fetch -q origin "$BASE_REF"
           printf '%s' "$PR_BODY" \
-            | python .agentgate/scripts/validate_mr.py \
+            | python3 .agentgate/scripts/validate_mr.py \
                 --diff-base "origin/$BASE_REF" \
                 --config "${{ inputs.config-path }}"
 
@@ -124,18 +116,14 @@ jobs:
           repository: ${{ inputs.agentgate-repository }}
           ref: ${{ inputs.agentgate-ref }}
           path: .agentgate
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
       - name: Verify preinstalled Python dependencies
-        run: python -c "import yaml; print('pyyaml ok')"
+        run: python3 -c "import yaml; print('pyyaml ok')"
       - name: Check test evidence
         run: |
           BASE_REF="${{ github.event.pull_request.base.ref }}"
           if [ -z "$BASE_REF" ]; then echo "::error::pull_request.base.ref is required"; exit 1; fi
           git fetch -q origin "$BASE_REF"
-          python .agentgate/scripts/check_tested.py \
+          python3 .agentgate/scripts/check_tested.py \
             --diff-base "origin/$BASE_REF" \
             --config "${{ inputs.config-path }}"
 
@@ -157,12 +145,8 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: "1.22"
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
       - name: Verify preinstalled Python dependencies
-        run: python -c "import yaml; print('pyyaml ok')"
+        run: python3 -c "import yaml; print('pyyaml ok')"
       - name: Run affected Go tests
         run: |
           if [ ! -f go.mod ]; then
@@ -172,7 +156,7 @@ jobs:
           BASE_REF="${{ github.event.pull_request.base.ref }}"
           if [ -z "$BASE_REF" ]; then echo "::error::pull_request.base.ref is required"; exit 1; fi
           git fetch -q origin "$BASE_REF"
-          python .agentgate/scripts/run_affected_tests.py \
+          python3 .agentgate/scripts/run_affected_tests.py \
             --diff-base "origin/$BASE_REF" \
             --timeout "${GOVERNANCE_GO_TEST_TIMEOUT:-120}"
 
@@ -199,12 +183,8 @@ jobs:
           repository: ${{ inputs.agentgate-repository }}
           ref: ${{ inputs.agentgate-ref }}
           path: .agentgate
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
       - name: Verify preinstalled Python dependencies
-        run: python -c "import yaml; print('pyyaml ok')"
+        run: python3 -c "import yaml; print('pyyaml ok')"
       - name: Decide gate result
         id: gate
         run: |
@@ -236,7 +216,7 @@ jobs:
           }, ensure_ascii=False))
           PY
           set +e
-          python .agentgate/scripts/gate_decision.py \
+          python3 .agentgate/scripts/gate_decision.py \
             --evidence gate-evidence.json \
             --source-sha "$SOURCE_SHA" \
             --target-sha "$TARGET_SHA" \
