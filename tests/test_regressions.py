@@ -2942,6 +2942,21 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
         self.assertIn('"lessons/"', validate_yaml)
         self.assertIn('"governance/lessons/"', validate_yaml)
 
+    def test_governance_test_jobs_do_not_install_runtime(self) -> None:
+        errors: list[str] = []
+        validate_lessons.check_agentgate_test_jobs_do_not_install_runtime(ROOT, errors)
+        self.assertEqual([], errors)
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            (target / ".github" / "workflows").mkdir(parents=True)
+            (target / ".github" / "workflows" / "governance.yml").write_text(
+                "jobs:\n  test:\n    run: pip install pytest\n",
+                encoding="utf-8",
+            )
+            errors = []
+            validate_lessons.check_agentgate_test_jobs_do_not_install_runtime(target, errors)
+            self.assertTrue(any("forbidden runtime installation" in error for error in errors))
+
     def test_agent_instruction_templates_require_repository_lessons(self) -> None:
         for rel in (
             "AGENTS.md",

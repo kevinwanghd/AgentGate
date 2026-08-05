@@ -199,6 +199,32 @@ def check_agentgate_sensitive_pr_requires_risk_rollback(root: Path, errors: list
         )
 
 
+def check_agentgate_test_jobs_do_not_install_runtime(root: Path, errors: list[str]) -> None:
+    templates = []
+    for rel in (
+        ".github/workflows/agentgate.yml",
+        ".github/workflows/governance.yml",
+        "ci/governance-ci.yml",
+        "gitlab/ci-snippet.yml",
+    ):
+        path = root / rel
+        if path.exists():
+            templates.append((rel, path.read_text(encoding="utf-8")))
+    forbidden = (
+        r"\bpip\s+install\b",
+        r"\bnpm\s+(?:ci|install)\b",
+        r"\b(?:flutter\s+pub\s+get|docker\s+(?:pull|run))\b",
+    )
+    for rel, template in templates:
+        for pattern in forbidden:
+            if re.search(pattern, template, flags=re.IGNORECASE):
+                _fail(
+                    errors,
+                    "agentgate_operations.test_jobs_no_runtime_install: "
+                    f"{rel} contains forbidden runtime installation or image pull ({pattern})",
+                )
+
+
 LESSON_CHECKS: dict[str, Callable[[Path, list[str]], None]] = {
     "gitlab_legacy.job_timeout_unsupported": check_gitlab_job_timeout_unsupported,
     "gitlab_legacy.modern_schema_unsupported": check_gitlab_modern_schema_unsupported,
@@ -208,6 +234,7 @@ LESSON_CHECKS: dict[str, Callable[[Path, list[str]], None]] = {
     "gitlab_legacy.actual_mr_description_authoritative": check_gitlab_actual_mr_description_authoritative,
     "agent_instructions.preserve_repository_agents_md": check_agent_instructions_preserve_repository_agents_md,
     "agentgate_operations.sensitive_pr_requires_risk_rollback": check_agentgate_sensitive_pr_requires_risk_rollback,
+    "agentgate_operations.test_jobs_no_runtime_install": check_agentgate_test_jobs_do_not_install_runtime,
 }
 
 

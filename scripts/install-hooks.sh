@@ -31,7 +31,8 @@ cat > "$HOOK_FILE" <<'HOOK'
 #!/bin/sh
 # governance:ai-usage — 自动把 AI-Usage trailer 写入 commit message
 # 由 governance/scripts/install-hooks.sh 生成, 勿手改。
-PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+AGENTGATE_ORIGINAL_PATH="${PATH:-}"
+PATH="/usr/local/bin:/usr/bin:/bin:${AGENTGATE_ORIGINAL_PATH}"
 export PATH
 
 COMMIT_MSG_FILE="$1"
@@ -56,7 +57,7 @@ TEST_SCRIPT="${REPO_ROOT}/governance/scripts/check_tested.py"
 
 PY=""
 for CANDIDATE in python python3; do
-  CANDIDATE_PATH="$(command -v "$CANDIDATE" 2>/dev/null || true)"
+  CANDIDATE_PATH="$(PATH="$AGENTGATE_ORIGINAL_PATH" command -v "$CANDIDATE" 2>/dev/null || true)"
   if [ -n "$CANDIDATE_PATH" ] && "$CANDIDATE_PATH" -c 'raise SystemExit(0)' >/dev/null 2>&1; then
     PY="$CANDIDATE_PATH"
     break

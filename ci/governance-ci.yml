@@ -346,7 +346,7 @@ governance:flutter-test:
       OVERALL=0
       for DIR in $DIRS; do
         echo "[flutter-test] 在 $DIR 运行 flutter test"
-        (cd "$DIR" && flutter pub get && flutter test) || OVERALL=1
+        (cd "$DIR" && flutter test) || OVERALL=1
       done
       echo "{\"status\": \"$([ $OVERALL -eq 0 ] && echo 'pass' || echo 'fail')\"}" \
         > governance-flutter-test-result.json
@@ -382,14 +382,13 @@ governance:python-test:
         echo "{\"status\": \"skip\"}" > governance-python-test-result.json
         exit 0
       fi
-      pip install -q pytest pyyaml
+      command -v pytest >/dev/null 2>&1 || { echo "[python-test] pytest must be preinstalled in the runner image" >&2; exit 1; }
+      python -c "import yaml" || { echo "[python-test] pyyaml must be preinstalled in the runner image" >&2; exit 1; }
       OVERALL=0
       for DIR in $DIRS; do
-        echo "[python-test] 在 $DIR 安装依赖并运行 pytest"
+        echo "[python-test] 在 $DIR 运行 pytest（依赖必须预装）"
         (
           cd "$DIR"
-          [ -f requirements.txt ] && pip install -q -r requirements.txt
-          [ -f pyproject.toml ] && pip install -q -e ".[test]" 2>/dev/null || true
           python -m pytest --tb=short -q
         ) || OVERALL=1
       done
@@ -436,7 +435,10 @@ governance:node-test:
         echo "[node-test] 在 $DIR 运行 npm test"
         (
           cd "$DIR"
-          npm ci --prefer-offline --no-audit 2>/dev/null || npm install --no-audit
+          if [ -f package-lock.json ] && [ ! -d node_modules ]; then
+            echo "[node-test] node_modules must be preinstalled in the runner image" >&2
+            exit 1
+          fi
           npm test
         ) || OVERALL=1
       done

@@ -27,7 +27,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -q pyyaml==6.0.3
+      - name: Verify preinstalled Python dependencies
+        run: python -c "import yaml; print('pyyaml ok')"
       - name: validate YAML config files
         run: python scripts/validate_yaml.py --ci
       - name: validate hard lessons
@@ -43,7 +44,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -q pyyaml==6.0.3
+      - name: Verify preinstalled Python dependencies
+        run: python -c "import yaml; print('pyyaml ok')"
       - name: scan risks
         run: |
           BASE_REF="${{ github.event.pull_request.base.ref }}"
@@ -65,15 +67,12 @@ jobs:
           BASE_REF="${{ github.event.pull_request.base.ref }}"
           if [ -z "$BASE_REF" ]; then echo "::error::PR base.ref 缺失, 拒绝扫描"; exit 1; fi
           git fetch -q origin "$BASE_REF"
-          for attempt in 1 2 3; do
-            docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.30.1 \
-              detect --source /repo --log-opts="origin/${BASE_REF}..HEAD" \
-              --redact --no-banner --verbose && exit 0
-            rc=$?
-            if [ "$attempt" -eq 3 ]; then exit "$rc"; fi
-            echo "gitleaks docker run failed with exit $rc; retrying ($attempt/3)..."
-            sleep $((attempt * 10))
-          done
+          command -v gitleaks >/dev/null 2>&1 || {
+            echo "::error::gitleaks must be preinstalled on the runner; refusing to pull or install it"
+            exit 1
+          }
+          gitleaks detect --source . --log-opts="origin/${BASE_REF}..HEAD" \
+            --redact --no-banner --verbose
 
   # MR 描述校验: 硬门禁 (从 PR body 读 + commit trailer 读 AI-Usage)
   mr-validate:
@@ -86,7 +85,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -q pyyaml==6.0.3
+      - name: Verify preinstalled Python dependencies
+        run: python -c "import yaml; print('pyyaml ok')"
       - name: validate PR description
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
@@ -120,7 +120,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -q pyyaml==6.0.3
+      - name: Verify preinstalled Python dependencies
+        run: python -c "import yaml; print('pyyaml ok')"
       - name: check tested
         run: |
           BASE_REF="${{ github.event.pull_request.base.ref }}"
@@ -142,7 +143,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -q pyyaml==6.0.3
+      - name: Verify preinstalled Python dependencies
+        run: python -c "import yaml; print('pyyaml ok')"
       - name: run affected go tests
         env:
           GOVERNANCE_SKIP_GO_TEST: ${{ vars.GOVERNANCE_SKIP_GO_TEST }}
@@ -181,7 +183,7 @@ jobs:
           OVERALL=0
           for DIR in $DIRS; do
             echo "[flutter-test] 在 $DIR 运行 flutter test"
-            (cd "$DIR" && flutter pub get && flutter test) || OVERALL=1
+            (cd "$DIR" && flutter test) || OVERALL=1
           done
           exit $OVERALL
 
@@ -201,14 +203,13 @@ jobs:
           DIRS=$(find . -maxdepth 3 \( -name "requirements.txt" -o -name "pyproject.toml" -o -name "setup.py" \) \
                  -not -path "*/.*" -not -path "*/node_modules/*" | xargs -I{} dirname {} | sort -u)
           if [ -z "$DIRS" ]; then echo "[python-test] 未找到 Python 项目标记文件, 跳过。"; exit 0; fi
-          pip install -q pytest pyyaml
+          command -v pytest >/dev/null 2>&1 || { echo "[python-test] pytest must be preinstalled in the runner image" >&2; exit 1; }
+          python -c "import yaml" || { echo "[python-test] pyyaml must be preinstalled in the runner image" >&2; exit 1; }
           OVERALL=0
           for DIR in $DIRS; do
             echo "[python-test] 在 $DIR 运行 pytest"
             (
               cd "$DIR"
-              [ -f requirements.txt ] && pip install -q -r requirements.txt
-              [ -f pyproject.toml ] && pip install -q -e ".[test]" 2>/dev/null || true
               python -m pytest --tb=short -q
             ) || OVERALL=1
           done
@@ -235,7 +236,10 @@ jobs:
             echo "[node-test] 在 $DIR 运行 npm test"
             (
               cd "$DIR"
-              npm ci --prefer-offline --no-audit 2>/dev/null || npm install --no-audit
+              if [ -f package-lock.json ] && [ ! -d node_modules ]; then
+                echo "[node-test] node_modules must be preinstalled in the runner image" >&2
+                exit 1
+              fi
               npm test
             ) || OVERALL=1
           done
@@ -333,7 +337,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -q pyyaml==6.0.3
+      - name: Verify preinstalled Python dependencies
+        run: python -c "import yaml; print('pyyaml ok')"
       - name: run selftest
         run: bash scripts/selftest.sh
 
@@ -355,7 +360,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -q pyyaml==6.0.3
+      - name: Verify preinstalled Python dependencies
+        run: python -c "import yaml; print('pyyaml ok')"
       - name: compute GateResult v2
         id: compute
         env:

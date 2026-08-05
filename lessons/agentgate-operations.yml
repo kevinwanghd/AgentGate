@@ -34,3 +34,15 @@ lessons:
     risk: Work drifts into local shell plumbing while the actual product or PR gate issue remains unresolved.
     fix: Record the environment limitation, use a known Git Bash login context when validation is needed, and return to the primary AgentGate failure before changing tests.
     regression: Do not commit environment-only test harness changes unless they protect a supported execution path and are covered by a product-level check.
+
+  - id: agentgate_operations.test_jobs_no_runtime_install
+    enforcement: hard
+    applies_to:
+      - .github/workflows/**
+      - ci/**
+      - gitlab/**
+      - test jobs
+    trigger: A governance test job installs packages, downloads a runtime, pulls a container image, or runs a package-manager bootstrap command during CI.
+    risk: CI becomes slow or hangs on network and registry operations, and a green result depends on mutable external state instead of the runner image contract.
+    fix: Keep test jobs execution-only. Require Python, pytest, PyYAML, Node dependencies, Flutter dependencies, and gitleaks to be preinstalled in the runner or job image; fail fast with an actionable message when missing.
+    regression: validate_lessons must reject pip install, npm ci/install, flutter pub get, and docker pull/run in the governed CI templates.
