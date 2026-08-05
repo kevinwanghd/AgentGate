@@ -2593,6 +2593,8 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
         template = (ROOT / "ci" / "governance-ci.yml").read_text(encoding="utf-8")
         self.assertIn("governance:gate-decision:", template)
         self.assertIn("governance:auto-merge:", template)
+        self.assertIn("governance:mr-validate-compat:", template)
+        self.assertIn("python governance/scripts/gitlab_mr_compat.py", template)
         self.assertIn("GOVERNANCE_MERGE_BOT_TOKEN", template)
         self.assertIn("CI_MERGE_REQUEST_SOURCE_PROJECT_ID", template)
         # merge bot uses Python urllib, not curl --data-urlencode
