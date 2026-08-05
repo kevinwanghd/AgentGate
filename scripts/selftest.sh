@@ -765,11 +765,65 @@ printf 'legacy-called\n' > "${1}.legacy"
 LEGACY
   chmod +x .git/hooks/prepare-commit-msg
   bash "$HOOK_INSTALL" >/dev/null
+  test "$(head -n 1 .git/hooks/prepare-commit-msg)" = "#!/bin/sh"
   printf 'subject\n' > message.txt
-  .git/hooks/prepare-commit-msg message.txt
+  PATH=/c/Windows/System32 .git/hooks/prepare-commit-msg message.txt
   test -f message.txt.legacy
 )
 expect "安装后继续调用已有 prepare-commit-msg" 0 $?
+
+# linked worktree 的 .git 是文件，hook 必须安装到 git 解析出的共享 hooks 目录。
+HOOK_MAIN="$(mktemp -d)"
+HOOK_WORKTREE="$(mktemp -d)"
+(
+  cd "$HOOK_MAIN"
+  git init -q
+  git config user.email t@t
+  git config user.name t
+  echo seed > seed.txt
+  git add seed.txt
+  git commit -qm init
+  git branch -M main
+  git worktree add -q -b hook-test "$HOOK_WORKTREE" main
+  cd "$HOOK_WORKTREE"
+  bash "$HOOK_INSTALL" >/dev/null
+  HOOK_FILE="$(git rev-parse --git-path hooks/prepare-commit-msg)"
+  test -f "$HOOK_FILE"
+  test "$(head -n 1 "$HOOK_FILE")" = "#!/bin/sh"
+  grep -q "governance:ai-usage" "$HOOK_FILE"
+)
+expect "linked worktree 安装到真实 hooks 目录" 0 $?
+
+# PATH 中的 python3 可能只是 WindowsApps 占位程序，必须继续探测可运行的 python。
+HOOK_PY_REPO="$(mktemp -d)"
+(
+  cd "$HOOK_PY_REPO"
+  git init -q
+  git config user.email t@t
+  git config user.name t
+  mkdir -p governance/scripts fake-bin
+  : > governance/scripts/collect_ai_usage.py
+  : > governance/scripts/check_tested.py
+  cat > fake-bin/python3 <<'PY3'
+#!/bin/sh
+exit 1
+PY3
+  cat > fake-bin/python <<'PY'
+#!/bin/sh
+if [ "$1" = "-c" ]; then exit 0; fi
+case "$1" in
+  *collect_ai_usage.py) echo "AI-Usage: heavy" ;;
+  *check_tested.py) echo "Tested: pass" ;;
+esac
+PY
+  chmod +x fake-bin/python3 fake-bin/python
+  bash "$HOOK_INSTALL" >/dev/null
+  printf 'subject\n' > message.txt
+  PATH="$HOOK_PY_REPO/fake-bin:/c/Windows/System32" .git/hooks/prepare-commit-msg message.txt
+  grep -q '^AI-Usage: heavy$' message.txt
+  grep -q '^Tested: pass$' message.txt
+)
+expect "无效 python3 后继续使用可运行 python" 0 $?
 
 echo "============================================"
 echo " 通过 $PASS / 失败 $FAIL"

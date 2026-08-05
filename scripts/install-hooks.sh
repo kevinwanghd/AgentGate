@@ -16,7 +16,7 @@ if [[ -z "$REPO_ROOT" ]]; then
   exit 1
 fi
 
-HOOK_DIR="${REPO_ROOT}/.git/hooks"
+HOOK_DIR="$(git rev-parse --git-path hooks)"
 HOOK_FILE="${HOOK_DIR}/prepare-commit-msg"
 PREVIOUS_HOOK="${HOOK_FILE}.agentgate-previous"
 mkdir -p "$HOOK_DIR"
@@ -28,9 +28,12 @@ if [[ -f "$HOOK_FILE" ]] && ! grep -q "governance:ai-usage" "$HOOK_FILE" 2>/dev/
 fi
 
 cat > "$HOOK_FILE" <<'HOOK'
-#!/usr/bin/env bash
+#!/bin/sh
 # governance:ai-usage — 自动把 AI-Usage trailer 写入 commit message
 # 由 governance/scripts/install-hooks.sh 生成, 勿手改。
+PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+export PATH
+
 COMMIT_MSG_FILE="$1"
 COMMIT_SOURCE="${2:-}"
 
@@ -51,7 +54,14 @@ AI_SCRIPT="${REPO_ROOT}/governance/scripts/collect_ai_usage.py"
 TEST_SCRIPT="${REPO_ROOT}/governance/scripts/check_tested.py"
 [ -f "$TEST_SCRIPT" ] || TEST_SCRIPT="${REPO_ROOT}/scripts/check_tested.py"
 
-PY="$(command -v python3 || command -v python || true)"
+PY=""
+for CANDIDATE in python python3; do
+  CANDIDATE_PATH="$(command -v "$CANDIDATE" 2>/dev/null || true)"
+  if [ -n "$CANDIDATE_PATH" ] && "$CANDIDATE_PATH" -c 'raise SystemExit(0)' >/dev/null 2>&1; then
+    PY="$CANDIDATE_PATH"
+    break
+  fi
+done
 [ -n "$PY" ] || exit 0
 
 # 1. AI-Usage trailer (若尚未存在)

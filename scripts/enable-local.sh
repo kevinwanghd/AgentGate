@@ -63,8 +63,11 @@ if [[ -f "$HOOK_FILE" ]] && ! grep -q "agentgate:local" "$HOOK_FILE" 2>/dev/null
 fi
 
 cat > "$HOOK_FILE" <<HOOK
-#!/usr/bin/env bash
+#!/bin/sh
 # agentgate:local — 提交时自动写 AI-Usage / Tested trailer (中心化缓存脚本)
+PATH="/usr/local/bin:/usr/bin:/bin:\$PATH"
+export PATH
+
 COMMIT_MSG_FILE="\$1"; COMMIT_SOURCE="\${2:-}"
 LEGACY_HOOK="\${0}.agentgate-previous"
 if [ -x "\$LEGACY_HOOK" ]; then
@@ -72,7 +75,14 @@ if [ -x "\$LEGACY_HOOK" ]; then
 fi
 case "\$COMMIT_SOURCE" in merge|squash) exit 0 ;; esac
 AG="${AGENTGATE_HOME}/scripts"
-PY="\$(command -v python3 || command -v python || true)"
+PY=""
+for CANDIDATE in python python3; do
+  CANDIDATE_PATH="\$(command -v "\$CANDIDATE" 2>/dev/null || true)"
+  if [ -n "\$CANDIDATE_PATH" ] && "\$CANDIDATE_PATH" -c 'raise SystemExit(0)' >/dev/null 2>&1; then
+    PY="\$CANDIDATE_PATH"
+    break
+  fi
+done
 [ -n "\$PY" ] || exit 0
 if [ -f "\$AG/collect_ai_usage.py" ] && ! grep -qi '^AI-Usage:' "\$COMMIT_MSG_FILE"; then
   T="\$("\$PY" "\$AG/collect_ai_usage.py" --staged --trailer-only 2>/dev/null || true)"

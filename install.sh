@@ -551,7 +551,7 @@ log "安装语言验证 profile -> governance/profiles/"
 fetch_or_local "profiles/flutter-mobile.yml" | write_file "governance/profiles/flutter-mobile.yml"
 
 # 自动安装 AI-Usage 采集 git hook (提交时自动写 trailer, 无需人工填)
-if [[ -d "${TARGET_DIR}/.git" ]]; then
+if git -C "$TARGET_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   log "安装 AI-Usage 自动采集 git hook"
   ( cd "$TARGET_DIR" && bash governance/scripts/install-hooks.sh ) || \
     warn "git hook 安装失败, 可稍后手动运行 bash governance/scripts/install-hooks.sh"
