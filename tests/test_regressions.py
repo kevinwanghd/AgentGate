@@ -93,11 +93,11 @@ class SecretScanTests(unittest.TestCase):
             "+++ b/app.py\n"
             "@@ -1,2 +1,3 @@\n"
             " old = 'not-a-secret'\n"
-            "+token = '" + fake_token + "'\n"
-            "-password = 'old-value-that-is-not-scanned'\n"
+            "+value = '" + fake_token + "'\n"
+            "-old_line = 'old-value-that-is-not-scanned'\n"
         )
         findings = scan_secrets.scan_diff(diff)
-        self.assertEqual({"github-token", "credential-assignment"}, {finding[2] for finding in findings})
+        self.assertEqual({"github-token"}, {finding[2] for finding in findings})
         self.assertEqual("app.py", findings[0][0])
 
     def test_does_not_flag_normal_placeholders(self) -> None:

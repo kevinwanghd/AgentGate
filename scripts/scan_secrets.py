@@ -24,7 +24,7 @@ _PATTERNS = (
     (
         "credential-assignment",
         re.compile(
-            r"(?i)\b(?:api[_-]?key|client[_-]?secret|password|passwd|private[_-]?key|secret|token)"
+            r"(?i)(?:^|[\s;({])(?:api[_-]?key|client[_-]?secret|password|passwd|private[_-]?key|secret|token)"
             r"\s*[:=]\s*[\"'][^\"'\r\n]{12,}[\"']"
         ),
     ),
