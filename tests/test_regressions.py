@@ -26,6 +26,7 @@ agentgate = importlib.import_module("agentgate")
 gitlab_mr_compat = importlib.import_module("gitlab_mr_compat")
 risk_merge_decision = importlib.import_module("risk_merge_decision")
 scan_risks = importlib.import_module("scan_risks")
+scan_secrets = importlib.import_module("scan_secrets")
 validate_mr = importlib.import_module("validate_mr")
 gate_decision = importlib.import_module("gate_decision")
 gitlab_controller = importlib.import_module("gitlab_controller")
@@ -81,6 +82,38 @@ class ConfigFailureTests(unittest.TestCase):
                 self.assertEqual(2, scan_risks.main())
         finally:
             os.unlink(diff_path)
+
+
+class SecretScanTests(unittest.TestCase):
+    def test_scans_only_added_lines_for_high_confidence_secrets(self) -> None:
+        fake_token = "gh" + "p_" + "abcdefghijklmnopqrstuvwxyz123456"
+        diff = (
+            "diff --git a/app.py b/app.py\n"
+            "--- a/app.py\n"
+            "+++ b/app.py\n"
+            "@@ -1,2 +1,3 @@\n"
+            " old = 'not-a-secret'\n"
+            "+token = '" + fake_token + "'\n"
+            "-password = 'old-value-that-is-not-scanned'\n"
+        )
+        findings = scan_secrets.scan_diff(diff)
+        self.assertEqual({"github-token", "credential-assignment"}, {finding[2] for finding in findings})
+        self.assertEqual("app.py", findings[0][0])
+
+    def test_does_not_flag_normal_placeholders(self) -> None:
+        diff = (
+            "+++ b/config.py\n"
+            "@@ -0,0 +1 @@\n"
+            "+token = os.environ.get('SERVICE_TOKEN')\n"
+        )
+        self.assertEqual([], scan_secrets.scan_diff(diff))
+
+    def test_github_workflows_use_bundled_scanner_without_install_actions(self) -> None:
+        for relative in (".github/workflows/governance.yml", ".github/workflows/agentgate.yml"):
+            workflow = (ROOT / relative).read_text(encoding="utf-8")
+            self.assertIn("scan_secrets.py", workflow)
+            self.assertNotIn("gitleaks", workflow)
+            self.assertNotRegex(workflow, r"(?i)\b(?:pip|npm|yarn|pnpm)\s+(?:install|ci)\b")
 
     def test_invalid_custom_regex_is_skipped_in_soft_mode(self) -> None:
         cfg = json.loads(json.dumps(scan_risks.DEFAULT_CONFIG))
@@ -2809,7 +2842,7 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
     def test_gitlab_template_uses_prebuilt_images_and_legacy_syntax(self) -> None:
         template = (ROOT / "ci" / "governance-ci.yml").read_text(encoding="utf-8")
         self.assertIn("GOVERNANCE_PY_IMAGE", template)
-        self.assertIn("GOVERNANCE_SECRET_IMAGE", template)
+        self.assertIn("GOVERNANCE_PY_IMAGE", template)
         self.assertIn("governance:flutter-test:", template)
         self.assertIn("git --version", template)
         self.assertIn("python -c \"import yaml; print('pyyaml ok')\"", template)
@@ -2904,7 +2937,7 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
             snippet = target / "governance" / "ci-snippet.yml"
             snippet.parent.mkdir(parents=True)
             snippet.write_text(
-                'gitleaks detect --log-opts="origin/${TB}..HEAD"\n',
+                'python governance/scripts/scan_secrets.py --diff-base "origin/${TB}"\n',
                 encoding="utf-8",
             )
             errors: list[str] = []
@@ -2938,7 +2971,7 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
         validate_yaml = (ROOT / "scripts" / "validate_yaml.py").read_text(encoding="utf-8")
         self.assertIn("validate_lessons.py", selftest)
         self.assertIn("validate hard lessons", workflow)
-        self.assertIn("python scripts/validate_lessons.py --root .", workflow)
+        self.assertIn("python3 scripts/validate_lessons.py --root .", workflow)
         self.assertIn('"lessons/"', validate_yaml)
         self.assertIn('"governance/lessons/"', validate_yaml)
 

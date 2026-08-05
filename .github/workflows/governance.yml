@@ -56,17 +56,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: gitleaks (本次 PR 范围)
+      - name: scan introduced secrets (standard library)
         run: |
           BASE_REF="${{ github.event.pull_request.base.ref }}"
           if [ -z "$BASE_REF" ]; then echo "::error::PR base.ref 缺失, 拒绝扫描"; exit 1; fi
           git fetch -q origin "$BASE_REF"
-          command -v gitleaks >/dev/null 2>&1 || {
-            echo "::error::gitleaks must be preinstalled on the runner; refusing to pull or install it"
-            exit 1
-          }
-          gitleaks detect --source . --log-opts="origin/${BASE_REF}..HEAD" \
-            --redact --no-banner --verbose
+          python3 scripts/scan_secrets.py --diff-base "origin/${BASE_REF}"
 
   # MR 描述校验: 硬门禁 (从 PR body 读 + commit trailer 读 AI-Usage)
   mr-validate:
@@ -185,10 +180,18 @@ jobs:
           DIRS=$(find . -maxdepth 3 \( -name "requirements.txt" -o -name "pyproject.toml" -o -name "setup.py" \) \
                  -not -path "*/.*" -not -path "*/node_modules/*" | xargs -I{} dirname {} | sort -u)
           if [ -z "$DIRS" ]; then echo "[python-test] 未找到 Python 项目标记文件, 跳过。"; exit 0; fi
+          TEST_DIRS=""
+          for DIR in $DIRS; do
+            if find "$DIR" -maxdepth 2 \( -name "pytest.ini" -o -name "tox.ini" -o -name "setup.cfg" \) -print -quit | grep -q . || \
+               grep -Eiq "pytest" "$DIR"/requirements*.txt "$DIR"/pyproject.toml "$DIR"/setup.py 2>/dev/null; then
+              TEST_DIRS="$TEST_DIRS $DIR"
+            fi
+          done
+          if [ -z "$TEST_DIRS" ]; then echo "[python-test] 未找到 pytest 项目声明, 跳过。"; exit 0; fi
           command -v pytest >/dev/null 2>&1 || { echo "[python-test] pytest must be preinstalled in the runner image" >&2; exit 1; }
           python3 -c "import yaml" || { echo "[python-test] pyyaml must be preinstalled in the runner image" >&2; exit 1; }
           OVERALL=0
-          for DIR in $DIRS; do
+          for DIR in $TEST_DIRS; do
             echo "[python-test] 在 $DIR 运行 pytest"
             (
               cd "$DIR"

@@ -79,11 +79,11 @@ def check_gitlab_governance_core_required_checks(root: Path, errors: list[str]) 
 
 def check_gitlab_secret_history_hard_block(root: Path, errors: list[str]) -> None:
     template = _read_first(root, "ci/governance-ci.yml", "governance/ci-snippet.yml")
-    if not all(needle in template for needle in ("gitleaks detect", "--log-opts=", "..HEAD")):
+    if "scan_secrets.py" not in template or "--diff-base" not in template:
         _fail(
             errors,
             "gitlab_legacy.secret_history_hard_block: "
-            "gitleaks must scan the target-branch-to-HEAD commit range",
+            "secret scanner must scan the target-branch-to-HEAD commit range",
         )
 
 

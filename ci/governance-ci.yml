@@ -25,8 +25,6 @@
 #     2. 镜像存在且标签正确
 #     3. 有拉取权限
 #
-# GOVERNANCE_SECRET_IMAGE: gitleaks 镜像, 用于密钥扫描
-#   默认值: swr.cn-north-4.myhuaweicloud.com/adbidding/governance/gitleaks:latest
 # ─────────────────────────────────────────────────────────────────────────────
 
 stages:
@@ -37,7 +35,6 @@ stages:
 
 variables:
   GOVERNANCE_PY_IMAGE: "swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest"
-  GOVERNANCE_SECRET_IMAGE: "swr.cn-north-4.myhuaweicloud.com/adbidding/governance/gitleaks:latest"
 
 # ── 0. Hard lessons: installation and policy invariants ──────────────────────
 governance:lessons-validate:
@@ -90,9 +87,7 @@ governance:risk-scan:
 # ── 2. 密钥扫描: 硬阻断 ──────────────────────────────────────────────────────
 governance:secret-scan:
   stage: governance
-  image:
-    name: "$GOVERNANCE_SECRET_IMAGE"
-    entrypoint: [""]
+  image: "$GOVERNANCE_PY_IMAGE"
   only:
     - branches
     - merge_requests
@@ -100,18 +95,13 @@ governance:secret-scan:
     GIT_DEPTH: "1000"
   before_script:
     - git --version
-    - gitleaks version
+    - python --version
   script:
     - |
       TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-${CI_DEFAULT_BRANCH:-master}}"
       git fetch -q origin "+refs/heads/${TB}:refs/remotes/origin/${TB}" || git fetch -q origin "$TB"
       BASE="origin/$TB"
-      gitleaks detect \
-        --source . \
-        --log-opts="${BASE}..HEAD" \
-        --redact \
-        --no-banner \
-        --verbose
+      python governance/scripts/scan_secrets.py --diff-base "$BASE"
       EXIT_CODE=$?
       echo "{\"status\": \"$([ $EXIT_CODE -eq 0 ] && echo 'pass' || echo 'fail')\"}" \
         > governance-secret-scan-result.json

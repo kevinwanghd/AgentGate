@@ -518,6 +518,7 @@ fetch_or_local "scripts/record_test_run.py" | write_file "governance/scripts/rec
 fetch_or_local "scripts/check_tested.py"    | write_file "governance/scripts/check_tested.py"
 fetch_or_local "scripts/gate_decision.py"   | write_file "governance/scripts/gate_decision.py"
 fetch_or_local "scripts/validate_lessons.py" | write_file "governance/scripts/validate_lessons.py"
+fetch_or_local "scripts/scan_secrets.py" | write_file "governance/scripts/scan_secrets.py"
 fetch_or_local "scripts/gitlab_controller.py" | write_file "governance/scripts/gitlab_controller.py"
 fetch_or_local "scripts/gitlab_mr_compat.py" | write_file "governance/scripts/gitlab_mr_compat.py"
 fetch_or_local "scripts/evidence_bundle.py" | write_file "governance/scripts/evidence_bundle.py"
