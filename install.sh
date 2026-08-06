@@ -64,31 +64,15 @@ write_file() {
   ok "写入 $rel"
 }
 
-upsert_governance_section() {
+append_governance_section() {
   local rel="$1"
   local source_rel="$2"
   local abs="${TARGET_DIR}/${rel}"
   mkdir -p "$(dirname "$abs")"
   if [[ -e "$abs" ]]; then
     if grep -q '<!-- governance-v1-begin -->' "$abs"; then
-      local section_tmp output_tmp
-      section_tmp="$(mktemp)"
-      output_tmp="$(mktemp)"
-      fetch_or_local "$source_rel" > "$section_tmp"
-      awk -v section="$section_tmp" '
-        /<!-- governance-v1-begin -->/ {
-          print
-          while ((getline line < section) > 0) print line
-          close(section)
-          replacing=1
-          next
-        }
-        /<!-- governance-v1-end -->/ && replacing { replacing=0; print; next }
-        !replacing { print }
-      ' "$abs" > "$output_tmp"
-      cat "$output_tmp" > "$abs"
-      rm -f "$section_tmp" "$output_tmp"
-      ok "updated existing governance section in $rel"
+      ok "$rel already contains an AgentGate section; leaving the file unchanged"
+      return 0
     else
       warn "$rel exists; appending governance section instead of overwriting repository instructions"
       {
@@ -254,27 +238,27 @@ esac
 
 # Claude Code / Kiro
 if [[ "$AGENTS" == "all" || "$AGENTS" == "claude" ]]; then
-  upsert_governance_section "CLAUDE.md" "agent-instructions/CLAUDE.md"
+  append_governance_section "CLAUDE.md" "agent-instructions/CLAUDE.md"
 fi
 
 # GitHub Copilot
 if [[ "$AGENTS" == "all" || "$AGENTS" == "copilot" ]]; then
-  upsert_governance_section ".github/copilot-instructions.md" "agent-instructions/copilot-instructions.md"
+  append_governance_section ".github/copilot-instructions.md" "agent-instructions/copilot-instructions.md"
 fi
 
 # Cursor
 if [[ "$AGENTS" == "all" || "$AGENTS" == "cursor" ]]; then
-  upsert_governance_section ".cursor/rules/governance.mdc" "agent-instructions/cursor-rules.mdc"
+  append_governance_section ".cursor/rules/governance.mdc" "agent-instructions/cursor-rules.mdc"
 fi
 
 # Hermes Agent
 if [[ "$AGENTS" == "all" || "$AGENTS" == "hermes" ]]; then
-  upsert_governance_section ".hermes.md" "agent-instructions/hermes-instructions.md"
+  append_governance_section ".hermes.md" "agent-instructions/hermes-instructions.md"
 fi
 
 # OpenAI Codex / generic agent fallback
 if [[ "$AGENTS" == "all" || "$AGENTS" == "codex" ]]; then
-  upsert_governance_section "AGENTS.md" "agent-instructions/AGENTS.md"
+  append_governance_section "AGENTS.md" "agent-instructions/AGENTS.md"
 fi
 
 # ---------- 3. governance.config.yml ----------
@@ -534,6 +518,7 @@ fetch_or_local "scripts/record_test_run.py" | write_file "governance/scripts/rec
 fetch_or_local "scripts/check_tested.py"    | write_file "governance/scripts/check_tested.py"
 fetch_or_local "scripts/gate_decision.py"   | write_file "governance/scripts/gate_decision.py"
 fetch_or_local "scripts/validate_lessons.py" | write_file "governance/scripts/validate_lessons.py"
+fetch_or_local "scripts/scan_secrets.py" | write_file "governance/scripts/scan_secrets.py"
 fetch_or_local "scripts/gitlab_controller.py" | write_file "governance/scripts/gitlab_controller.py"
 fetch_or_local "scripts/gitlab_mr_compat.py" | write_file "governance/scripts/gitlab_mr_compat.py"
 fetch_or_local "scripts/evidence_bundle.py" | write_file "governance/scripts/evidence_bundle.py"
@@ -567,7 +552,7 @@ log "安装语言验证 profile -> governance/profiles/"
 fetch_or_local "profiles/flutter-mobile.yml" | write_file "governance/profiles/flutter-mobile.yml"
 
 # 自动安装 AI-Usage 采集 git hook (提交时自动写 trailer, 无需人工填)
-if [[ -d "${TARGET_DIR}/.git" ]]; then
+if git -C "$TARGET_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   log "安装 AI-Usage 自动采集 git hook"
   ( cd "$TARGET_DIR" && bash governance/scripts/install-hooks.sh ) || \
     warn "git hook 安装失败, 可稍后手动运行 bash governance/scripts/install-hooks.sh"

@@ -24,14 +24,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - run: pip install -q pyyaml==6.0.3
+      - name: Verify preinstalled Python dependencies
+        run: python3 -c "import yaml; print('pyyaml ok')"
       - name: validate YAML config files
-        run: python scripts/validate_yaml.py --ci
+        run: python3 scripts/validate_yaml.py --ci
       - name: validate hard lessons
-        run: python scripts/validate_lessons.py --root .
+        run: python3 scripts/validate_lessons.py --root .
 
   # 风险扫描: 硬阻断 (命中风险模式且缺合法注解 → 拒合)
   risk-scan:
@@ -40,10 +38,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0          # 需完整历史以算 diff
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - run: pip install -q pyyaml==6.0.3
+      - name: Verify preinstalled Python dependencies
+        run: python3 -c "import yaml; print('pyyaml ok')"
       - name: scan risks
         run: |
           BASE_REF="${{ github.event.pull_request.base.ref }}"
@@ -51,7 +47,7 @@ jobs:
           # 否则 pull/merge 进来的他人改动会被误算进本次 diff。三点 diff 自动取 merge-base。
           if [ -z "$BASE_REF" ]; then echo "::error::PR base.ref 缺失, 拒绝扫描 (不允许全量回退)"; exit 1; fi
           git fetch -q origin "$BASE_REF"
-          python scripts/scan_risks.py --diff-base "origin/$BASE_REF" --config governance.config.yml
+          python3 scripts/scan_risks.py --diff-base "origin/$BASE_REF" --config governance.config.yml
 
   # 密钥扫描: 硬阻断
   secret-scan:
@@ -60,20 +56,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: gitleaks (本次 PR 范围)
+      - name: scan introduced secrets (standard library)
         run: |
           BASE_REF="${{ github.event.pull_request.base.ref }}"
           if [ -z "$BASE_REF" ]; then echo "::error::PR base.ref 缺失, 拒绝扫描"; exit 1; fi
           git fetch -q origin "$BASE_REF"
-          for attempt in 1 2 3; do
-            docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.30.1 \
-              detect --source /repo --log-opts="origin/${BASE_REF}..HEAD" \
-              --redact --no-banner --verbose && exit 0
-            rc=$?
-            if [ "$attempt" -eq 3 ]; then exit "$rc"; fi
-            echo "gitleaks docker run failed with exit $rc; retrying ($attempt/3)..."
-            sleep $((attempt * 10))
-          done
+          python3 scripts/scan_secrets.py --diff-base "origin/${BASE_REF}"
 
   # MR 描述校验: 硬门禁 (从 PR body 读 + commit trailer 读 AI-Usage)
   mr-validate:
@@ -83,10 +71,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - run: pip install -q pyyaml==6.0.3
+      - name: Verify preinstalled Python dependencies
+        run: python3 -c "import yaml; print('pyyaml ok')"
       - name: validate PR description
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
@@ -104,10 +90,10 @@ jobs:
             echo "" >> /tmp/pr_body.txt
             echo "## 自测确认" >> /tmp/pr_body.txt
             echo "[ ] 已完成自测" >> /tmp/pr_body.txt
-            python scripts/validate_mr.py --diff-base "origin/$BASE_REF" --config governance.config.yml --file /tmp/pr_body.txt
+            python3 scripts/validate_mr.py --diff-base "origin/$BASE_REF" --config governance.config.yml --file /tmp/pr_body.txt
           else
             printf '%s' "$PR_BODY" \
-              | python scripts/validate_mr.py --diff-base "origin/$BASE_REF" --config governance.config.yml
+              | python3 scripts/validate_mr.py --diff-base "origin/$BASE_REF" --config governance.config.yml
           fi
 
   # 测试痕迹检测: 硬门禁 (失败测试记录无条件硬拦); 读 commit 的 Tested: trailer
@@ -117,16 +103,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - run: pip install -q pyyaml==6.0.3
+      - name: Verify preinstalled Python dependencies
+        run: python3 -c "import yaml; print('pyyaml ok')"
       - name: check tested
         run: |
           BASE_REF="${{ github.event.pull_request.base.ref }}"
           if [ -z "$BASE_REF" ]; then echo "::error::PR base.ref 缺失, 拒绝扫描"; exit 1; fi
           git fetch -q origin "$BASE_REF"
-          python scripts/check_tested.py --diff-base "origin/$BASE_REF" --config governance.config.yml
+          python3 scripts/check_tested.py --diff-base "origin/$BASE_REF" --config governance.config.yml
 
   # Go 受影响包测试 (含反向依赖一跳扩展)
   # 跳过条件: 仓库无 go.mod (非 Go 仓库), 或 vars.GOVERNANCE_SKIP_GO_TEST == "true"
@@ -139,10 +123,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.22"
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - run: pip install -q pyyaml==6.0.3
+      - name: Verify preinstalled Python dependencies
+        run: python3 -c "import yaml; print('pyyaml ok')"
       - name: run affected go tests
         env:
           GOVERNANCE_SKIP_GO_TEST: ${{ vars.GOVERNANCE_SKIP_GO_TEST }}
@@ -159,7 +141,7 @@ jobs:
           BASE_REF="${{ github.event.pull_request.base.ref }}"
           if [ -z "$BASE_REF" ]; then echo "::error::PR base.ref 缺失, 拒绝扫描"; exit 1; fi
           git fetch -q origin "$BASE_REF"
-          python scripts/run_affected_tests.py \
+          python3 scripts/run_affected_tests.py \
             --diff-base "origin/$BASE_REF" \
             --timeout "${GOVERNANCE_GO_TEST_TIMEOUT:-120}"
 
@@ -181,7 +163,7 @@ jobs:
           OVERALL=0
           for DIR in $DIRS; do
             echo "[flutter-test] 在 $DIR 运行 flutter test"
-            (cd "$DIR" && flutter pub get && flutter test) || OVERALL=1
+            (cd "$DIR" && flutter test) || OVERALL=1
           done
           exit $OVERALL
 
@@ -190,9 +172,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
       - name: run python tests
         env:
           GOVERNANCE_SKIP_PYTHON_TEST: ${{ vars.GOVERNANCE_SKIP_PYTHON_TEST }}
@@ -201,15 +180,22 @@ jobs:
           DIRS=$(find . -maxdepth 3 \( -name "requirements.txt" -o -name "pyproject.toml" -o -name "setup.py" \) \
                  -not -path "*/.*" -not -path "*/node_modules/*" | xargs -I{} dirname {} | sort -u)
           if [ -z "$DIRS" ]; then echo "[python-test] 未找到 Python 项目标记文件, 跳过。"; exit 0; fi
-          pip install -q pytest pyyaml
-          OVERALL=0
+          TEST_DIRS=""
           for DIR in $DIRS; do
+            if find "$DIR" -maxdepth 2 \( -name "pytest.ini" -o -name "tox.ini" -o -name "setup.cfg" \) -print -quit | grep -q . || \
+               grep -Eiq "pytest" "$DIR"/requirements*.txt "$DIR"/pyproject.toml "$DIR"/setup.py 2>/dev/null; then
+              TEST_DIRS="$TEST_DIRS $DIR"
+            fi
+          done
+          if [ -z "$TEST_DIRS" ]; then echo "[python-test] 未找到 pytest 项目声明, 跳过。"; exit 0; fi
+          command -v pytest >/dev/null 2>&1 || { echo "[python-test] pytest must be preinstalled in the runner image" >&2; exit 1; }
+          python3 -c "import yaml" || { echo "[python-test] pyyaml must be preinstalled in the runner image" >&2; exit 1; }
+          OVERALL=0
+          for DIR in $TEST_DIRS; do
             echo "[python-test] 在 $DIR 运行 pytest"
             (
               cd "$DIR"
-              [ -f requirements.txt ] && pip install -q -r requirements.txt
-              [ -f pyproject.toml ] && pip install -q -e ".[test]" 2>/dev/null || true
-              python -m pytest --tb=short -q
+              python3 -m pytest --tb=short -q
             ) || OVERALL=1
           done
           exit $OVERALL
@@ -235,7 +221,10 @@ jobs:
             echo "[node-test] 在 $DIR 运行 npm test"
             (
               cd "$DIR"
-              npm ci --prefer-offline --no-audit 2>/dev/null || npm install --no-audit
+              if [ -f package-lock.json ] && [ ! -d node_modules ]; then
+                echo "[node-test] node_modules must be preinstalled in the runner image" >&2
+                exit 1
+              fi
               npm test
             ) || OVERALL=1
           done
@@ -330,10 +319,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - run: pip install -q pyyaml==6.0.3
+      - name: Verify preinstalled Python dependencies
+        run: python3 -c "import yaml; print('pyyaml ok')"
       - name: run selftest
         run: bash scripts/selftest.sh
 
@@ -352,10 +339,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - run: pip install -q pyyaml==6.0.3
+      - name: Verify preinstalled Python dependencies
+        run: python3 -c "import yaml; print('pyyaml ok')"
       - name: compute GateResult v2
         id: compute
         env:
@@ -408,7 +393,7 @@ jobs:
           }, ensure_ascii=False))
           PY
           set +e
-          python scripts/gate_decision.py \
+          python3 scripts/gate_decision.py \
             --evidence /tmp/agentgate-evidence.json \
             --source-sha "$SOURCE_SHA" \
             --target-sha "$BASE_SHA" \
@@ -422,7 +407,7 @@ jobs:
             echo "GateResult 计算错误，拒绝继续。"
             exit "$DECISION_EXIT"
           fi
-          MERGE_ACTION="$(python -c 'import json; print(json.load(open("gate-result.json", encoding="utf-8"))["merge_action"])')"
+          MERGE_ACTION="$(python3 -c 'import json; print(json.load(open("gate-result.json", encoding="utf-8"))["merge_action"])')"
           echo "merge_action=$MERGE_ACTION" >> "$GITHUB_OUTPUT"
           echo "GateResult:"; cat gate-result.json
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """测试 CI 平台兼容性：GitHub Actions vs GitLab CI"""
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -151,6 +152,64 @@ class CIPlatformCompatTests(unittest.TestCase):
         for rel in ("ci/governance-ci.yml", "gitlab/ci-snippet.yml"):
             content = (REPO_ROOT / rel).read_text(encoding="utf-8")
             self.assertIn("--pipeline-kind mr", content, rel)
+
+    def test_gitlab_policy_jobs_resolve_config_consistently_and_fail_closed(self):
+        """Installed policy lives at the repository root; CI must not silently use defaults."""
+        jobs = (
+            "governance:risk-scan",
+            "governance:mr-validate",
+            "governance:mr-validate-compat",
+            "governance:test-check",
+            "governance:gate-decision",
+        )
+        for rel in ("ci/governance-ci.yml", "gitlab/ci-snippet.yml"):
+            content = (REPO_ROOT / rel).read_text(encoding="utf-8")
+            self.assertNotIn(
+                '${GOVERNANCE_CONFIG_PATH:-governance/governance.config.yml}',
+                content,
+                rel,
+            )
+            for job in jobs:
+                match = re.search(
+                    rf"(?ms)^{re.escape(job)}:\n(?P<body>.*?)(?=^[^ #\n][^\n]*:\s*$|\Z)",
+                    content,
+                )
+                self.assertIsNotNone(match, f"missing {job} in {rel}")
+                body = match.group("body")
+                self.assertIn(
+                    'CONFIG_PATH="${GOVERNANCE_CONFIG_PATH:-governance.config.yml}"',
+                    body,
+                    f"{job} in {rel}",
+                )
+                self.assertIn(
+                    '[ -f "$CONFIG_PATH" ] || CONFIG_PATH="governance/governance.config.yml"',
+                    body,
+                    f"{job} in {rel}",
+                )
+                self.assertIn(
+                    '[ -f "$CONFIG_PATH" ] || {',
+                    body,
+                    f"{job} in {rel} must fail closed when policy is absent",
+                )
+
+    def test_gitlab_templates_enforce_hard_lessons(self):
+        """GitLab consumers must execute hard lessons instead of only shipping the validator."""
+        for rel in ("ci/governance-ci.yml", "gitlab/ci-snippet.yml"):
+            content = (REPO_ROOT / rel).read_text(encoding="utf-8")
+            match = re.search(
+                r"(?ms)^governance:lessons-validate:\n(?P<body>.*?)(?=^[^ #\n][^\n]*:\s*$|\Z)",
+                content,
+            )
+            self.assertIsNotNone(match, f"missing hard-lesson job in {rel}")
+            body = match.group("body")
+            self.assertIn("python governance/scripts/validate_lessons.py --root .", body, rel)
+            self.assertIn("allow_failure: false", body, rel)
+            if rel == "ci/governance-ci.yml":
+                self.assertIn("- merge_requests", body, rel)
+                self.assertIn("- branches", body, rel)
+            else:
+                self.assertIn('$CI_PIPELINE_SOURCE == "merge_request_event"', body, rel)
+                self.assertIn("$CI_COMMIT_BRANCH", body, rel)
 
     def test_auto_merge_missing_token_warns_and_skips_by_default(self):
         """缺 GOVERNANCE_MERGE_BOT_TOKEN 时自动合并 job 默认告警跳过，硬失败需显式开启。"""

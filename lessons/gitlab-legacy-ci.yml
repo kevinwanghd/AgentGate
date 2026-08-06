@@ -49,3 +49,14 @@ lessons:
     risk: Removing the secret only in a later commit leaves exposed credentials in reviewable branch history.
     fix: Rotate the exposed credential and remove the leaked commit from the MR range; do not downgrade the finding to advisory.
     regression: secret findings remain hard blockers even when the final file content no longer contains the value.
+
+  - id: gitlab_legacy.actual_mr_description_authoritative
+    enforcement: hard
+    applies_to:
+      - scripts/gitlab_mr_compat.py
+      - governance:mr-validate-compat
+      - .agentgate/mr-description.md
+    trigger: A branch pipeline validates a repository manifest without reading the actual open GitLab MR description.
+    risk: An empty or noncompliant GitLab MR description can pass by reusing a compliant or stale repository manifest.
+    fix: Require the GitLab-provided MR description in MR pipelines and an authoritative GitLab API lookup in legacy branch pipelines. Fail closed when the actual description cannot be read. A repository manifest may only be checked for freshness and equality with the actual description; it must never substitute for it.
+    regression: Tests must prove that an empty actual MR description fails even when a valid manifest exists, API lookup failure cannot be bypassed, and no successful result reports actual_mr_verified=false.
