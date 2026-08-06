@@ -357,6 +357,15 @@ EOF
 expect "collect 识别 .sh 脚本文件" 0 $?
 ( cd ai_dir && git reset -q HEAD deploy.sh; rm -f deploy.sh .governance/ai-evidence.jsonl )
 
+# .md 等文档类文件也应计入 AI-Usage (改 AGENTS.md/README 等文档的 PR 不被漏统计)
+( cd ai_dir && printf '# docs\n' > DOCS.md && git add DOCS.md )
+cat > ai_dir/.governance/ai-evidence.jsonl <<EOF
+{"ts":"${TODAY}T10:00:00Z","tool":"claude-code","model":"m","file":"DOCS.md","added":1,"removed":0}
+EOF
+( cd ai_dir && python3 "$COLLECT" --staged --trailer-only 2>/dev/null ) | grep -qE "AI-Usage: (light|heavy|medium)"
+expect "collect 识别 .md 文档文件" 0 $?
+( cd ai_dir && git reset -q HEAD DOCS.md; rm -f DOCS.md .governance/ai-evidence.jsonl )
+
 # == validate_mr.py 从 commit trailer 读 AI-Usage ==
 echo
 echo "== validate_mr.py × commit trailer =="

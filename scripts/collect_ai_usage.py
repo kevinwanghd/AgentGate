@@ -56,8 +56,8 @@ THRESHOLDS = [
     (0.0, "light"),
 ]
 
-# 统计的文件: 源码 + 脚本/配置/IaC 类 (这些也是 AI 实际产出, 改 CI/脚本/配置的
-# 提交同样应计入 AI-Usage, 否则纯工具/CI 类 PR 盖不上 trailer 会被 mr-validate 拦)。
+# 统计的文件: 源码 + 脚本/配置/IaC + 文档 (这些也是 AI 实际产出, 改 CI/脚本/配置/
+# 文档的提交同样应计入 AI-Usage, 否则纯工具/CI/文档类 PR 盖不上 trailer 会被 mr-validate 拦)。
 SCAN_EXTENSIONS = {
     # 源码
     ".cs", ".js", ".ts", ".jsx", ".tsx", ".java", ".go",
@@ -67,6 +67,8 @@ SCAN_EXTENSIONS = {
     ".sh", ".bash", ".ps1",
     ".yml", ".yaml", ".toml", ".json", ".xml",
     ".tf", ".dockerfile",
+    # 文档
+    ".md", ".mdx",
 }
 
 
