@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import fnmatch
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -244,7 +245,7 @@ def main() -> int:
         _write(args.output, decision)
     except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
         print(f"[risk-merge-decision] ERROR: {exc}", file=sys.stderr)
-        return 2
+        return 2  # ERROR 语义，不是 WAITING_APPROVAL
     if decision["status"] == "PASS":
         return 0
     if decision["status"] == "WAITING_APPROVAL":

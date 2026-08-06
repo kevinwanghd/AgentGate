@@ -83,11 +83,11 @@ PROD_EXTENSIONS = {
     ".kt", ".rs", ".scala", ".swift", ".dart",
 }
 
-# 测试文件判定: 路径或文件名带这些标志
+# 测试文件判定: 路径或文件名带这些标志（收紧，避免误匹配 latest.py/contest.py）
 _TEST_PATH_RE = re.compile(
-    r'(^|/)(tests?|spec|__tests__)(/|$)'
-    r'|(\.tests?|\.spec|_test|test_)\.[a-z]+$'
-    r'|tests?\.[a-z]+$',
+    r'(^|/)(tests?|spec|__tests__)/'  # test/, spec/, __tests__/ 目录下
+    r'|(\.tests?|\.spec|_test|test_)\.[a-z]+$'  # 文件名含测试标志
+    r'|_tests?\.[a-z]+$',  # _test.py / _tests.py
     re.IGNORECASE,
 )
 
@@ -401,8 +401,8 @@ def check(diff_text: str, evidence: list[dict], cfg: dict,
         # A. 有全绿记录 + 本次改了测试文件 (双重信号)
         if green_runs and touched_test_file:
             continue
-        if not tc.get("accept_tested_trailer", True) and touched_test_file:
-            continue
+        # 注: accept_tested_trailer=false 时不再凭"碰了测试文件"无条件豁免
+        # 改动需配合有效证据(green_runs / trailer_pass / covers / risk:untested)
         # A'. CI 退路: commit Tested: trailer 标记 pass + 本次改了测试文件
         if trailer_pass and touched_test_file:
             continue

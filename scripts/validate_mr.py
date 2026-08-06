@@ -206,8 +206,10 @@ def detect_large_change(cfg: dict, diff_base: str | None) -> tuple[bool, list[st
             check=True, capture_output=True, text=True,
             encoding="utf-8", errors="replace",
         ).stdout
-    except Exception:
-        return (False, [])
+    except Exception as exc:
+        # git 失败时 fail-closed：报告错误并当作大变更，不静默放行 sensitive_paths
+        print(f"[validate-mr] WARN: detect_large_change git failed: {exc}", file=sys.stderr)
+        return (True, ["git_diff_failed_treated_as_large"])
 
     total = 0
     excluded = lc.get("excluded_paths", [])
@@ -449,8 +451,10 @@ def main() -> int:
                             total_lines += int(pts[0]) + int(pts[1])
                     except ValueError:
                         pass
-        except Exception:
-            total_lines = int(lc.get("line_threshold", 500))
+        except Exception as exc:
+            # git 失败时 fail-closed：报告错误，当作超过阈值，不静默跳过
+            print(f"[validate-mr] WARN: large_diff_summary git failed: {exc}", file=sys.stderr)
+            total_lines = int(lc.get("line_threshold", 500)) + 1
         _write_large_diff_summary(
             total_lines,
             int(lc.get("line_threshold", 500)),

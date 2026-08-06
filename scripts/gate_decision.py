@@ -172,14 +172,14 @@ def build_gate_result(
     if valid_approvals < required_approvals:
         reasons.append("approval_missing")
 
+    # 先计算 result（ERROR > FAIL > WAITING_APPROVAL > PASS），再决定 action
     checks_pass = not missing and not failed
     pass_result = checks_pass and not critical_paths and not is_direct_push_on_protected and valid_approvals >= required_approvals
-    enabled = bool(auto.get("enabled", True))
-    if not enabled:
-        reasons.append("auto_merge_disabled")
-    if not enabled:
-        result = "WAITING_APPROVAL"
-        action = "WAIT"
+
+    # 决定 result（与 auto_merge.enabled 无关）
+    if missing:
+        result = "ERROR"  # required check 缺失属基础设施错误
+        action = "BLOCK"
     elif is_direct_push_on_protected:
         # 受保护分支必须通过 MR 才能合并，直推流水线上禁止 bot 自动合并
         result = "FAIL"
@@ -190,7 +190,13 @@ def build_gate_result(
         action = "WAIT" if critical_paths or "approval_missing" in reasons else "BLOCK"
     else:
         result = "PASS"
-        action = "AUTO_MERGE"
+        # auto_merge.enabled 只影响 action，不影响 result
+        enabled = bool(auto.get("enabled", True))
+        if not enabled:
+            reasons.append("auto_merge_disabled")
+            action = "MANUAL_MERGE"
+        else:
+            action = "AUTO_MERGE"
 
     return {
         "schema_version": "v2",

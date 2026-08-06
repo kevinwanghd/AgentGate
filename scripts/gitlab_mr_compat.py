@@ -324,7 +324,10 @@ def resolve_description(
 def validate_description(
     text: str, config_path: str | None, diff_base: str | None
 ) -> list[str]:
-    cfg = validate_mr.load_config(config_path)
+    # 显式要求配置路径，不静默用 DEFAULT_CONFIG
+    if config_path is None or not os.path.isfile(config_path):
+        raise ValueError(f"config path required and must exist: {config_path}")
+    cfg = validate_mr.load_config(config_path, explicit=True)
     return validate_mr.validate(text, cfg, diff_base)
 
 

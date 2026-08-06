@@ -66,8 +66,9 @@ def read_diff(args: argparse.Namespace) -> str:
         return Path(args.diff_file).read_text(encoding="utf-8", errors="replace")
     if not args.diff_base:
         raise ValueError("one of --diff-base or --diff-file is required")
+    # 使用 commit range (..) 而非两点比较，确保中间提交的密钥也被扫描
     completed = subprocess.run(
-        ["git", "diff", "--no-ext-diff", "--unified=0", args.diff_base, "HEAD", "--"],
+        ["git", "log", "-p", "--no-merges", f"{args.diff_base}..HEAD", "--"],
         check=True,
         capture_output=True,
         text=True,

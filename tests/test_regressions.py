@@ -1768,13 +1768,24 @@ class PatternIncludesTests(unittest.TestCase):
         self.assertNotIn("sensitive-log", types)
 
     def test_pattern_includes_missing_file_is_skipped(self) -> None:
-        """不存在的 pattern_includes 路径不抛异常, 仅打印警告。"""
+        """不存在的 pattern_includes 路径在 soft 模式跳过，hard 模式报错。"""
+        # soft 模式：跳过并警告
         cfg = json.loads(json.dumps(self.cfg))
+        cfg["risk_annotations"]["enforcement"] = "soft"
         cfg["risk_annotations"]["pattern_includes"] = ["/nonexistent/rules.yml"]
         try:
             scan_risks._load_pattern_includes(cfg, None)
         except Exception as exc:
-            self.fail(f"不应抛异常: {exc}")
+            self.fail(f"soft 模式不应抛异常: {exc}")
+
+        # hard 模式：抛 ConfigError
+        cfg_hard = json.loads(json.dumps(self.cfg))
+        cfg_hard["risk_annotations"]["enforcement"] = "hard"
+        cfg_hard["risk_annotations"]["pattern_includes"] = ["/nonexistent/rules.yml"]
+        # 运行时导入 ConfigError
+        import governance_common
+        with self.assertRaises(governance_common.ConfigError):
+            scan_risks._load_pattern_includes(cfg_hard, None)
 
 
 class GoPatternHardeningTests(unittest.TestCase):
@@ -2425,7 +2436,7 @@ class GateDecisionTests(unittest.TestCase):
             config=cfg,
         )
         self.assertEqual(result["risk_level"], "medium")
-        self.assertEqual(result["result"], "FAIL")
+        self.assertEqual(result["result"], "ERROR")  # 缺失改为 ERROR
         self.assertIn("required_check_missing", result["blocking_reasons"])
 
     def test_protected_path_requires_human_approval(self) -> None:
@@ -2572,7 +2583,7 @@ class GateDecisionTests(unittest.TestCase):
             checks={"risk-scan": "pass"},  # go-test 完全缺失
             config=cfg,
         )
-        self.assertEqual(result["result"], "FAIL")
+        self.assertEqual(result["result"], "ERROR")  # 缺失改为 ERROR
         self.assertEqual(result["merge_action"], "BLOCK")
         self.assertIn("required_check_missing", result["blocking_reasons"])
 
@@ -2616,7 +2627,7 @@ class GateDecisionTests(unittest.TestCase):
             checks={"risk-scan": "pass"},  # Go 和 Flutter 的 job 都未触发
             config=cfg,
         )
-        self.assertEqual(result["result"], "FAIL")
+        self.assertEqual(result["result"], "ERROR")  # 缺失改为 ERROR
         self.assertEqual(result["merge_action"], "BLOCK")
         self.assertIn("required_check_missing", result["blocking_reasons"])
 
@@ -2624,7 +2635,12 @@ class GateDecisionTests(unittest.TestCase):
         result = gate_decision.build_gate_result(
             source_sha="head", target_sha="base", policy_sha="policy",
             changed_paths=["src/service.py"],
-            checks={"lint": "pass", "unit": "pass"},
+            checks={
+                "risk-scan": "pass",
+                "secret-scan": "pass",
+                "mr-validate": "pass",
+                "test-check": "pass",
+            },
             config=self.config,
             target_branch="release/v1.0.0",
             pipeline_kind="push",
@@ -2656,14 +2672,19 @@ class GateDecisionTests(unittest.TestCase):
             checks={"lint": "pass"},
             config=config,
         )
-        self.assertEqual(result["result"], "FAIL")
+        self.assertEqual(result["result"], "ERROR")  # 缺失改为 ERROR
         self.assertIn("required_check_missing", result["blocking_reasons"])
 
     def test_non_pass_check_status_is_blocking(self) -> None:
         result = gate_decision.build_gate_result(
             source_sha="head", target_sha="base", policy_sha="policy",
             changed_paths=["src/orders/service.py"],
-            checks={"lint": "queued", "unit": "pass"},
+            checks={
+                "risk-scan": "queued",
+                "secret-scan": "pass",
+                "mr-validate": "pass",
+                "test-check": "pass",
+            },
             config=self.config,
         )
         self.assertEqual(result["result"], "FAIL")
@@ -2675,11 +2696,17 @@ class GateDecisionTests(unittest.TestCase):
         result = gate_decision.build_gate_result(
             source_sha="head", target_sha="base", policy_sha="policy",
             changed_paths=["src/orders/service.py"],
-            checks={"lint": "pass", "unit": "pass"},
+            checks={
+                "risk-scan": "pass",
+                "secret-scan": "pass",
+                "mr-validate": "pass",
+                "test-check": "pass",
+            },
             config=config,
         )
-        self.assertEqual(result["result"], "WAITING_APPROVAL")
-        self.assertEqual(result["merge_action"], "WAIT")
+        # enabled=false 时 result 应为 PASS（检查都通过了），action 为 MANUAL_MERGE
+        self.assertEqual(result["result"], "PASS")
+        self.assertEqual(result["merge_action"], "MANUAL_MERGE")
         self.assertIn("auto_merge_disabled", result["blocking_reasons"])
 
     def test_cli_accepts_utf8_bom_evidence(self) -> None:
@@ -3047,6 +3074,117 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
         self.assertIn("scripts/risk_merge_decision.py", installer)
         self.assertIn("profiles/flutter-mobile.yml", installer)
         self.assertIn('fetch_or_local "ci/governance-ci.yml" | write_file "governance/ci-snippet.yml"', installer)
+
+
+class CheckTestedLogicInversionTests(unittest.TestCase):
+    """G1: accept_tested_trailer=false 不应凭"碰了测试文件"无条件豁免生产代码。"""
+
+    def test_untrusted_trailer_does_not_waive_via_unrelated_test_file(self) -> None:
+        """改生产文件 + 碰无关测试文件，accept_tested_trailer=false 时仍应报 violation。"""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / ".git").mkdir()
+            (repo / "src").mkdir()
+            (repo / "tests").mkdir()
+            prod = repo / "src" / "app.py"
+            prod.write_text("def main(): pass\n", encoding="utf-8")
+            test = repo / "tests" / "test_noop.py"
+            test.write_text("# noop\n", encoding="utf-8")
+
+            # 构造 diff：改生产文件 + 碰测试文件
+            diff = (
+                "+++ b/src/app.py\n@@ -1 +1 @@\n-def main(): pass\n+def main(): return 42\n"
+                "+++ b/tests/test_noop.py\n@@ -1 +1 @@\n-# noop\n+# updated comment\n"
+            )
+
+            cfg = json.loads(json.dumps(check_tested.DEFAULT_CONFIG))
+            cfg["testing"]["enforcement"] = "hard"
+            cfg["testing"]["accept_tested_trailer"] = False  # 最严配置
+
+            os.chdir(repo)
+            # check() 返回 (硬错误列表, 未测文件违规列表)
+            errors, untested = check_tested.check(diff, [], cfg, None, None)
+
+            # 应报告 src/app.py 未测，不能因碰了 tests/test_noop.py 就豁免
+            all_violations = errors + [u["file"] for u in untested]
+            self.assertTrue(any("src/app.py" in v for v in all_violations),
+                          f"accept_tested_trailer=false 应报告生产文件未测，got errors={errors}, untested={untested}")
+
+
+class GateDecisionPriorityTests(unittest.TestCase):
+    """G3: gate_decision 优先级与 ERROR 状态修复。"""
+
+    def test_disabled_auto_merge_does_not_mask_fail(self) -> None:
+        """auto_merge.enabled=false 时，FAIL 不应被降级成 WAITING_APPROVAL。"""
+        checks = {"risk-scan": "fail", "secret-scan": "pass", "mr-validate": "pass", "test-check": "pass"}
+        cfg = json.loads(json.dumps(gate_decision.DEFAULT_CONFIG))
+        cfg["auto_merge"]["enabled"] = False
+
+        result = gate_decision.build_gate_result(
+            checks=checks,
+            changed_paths=["src/app.py"],
+            source_sha="abc123",
+            target_sha="def456",
+            policy_sha="ghi789",
+            valid_approvals=0,
+            pipeline_kind="merge_request",
+            config=cfg,
+        )
+
+        # result 应为 FAIL，不应因 enabled=false 变成 WAITING_APPROVAL
+        self.assertEqual(result["result"], "FAIL",
+                        f"有检查失败时 result 应为 FAIL，got: {result}")
+
+    def test_missing_required_check_yields_error_not_pass(self) -> None:
+        """required check 缺失应返回 ERROR 而非 PASS。"""
+        checks = {"risk-scan": "pass", "secret-scan": "pass"}  # 缺 mr-validate
+        cfg = json.loads(json.dumps(gate_decision.DEFAULT_CONFIG))
+        cfg["auto_merge"]["required_checks"] = ["risk-scan", "secret-scan", "mr-validate"]
+
+        result = gate_decision.build_gate_result(
+            checks=checks,
+            changed_paths=[],
+            source_sha="abc123",
+            target_sha="def456",
+            policy_sha="ghi789",
+            valid_approvals=0,
+            pipeline_kind="merge_request",
+            config=cfg,
+        )
+
+        self.assertEqual(result["result"], "ERROR",
+                        f"required check 缺失应为 ERROR，got: {result}")
+        # 缺失的检查在 required_checks 里标记为 status: "missing"
+        missing = [c["name"] for c in result.get("required_checks", []) if c.get("status") == "missing"]
+        self.assertIn("mr-validate", missing)
+
+
+class RiskMergeDecisionErrorPathTests(unittest.TestCase):
+    """G2: risk_merge_decision.py 错误路径修复（import sys + exit 2）。"""
+
+    def test_risk_merge_decision_error_path_exits_two(self) -> None:
+        """JSON 解析失败应以 exit 2 退出，不抛 NameError。"""
+        import tempfile, subprocess
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            f.write("{invalid json")
+            bad_json = f.name
+
+        try:
+            result = subprocess.run(
+                [sys.executable, str(ROOT / "scripts" / "risk_merge_decision.py"),
+                 "--bundle", bad_json,
+                 "--profile", "test",
+                 "--changed-paths", "[]",
+                 "--author", "alice"],
+                capture_output=True, text=True,
+            )
+            # 应以 exit 2 退出（ERROR 语义），stderr 有错误信息，不抛 NameError
+            self.assertEqual(result.returncode, 2, f"应返回 2 (ERROR)，got: {result.returncode}")
+            self.assertIn("ERROR", result.stderr, f"stderr 应含 ERROR，got: {result.stderr}")
+            self.assertNotIn("NameError", result.stderr, f"不应有 NameError，got: {result.stderr}")
+        finally:
+            os.unlink(bad_json)
 
 
 if __name__ == "__main__":
