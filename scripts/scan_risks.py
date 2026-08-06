@@ -85,6 +85,7 @@ SCAN_EXTENSIONS = {
 _TEST_FILE_RE = re.compile(
     r'(^|/)(tests?|spec|__tests?__)/'  # test/, spec/, __tests__/ 目录下
     r'|(_test|_spec)\.[a-z]+$'
+    r'|Tests?\.[a-z]+$'
     r'|(^|/)test_[^/]+$',
     re.IGNORECASE,
 )

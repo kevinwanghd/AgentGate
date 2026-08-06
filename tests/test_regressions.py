@@ -31,6 +31,7 @@ validate_mr = importlib.import_module("validate_mr")
 gate_decision = importlib.import_module("gate_decision")
 gitlab_controller = importlib.import_module("gitlab_controller")
 validate_lessons = importlib.import_module("validate_lessons")
+profile_registry = importlib.import_module("profile_registry")
 
 
 class ConfigFailureTests(unittest.TestCase):
@@ -1307,6 +1308,26 @@ class GitLabControllerTests(unittest.TestCase):
 
 
 class EvidenceBundleTests(unittest.TestCase):
+    def test_missing_bundle_expectations_fail_closed(self) -> None:
+        bundle = {
+            "schema_version": "agentgate.io/evidence/v2",
+            "source_sha": "source", "target_sha": "target", "merge_sha": "merge",
+            "policy_digest": "sha256:policy", "profile_digest": "sha256:profile",
+            "checks": [{"id": "unit", "status": "pass"}],
+        }
+        problems = evidence_bundle.verify_bundle(bundle, {})
+        self.assertIn("source_sha_expected_missing", problems)
+
+    def test_profile_registry_covers_three_stack_extensions(self) -> None:
+        expected = {
+            "flutter-mobile": ".dart",
+            "dotnet-monorepo": ".cshtml",
+            "go-bazel": ".bzl",
+        }
+        for name, extension in expected.items():
+            profile = profile_registry.load_profile(ROOT / "profiles" / f"{name}.yml")
+            self.assertIn(extension, profile_registry.source_extensions(profile))
+
     def test_plan_uses_flutter_profile_and_binds_policy_profile_digests(self) -> None:
         profile = ROOT / "profiles" / "flutter-mobile.yml"
         policy = ROOT / "governance.config.yml"

@@ -62,7 +62,7 @@ SCAN_EXTENSIONS = {
     # 源码
     ".cs", ".js", ".ts", ".jsx", ".tsx", ".java", ".go",
     ".py", ".rb", ".php", ".cpp", ".cc", ".c", ".h", ".hpp",
-    ".kt", ".rs", ".scala", ".swift",
+    ".kt", ".rs", ".scala", ".swift", ".dart", ".bzl", ".proto", ".cshtml",
     # 脚本 / 配置 / IaC
     ".sh", ".bash", ".ps1",
     ".yml", ".yaml", ".toml", ".json", ".xml",

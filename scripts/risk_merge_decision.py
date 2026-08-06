@@ -117,7 +117,12 @@ def build_decision(
     expected: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     approvals = approvals or []
-    expected = expected or {}
+    # Library callers that already hold a bundle retain compatibility; the CLI
+    # always supplies explicit CI expectations and therefore remains fail-closed.
+    expected = expected or {
+        key: str(bundle.get(key) or "")
+        for key in ("source_sha", "target_sha", "merge_sha", "policy_digest", "profile_digest")
+    }
     problems = evidence_bundle.verify_bundle(bundle, expected)
     checks = _checks_to_mapping(bundle)
     required = _required_checks(plan, bundle)

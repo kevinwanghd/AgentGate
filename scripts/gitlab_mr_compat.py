@@ -235,7 +235,13 @@ def resolve_description(
 ) -> DescriptionResolution:
     """Resolve one description without exposing source-selection complexity."""
 
-    if "CI_MERGE_REQUEST_DESCRIPTION" in os.environ:
+    pipeline_source = os.environ.get("CI_PIPELINE_SOURCE")
+    # Older GitLab MR jobs did not export CI_PIPELINE_SOURCE. Preserve that
+    # compatibility, but never trust an injected description when the pipeline
+    # explicitly identifies itself as a push/schedule pipeline.
+    if "CI_MERGE_REQUEST_DESCRIPTION" in os.environ and pipeline_source not in {
+        "push", "web", "schedule", "api", "trigger", "pipeline",
+    }:
         ci_description = os.environ.get("CI_MERGE_REQUEST_DESCRIPTION", "")
         return DescriptionResolution(
             text=ci_description,

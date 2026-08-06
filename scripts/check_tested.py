@@ -87,7 +87,8 @@ PROD_EXTENSIONS = {
 _TEST_PATH_RE = re.compile(
     r'(^|/)(tests?|spec|__tests__)/'  # test/, spec/, __tests__/ 目录下
     r'|(\.tests?|\.spec|_test|test_)\.[a-z]+$'  # 文件名含测试标志
-    r'|_tests?\.[a-z]+$',  # _test.py / _tests.py
+    r'|_tests?\.[a-z]+$'  # _test.py / _tests.py
+    r'|Tests?\.[a-z]+$',  # FooTest.cs / FooTests.cs
     re.IGNORECASE,
 )
 
