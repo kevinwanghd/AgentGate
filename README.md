@@ -107,6 +107,27 @@ include:
 
 所有语言测试 job 支持 monorepo：递归查找最深 3 层，找到多个子目录时逐一运行，任意一个失败则整个 job 失败。不适用的语言自动 skip，不阻断合并。
 
+### CI 镜像策略
+
+GitLab 模板默认采用 `internal-only` 镜像策略：AgentGate job 不主动引用 Docker Hub、MCR、GHCR 等公网运行时镜像，也不在 CI 中安装运行时依赖。所有 job image 都通过变量选择：
+
+- `GOVERNANCE_PY_IMAGE`
+- `GOVERNANCE_GO_IMAGE`
+- `GOVERNANCE_FLUTTER_IMAGE`
+- `GOVERNANCE_PYTHON_TEST_IMAGE`
+- `GOVERNANCE_NODE_IMAGE`
+- `GOVERNANCE_JAVA_IMAGE`
+- `GOVERNANCE_DOTNET_IMAGE`
+- `GOVERNANCE_RUST_IMAGE`
+
+安装时也可传入内部镜像，例如：
+
+```bash
+bash ~/agentgate/install.sh . \
+  --profile dotnet-monorepo \
+  --ci-dotnet-image '$HW_CI_REGISTRY/flowop/sdk:9.0-bookworm-slim'
+```
+
 ### 本地自动化
 
 - ✅ **提交时自动盖 AI-Usage trailer**(读 AI 证据,算占比,写进 commit message)

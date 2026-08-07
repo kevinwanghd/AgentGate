@@ -15,6 +15,10 @@
 #   GOVERNANCE_MERGE_BOT_TOKEN  受保护/Masked 的 Merge Bot token, 仅自动合并 job 使用
 #   GOVERNANCE_AUTO_MERGE_REQUIRE_TOKEN  设为 true 时, 未配置 bot token 的自动合并 job 直接失败;
 #                                        默认告警并跳过(流水线保持绿, 人工合并)
+#
+# AgentGate 不在治理 job 里主动拉公网运行时镜像。所有 job image 都通过
+# GOVERNANCE_*_IMAGE 变量选择；默认使用内部 governance Python 镜像，语言测试
+# 需要真实运行时请在项目/组级变量里覆盖为内部预构建镜像。
 
 stages:
   - governance
@@ -22,10 +26,20 @@ stages:
   - build
   - merge
 
+variables:
+  GOVERNANCE_PY_IMAGE: "swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest"
+  GOVERNANCE_GO_IMAGE: "swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest"
+  GOVERNANCE_FLUTTER_IMAGE: "swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest"
+  GOVERNANCE_PYTHON_TEST_IMAGE: "swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest"
+  GOVERNANCE_NODE_IMAGE: "swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest"
+  GOVERNANCE_JAVA_IMAGE: "swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest"
+  GOVERNANCE_DOTNET_IMAGE: "swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest"
+  GOVERNANCE_RUST_IMAGE: "swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest"
+
 # ── 0. Hard lessons: installation and policy invariants ──────────────────────
 governance:lessons-validate:
   stage: governance
-  image: python:3.11
+  image: "$GOVERNANCE_PY_IMAGE"
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH
@@ -38,7 +52,7 @@ governance:lessons-validate:
 # ── 1. 风险扫描: 硬阻断 ──────────────────────────────────────────────────────
 governance:risk-scan:
   stage: governance
-  image: python:3.11
+  image: "$GOVERNANCE_PY_IMAGE"
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH
@@ -95,7 +109,7 @@ governance:secret-scan:
 # ── 3. MR 描述校验: 软→硬 ───────────────────────────────────────────────────
 governance:mr-validate:
   stage: governance
-  image: python:3.11
+  image: "$GOVERNANCE_PY_IMAGE"
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
   variables:
@@ -129,7 +143,7 @@ governance:mr-validate:
 # 退回读 commit 的 Tested: trailer。
 governance:mr-validate-compat:
   stage: governance
-  image: python:3.11
+  image: "$GOVERNANCE_PY_IMAGE"
   rules:
     - if: $CI_COMMIT_BRANCH
   variables:
@@ -160,7 +174,7 @@ governance:mr-validate-compat:
 
 governance:test-check:
   stage: governance
-  image: python:3.11
+  image: "$GOVERNANCE_PY_IMAGE"
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH
@@ -200,7 +214,7 @@ governance:test-check:
 # 也可在 MR 流水线里手动触发 (when: manual) 随时生成快照。
 governance:expired-report:
   stage: governance
-  image: python:3.11
+  image: "$GOVERNANCE_PY_IMAGE"
   rules:
     # 定时 pipeline
     - if: $CI_PIPELINE_SOURCE == "schedule"
@@ -229,7 +243,7 @@ governance:expired-report:
 # Bazel 单仓需覆盖此 job 或设置 GOVERNANCE_SKIP_GO_TEST=true 跳过。
 governance:go-test:
   stage: test
-  image: golang:1.22-bookworm
+  image: "$GOVERNANCE_GO_IMAGE"
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $GOVERNANCE_SKIP_GO_TEST != "true"
     - if: $CI_COMMIT_BRANCH && $GOVERNANCE_SKIP_GO_TEST != "true"
@@ -263,7 +277,7 @@ governance:go-test:
 # ── 7a. Flutter/Dart 测试: 无 pubspec.yaml 时自动跳过 ────────────────────────
 governance:flutter-test:
   stage: test
-  image: ghcr.io/cirruslabs/flutter:stable
+  image: "$GOVERNANCE_FLUTTER_IMAGE"
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $GOVERNANCE_SKIP_FLUTTER_TEST != "true"
     - if: $CI_COMMIT_BRANCH && $GOVERNANCE_SKIP_FLUTTER_TEST != "true"
@@ -292,7 +306,7 @@ governance:flutter-test:
 # ── 7b. Python 测试: 无 requirements.txt / pyproject.toml / setup.py 时跳过 ──
 governance:python-test:
   stage: test
-  image: python:3.11
+  image: "$GOVERNANCE_PYTHON_TEST_IMAGE"
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $GOVERNANCE_SKIP_PYTHON_TEST != "true"
     - if: $CI_COMMIT_BRANCH && $GOVERNANCE_SKIP_PYTHON_TEST != "true"
@@ -327,7 +341,7 @@ governance:python-test:
 # ── 7c. Node.js/TypeScript 测试: 无 package.json 时跳过 ──────────────────────
 governance:node-test:
   stage: test
-  image: node:20-slim
+  image: "$GOVERNANCE_NODE_IMAGE"
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $GOVERNANCE_SKIP_NODE_TEST != "true"
     - if: $CI_COMMIT_BRANCH && $GOVERNANCE_SKIP_NODE_TEST != "true"
@@ -365,7 +379,7 @@ governance:node-test:
 # ── 7d. Java 测试: 无 pom.xml / build.gradle 时跳过 ─────────────────────────
 governance:java-test:
   stage: test
-  image: maven:3.9-eclipse-temurin-21
+  image: "$GOVERNANCE_JAVA_IMAGE"
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $GOVERNANCE_SKIP_JAVA_TEST != "true"
     - if: $CI_COMMIT_BRANCH && $GOVERNANCE_SKIP_JAVA_TEST != "true"
@@ -402,7 +416,7 @@ governance:java-test:
 # ── 7e. .NET/C# 测试: 无 .sln / .csproj 时跳过 ──────────────────────────────
 governance:dotnet-test:
   stage: test
-  image: mcr.microsoft.com/dotnet/sdk:8.0
+  image: "$GOVERNANCE_DOTNET_IMAGE"
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $GOVERNANCE_SKIP_DOTNET_TEST != "true"
     - if: $CI_COMMIT_BRANCH && $GOVERNANCE_SKIP_DOTNET_TEST != "true"
@@ -437,7 +451,7 @@ governance:dotnet-test:
 # ── 7f. Rust 测试: 无 Cargo.toml 时跳过 ─────────────────────────────────────
 governance:rust-test:
   stage: test
-  image: rust:1.78-slim
+  image: "$GOVERNANCE_RUST_IMAGE"
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $GOVERNANCE_SKIP_RUST_TEST != "true"
     - if: $CI_COMMIT_BRANCH && $GOVERNANCE_SKIP_RUST_TEST != "true"
@@ -470,7 +484,7 @@ governance:rust-test:
 # ── 8. GateResult 决策: 汇总 CI 独立证据, 不直接合并 ─────────────────────────
 governance:gate-decision:
   stage: test
-  image: python:3.11
+  image: "$GOVERNANCE_PY_IMAGE"
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
   variables:
@@ -559,7 +573,7 @@ governance:gate-decision:
 # ── 8. Merge Bot: 仅消费 GateResult, 使用独立 token 设置 GitLab 自动合并 ─────
 governance:auto-merge:
   stage: merge
-  image: python:3.11
+  image: "$GOVERNANCE_PY_IMAGE"
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
   dependencies:

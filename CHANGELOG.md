@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **目标分支流水线自动跳过 MR 描述校验** — `master/main` 自身没有对应 MR，不再因缺少 MR 描述误报失败。
 - **API 回退改为显式最小权限** — 默认不访问项目接口；启用时只读取专用 `AGENTGATE_GITLAB_READ_TOKEN`，不再接受个人 token、`PRIVATE_TOKEN` 或 Merge Bot token。
 - **描述证据标注真实性** — 结果文件写入 `actual_mr_verified` 和描述摘要，区分“真实 MR 已验证”与“仅分支清单已验证”。
+- **GitLab CI 镜像改为 internal-only 策略** — 治理和语言测试 job 全部通过 `GOVERNANCE_*_IMAGE` 变量选择镜像，默认不引用 Docker Hub、MCR、GHCR 等公网运行时镜像；安装器新增 `--ci-*-image` 参数用于写入业务仓库内部预构建镜像。
 
 ---
 
