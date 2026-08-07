@@ -30,7 +30,7 @@ BASH_BIN="$(command -v bash)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 INSTALLED_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-if [[ -f "${SOURCE_ROOT}/install.sh" || -d "${SOURCE_ROOT}/lessons" ]]; then
+if [[ -f "${SOURCE_ROOT}/install.sh" ]]; then
   REPO_ROOT="$SOURCE_ROOT"
 else
   REPO_ROOT="$INSTALLED_ROOT"
