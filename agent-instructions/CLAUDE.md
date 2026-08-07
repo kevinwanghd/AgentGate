@@ -10,7 +10,19 @@ python governance/scripts/create_mr.py \
   --why "<用中文说明本次任务背景>"
 ```
 
-**不要用 glab**：glab 在自托管 GitLab（11.x）有两个已知问题——token 写不进 config、project 路径解析返回 404。必须走 `--gitlab-api` 模式直连 REST API。
+没有本地 GitLab token 时，先生成分支内描述清单，提交推送后手工同步真实 GitLab MR 描述：
+
+```bash
+python governance/scripts/agentgate.py mr prepare \
+  --why "<用中文说明本次任务背景>"
+git add .agentgate/mr-description.md
+git commit
+git push
+python governance/scripts/agentgate.py mr body
+# 将输出正文手工复制到 GitLab MR 描述
+```
+
+**不要用 glab**：glab 在自托管 GitLab（11.x）有两个已知问题——token 写不进 config、project 路径解析返回 404。有本地 token 时必须走 `--gitlab-api` 模式直连 REST API；无本地 token 时提交 `.agentgate/mr-description.md` 后手工同步 MR 描述正文。
 
 前置环境变量（一次性配置）：
 ```bash
@@ -49,7 +61,7 @@ curl -s "$AGENTGATE_GITLAB_URL/api/v4/projects?search=<仓库名>" \
 3. **风险扫描**：对照 `docs/governance/risk-types.md` 扫描自己的 diff
 4. **补注解**：命中风险模式的代码，在上方加 `risk:*` 注解
 5. **提交**：`AI-Usage` 和 `Tested` trailer 由 git hook 自动写入，**你不需要手填**
-6. **创建 MR**：调 `create_mr.py --gitlab-api --why "<任务背景>"` 自动生成并提交 MR（走 GitLab API，不依赖 glab/gh）
+6. **创建 MR**：有本地 token 时调 `create_mr.py --gitlab-api --why "<任务背景>"` 自动生成并提交 MR（走 GitLab API，不依赖 glab/gh）；无本地 token 时先 `agentgate.py mr prepare`，提交 `.agentgate/mr-description.md`，再用 `agentgate.py mr body` 输出正文并手工同步到真实 GitLab MR 描述
 
 ---
 
@@ -58,6 +70,20 @@ curl -s "$AGENTGATE_GITLAB_URL/api/v4/projects?search=<仓库名>" \
 **重要：所有 MR 描述必须使用中文撰写。**
 
 提交完代码 commit 后，走统一入口：
+
+无本地 token 时：
+
+```bash
+python governance/scripts/agentgate.py mr prepare \
+  --why "<从用户原始需求提取的任务背景，用中文描述>"
+git add .agentgate/mr-description.md
+git commit
+git push
+python governance/scripts/agentgate.py mr body
+# 将输出正文手工复制到 GitLab MR 描述
+```
+
+有本地 token 时，可继续使用 GitLab API 自动创建/更新 MR：
 
 ```bash
 python governance/scripts/create_mr.py \
@@ -73,6 +99,8 @@ python governance/scripts/create_mr.py \
 - **治理元数据**（AI-Usage / Tested 等）← 从 commit trailer 读，放折叠块
 
 若源分支已有 open MR，会自动更新描述而非重复创建。
+
+CI 会校验真实 GitLab MR 描述的必填模块，并校验 `.agentgate/mr-description.md` 是否由当前分支更新；不要求两者逐字一致。需要可复制正文时运行 `python governance/scripts/agentgate.py mr body`。
 
 ---
 

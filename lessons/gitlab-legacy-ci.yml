@@ -58,5 +58,5 @@ lessons:
       - .agentgate/mr-description.md
     trigger: A branch pipeline validates a repository manifest without reading the actual open GitLab MR description.
     risk: An empty or noncompliant GitLab MR description can pass by reusing a compliant or stale repository manifest.
-    fix: Require the GitLab-provided MR description in MR pipelines and an authoritative GitLab API lookup in legacy branch pipelines. Fail closed when the actual description cannot be read. A repository manifest may only be checked for freshness and equality with the actual description; it must never substitute for it.
-    regression: Tests must prove that an empty actual MR description fails even when a valid manifest exists, API lookup failure cannot be bypassed, and no successful result reports actual_mr_verified=false.
+    fix: Require the GitLab-provided MR description in MR pipelines and an authoritative GitLab API lookup in legacy branch pipelines. Fail closed when the actual description cannot be read. A repository manifest may only prove that the branch prepared a fresh description for the current diff; the actual MR description is validated for required sections instead of raw equality with the manifest.
+    regression: Tests must prove that an empty actual MR description fails even when a valid manifest exists, API lookup failure cannot be bypassed, formatted actual MR descriptions can differ from the manifest while still passing required-section validation, and no successful result reports actual_mr_verified=false.

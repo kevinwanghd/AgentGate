@@ -4,6 +4,9 @@ MR 治理规范 v1 · 默认模板
 v1 阶段，本模板检查为软提示，不阻断合并；soft_deadline 后转硬阻断。
 详细规范见: docs/governance/mr-spec.md
 
+AgentGate 会校验真实 MR 描述。
+如果你使用 agentgate.py mr prepare，请将 .agentgate/mr-description.md 的正文同步到这里。
+
 **重要：MR描述必须使用中文撰写**，包括所有段落内容。
 -->
 

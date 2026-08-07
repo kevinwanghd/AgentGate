@@ -589,6 +589,16 @@ def strip_binding_header(description: str) -> str:
     return rest
 
 
+def print_description_body(path: str) -> int:
+    manifest = Path(path)
+    if not manifest.is_file():
+        sys.stderr.write(f"[create-mr] MR 描述清单不存在: {path}\n")
+        return 1
+    body = strip_binding_header(manifest.read_text(encoding="utf-8-sig"))
+    print(body, end="" if body.endswith("\n") else "\n")
+    return 0
+
+
 def verify_description_manifest(path: str, args) -> int:
     manifest = Path(path)
     if not manifest.is_file():
@@ -945,6 +955,11 @@ def open_gitlab_mr_fallback(
     if not gitlab_url or not project_id:
         if reason:
             sys.stderr.write(f"[create-mr] {reason}\n")
+        sys.stderr.write("[create-mr] 请手工复制 MR 描述正文到 GitLab。\n")
+        sys.stderr.write(
+            "[create-mr] 复制来源: .agentgate/mr-description.md 的正文；"
+            "不要复制第一行 agentgate-pr-bind 注释。\n"
+        )
         sys.stderr.write("[create-mr] Missing GitLab URL or project path for browser fallback.\n\n")
         print(f"Title: {title}\n")
         print(description)
@@ -961,6 +976,13 @@ def open_gitlab_mr_fallback(
     )
     if reason:
         sys.stderr.write(f"[create-mr] {reason}\n")
+    sys.stderr.write("[create-mr] 已输出/打开预填 MR 页面。\n")
+    sys.stderr.write("[create-mr] 如果 MR 已存在，请手工编辑现有 MR 描述。\n")
+    sys.stderr.write("[create-mr] 请手工复制 MR 描述正文到 GitLab。\n")
+    sys.stderr.write(
+        "[create-mr] 复制来源: .agentgate/mr-description.md 的正文；"
+        "不要复制第一行 agentgate-pr-bind 注释。\n"
+    )
     sys.stderr.write("[create-mr] Open GitLab new MR page with title and description prefilled.\n")
     sys.stderr.write(f"[create-mr] {mr_url}\n")
     try:
@@ -1120,6 +1142,11 @@ def main() -> int:
         help="校验 MR 描述清单是否合规且绑定当前 diff 后退出",
     )
     ap.add_argument(
+        "--print-body",
+        action="store_true",
+        help="只打印 MR 描述清单正文，自动剥掉 agentgate-pr-bind 绑定注释",
+    )
+    ap.add_argument(
         "--manifest-path",
         default=DEFAULT_DESCRIPTION_MANIFEST,
         help=f"MR 描述清单路径 (默认 {DEFAULT_DESCRIPTION_MANIFEST})",
@@ -1150,6 +1177,9 @@ def main() -> int:
 
     if args.gitlab_preflight:
         return gitlab_api_preflight(args)
+
+    if args.print_body:
+        return print_description_body(args.manifest_path)
 
     try:
         cfg = load_config(args.config)
@@ -1220,7 +1250,17 @@ def main() -> int:
             sys.stderr.write(f"[create-mr] {exc}\n")
             return 1
         print(f"[create-mr] 已生成 MR 描述清单: {manifest.as_posix()}")
-        print("[create-mr] 请将该文件与代码一起提交后再推送。")
+        print("[create-mr] 下一步:")
+        print("[create-mr] 1. git add .agentgate/mr-description.md 并随代码提交推送。")
+        print("[create-mr] 2. 同步 GitLab MR 描述：创建或更新描述，确保真实 MR 保留必填模块内容。")
+        print(
+            "[create-mr] 3. 未配置本地 AGENTGATE_GITLAB_TOKEN 时，请手工复制 "
+            ".agentgate/mr-description.md 中第一行绑定注释之后的正文到 MR 描述。"
+        )
+        print(
+            "[create-mr] 4. 已配置本地 AGENTGATE_GITLAB_TOKEN 时，可运行 "
+            "agentgate.py mr create --gitlab-api 自动创建/更新 MR。"
+        )
         return 0
 
     if args.dry_run:
@@ -1286,7 +1326,8 @@ def _submit_with_fallback(title: str, description: str, args) -> int:
         title,
         description,
         args,
-        "No usable glab/gh CLI found; falling back to browser MR creation.",
+        "未检测到本地 AGENTGATE_GITLAB_TOKEN，且未找到可用 MR CLI；"
+        "无法通过 API 自动创建/更新 MR。",
     )
 
 if __name__ == "__main__":

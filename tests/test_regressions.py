@@ -346,6 +346,21 @@ class AgentGateCliTests(unittest.TestCase):
         self.assertEqual(["--prepare", "--why", "修复门禁"], captured)
         self.assertEqual(original_argv, sys.argv)
 
+    def test_mr_body_prints_copyable_manifest_body(self) -> None:
+        captured = []
+
+        def delegate() -> int:
+            captured.extend(sys.argv[1:])
+            return 0
+
+        original_argv = list(sys.argv)
+        with mock.patch.object(create_mr, "main", side_effect=delegate):
+            rc = agentgate.main(["mr", "body", "--manifest-path", "custom.md"])
+
+        self.assertEqual(0, rc)
+        self.assertEqual(["--print-body", "--manifest-path", "custom.md"], captured)
+        self.assertEqual(original_argv, sys.argv)
+
     def test_mr_verify_is_a_first_class_command(self) -> None:
         captured = []
 
@@ -629,13 +644,112 @@ class GitLabMrCompatTests(unittest.TestCase):
             self.assertEqual(2171, payload["iid"])
             self.assertEqual("feature/reborn-testnew", payload["target_branch"])
             self.assertEqual("origin/feature/reborn-testnew", payload["diff_base"])
-            self.assertIn("does not match", payload["reason"])
-            validate.assert_not_called()
+            self.assertIn("missing ## Background section", payload["problems"])
+            self.assertEqual(str(manifest), payload["manifest_path"])
+            self.assertTrue(payload["manifest_changed"])
+            validate.assert_called_once_with(
+                "",
+                None,
+                "origin/feature/reborn-testnew",
+            )
             api.assert_called_once()
             self.assertNotIn("target_branch", api.call_args.kwargs["query"])
             changed.assert_called_once_with(
                 str(manifest), "origin/feature/reborn-testnew"
             )
+
+    def test_branch_pipeline_allows_actual_mr_to_differ_from_manifest_format(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            output = Path(td) / "result.json"
+            manifest = Path(td) / "mr-description.md"
+            manifest.write_text(
+                "## 背景\n\n机器生成的背景。\n\n"
+                "## 变更内容\n\n机器生成的变更列表。\n\n"
+                "## 自测确认\n\n机器生成的测试说明。\n",
+                encoding="utf-8",
+            )
+            env = {
+                "CI_COMMIT_REF_NAME": "fix/bug",
+                "CI_SERVER_URL": "https://gitlab.example.com",
+                "CI_PROJECT_ID": "123",
+                "AGENTGATE_GITLAB_READ_TOKEN": "read-token",
+            }
+            with mock.patch.dict(os.environ, env, clear=True), \
+                    mock.patch.object(gitlab_mr_compat, "_manifest_changed", return_value=True), \
+                    mock.patch.object(gitlab_mr_compat, "validate_description", return_value=[]) as validate, \
+                    mock.patch.object(create_mr, "_gitlab_api_request", return_value=[{
+                        "iid": 2172,
+                        "description": (
+                            "背景\n\n人工整理过的背景，但模块内容存在。\n\n"
+                            "变更内容\n\n人工整理过的变更内容。\n\n"
+                            "自测确认\n\n已运行回归测试。\n"
+                        ),
+                        "target_branch": "master",
+                    }]), \
+                    mock.patch.object(sys, "argv", [
+                        "gitlab_mr_compat.py",
+                        "--target-branch", "master",
+                        "--diff-base", "origin/master",
+                        "--manifest-path", str(manifest),
+                        "--output", str(output),
+                    ]):
+                rc = gitlab_mr_compat.main()
+
+            self.assertEqual(0, rc)
+            payload = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual("pass", payload["status"])
+            self.assertEqual(2172, payload["iid"])
+            self.assertEqual(str(manifest), payload["manifest_path"])
+            self.assertTrue(payload["manifest_changed"])
+            validate.assert_called_once()
+
+    def test_branch_pipeline_validates_actual_mr_with_real_validator(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            output = Path(td) / "result.json"
+            manifest = Path(td) / "mr-description.md"
+            config = Path(td) / "governance.config.yml"
+            manifest.write_text("## 背景\n\n机器生成的描述。\n", encoding="utf-8")
+            config.write_text(
+                "metadata:\n"
+                "  enforcement: hard\n"
+                "  mandatory_fields: [background, changes, self_test]\n"
+                "large_change:\n"
+                "  line_threshold: 500\n",
+                encoding="utf-8",
+            )
+            env = {
+                "CI_COMMIT_REF_NAME": "fix/bug",
+                "CI_SERVER_URL": "https://gitlab.example.com",
+                "CI_PROJECT_ID": "123",
+                "AGENTGATE_GITLAB_READ_TOKEN": "read-token",
+            }
+            actual = (
+                "背景\n\n修复旧版 GitLab MR 描述校验过于严格的问题。\n\n"
+                "变更内容\n\n保留真实 MR 必填模块校验，但不再要求和清单逐字一致。\n\n"
+                "自测确认\n\n已运行相关回归测试。\n"
+            )
+            with mock.patch.dict(os.environ, env, clear=True), \
+                    mock.patch.object(gitlab_mr_compat, "_manifest_changed", return_value=True), \
+                    mock.patch.object(gitlab_mr_compat, "_ensure_target_ref", return_value="origin/master"), \
+                    mock.patch.object(validate_mr, "detect_large_change", return_value=(False, [])), \
+                    mock.patch.object(create_mr, "_gitlab_api_request", return_value=[{
+                        "iid": 2173,
+                        "description": actual,
+                        "target_branch": "master",
+                    }]), \
+                    mock.patch.object(sys, "argv", [
+                        "gitlab_mr_compat.py",
+                        "--target-branch", "master",
+                        "--config", str(config),
+                        "--manifest-path", str(manifest),
+                        "--output", str(output),
+                    ]):
+                rc = gitlab_mr_compat.main()
+
+            self.assertEqual(0, rc)
+            payload = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual("pass", payload["status"])
+            self.assertEqual(2173, payload["iid"])
 
     def test_branch_pipeline_rejects_stale_repository_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -668,6 +782,9 @@ class GitLabMrCompatTests(unittest.TestCase):
             payload = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual("fail", payload["status"])
             self.assertIn("was not changed", payload["reason"])
+            self.assertIn("Fix:", payload["reason"])
+            self.assertIn("Commit and push", payload["reason"])
+            self.assertIn("Update the GitLab MR description", payload["reason"])
 
     def test_branch_pipeline_validates_against_actual_non_default_target(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -950,6 +1067,57 @@ class CreateMrManifestTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 create_mr.build_binding("origin/main", ".agentgate/mr-description.md")
 
+    def test_print_description_body_strips_binding_header(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            target = Path(td) / ".agentgate" / "mr-description.md"
+            target.parent.mkdir(parents=True)
+            binding = {
+                "schema_version": create_mr.BINDING_SCHEMA,
+                "base_ref": "origin/main",
+                "prepared_from_sha": "abc123",
+                "changed_paths": ["scripts/create_mr.py"],
+                "diff_fingerprint": "abc123",
+            }
+            target.write_text(
+                create_mr.add_binding_header("## 背景\n\n修复问题。\n", binding),
+                encoding="utf-8",
+            )
+
+            out = io.StringIO()
+            with redirect_stdout(out):
+                rc = create_mr.print_description_body(str(target))
+
+        self.assertEqual(0, rc)
+        self.assertEqual("## 背景\n\n修复问题。\n", out.getvalue())
+        self.assertNotIn("agentgate-pr-bind", out.getvalue())
+
+    def test_prepare_success_output_explains_gitlab_description_sync(self) -> None:
+        args = [
+            "create_mr.py",
+            "--prepare",
+            "--why",
+            "修复旧版 GitLab MR 描述同步提示。",
+        ]
+        out = io.StringIO()
+        with mock.patch.object(sys, "argv", args), \
+                mock.patch.object(create_mr, "load_config", return_value={}), \
+                mock.patch.object(create_mr, "build_description", return_value="## 背景\n\n修复问题。\n"), \
+                mock.patch.object(create_mr, "infer_title", return_value="fix: title"), \
+                mock.patch.object(create_mr, "run_local_preflight", return_value=0), \
+                mock.patch.object(
+                    create_mr,
+                    "write_description_manifest",
+                    return_value=Path(".agentgate/mr-description.md"),
+                ), redirect_stdout(out):
+            rc = create_mr.main()
+
+        self.assertEqual(0, rc)
+        text = out.getvalue()
+        self.assertIn("已生成 MR 描述清单: .agentgate/mr-description.md", text)
+        self.assertIn("同步 GitLab MR 描述", text)
+        self.assertIn("AGENTGATE_GITLAB_TOKEN", text)
+        self.assertIn(".agentgate/mr-description.md", text)
+
 
 class CreateMrCliAdapterTests(unittest.TestCase):
     @staticmethod
@@ -1173,6 +1341,11 @@ class CreateMrSubmitFallbackTests(unittest.TestCase):
                 mock.patch("sys.stderr", mock.Mock(write=lambda s: stderr_lines.append(s))):
             rc = create_mr._submit_with_fallback("title", "desc", args)
         full = "".join(stderr_lines)
+        self.assertIn("未检测到本地 AGENTGATE_GITLAB_TOKEN", full)
+        self.assertIn("无法通过 API 自动创建/更新 MR", full)
+        self.assertIn("手工编辑现有 MR 描述", full)
+        self.assertIn("手工复制 MR 描述", full)
+        self.assertIn("不要复制第一行 agentgate-pr-bind 注释", full)
         self.assertIn("https://gitlab.example.com", full)
         self.assertIn("merge_requests/new", full)
         browser.assert_called_once()
@@ -2360,6 +2533,17 @@ class MRDescriptionEncodingTests(unittest.TestCase):
             self.assertTrue(validate_mr._has_section(validate_mr.read_description(path), "背景"))
         finally:
             os.unlink(path)
+
+    def test_plain_module_titles_are_accepted(self) -> None:
+        text = (
+            "背景\n\n修复旧版 GitLab MR 描述校验过于严格的问题。\n\n"
+            "变更内容\n\n允许人工整理后的 MR 描述通过模块校验。\n\n"
+            "自测确认\n\n已运行相关回归测试。\n"
+        )
+
+        self.assertTrue(validate_mr._has_section(text, "背景"))
+        self.assertTrue(validate_mr._has_section(text, "变更内容"))
+        self.assertTrue(validate_mr._has_section(text, "自测确认"))
 
 
 class ChineseContentValidationTests(unittest.TestCase):

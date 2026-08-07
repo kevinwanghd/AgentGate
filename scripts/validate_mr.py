@@ -68,6 +68,20 @@ DEFAULT_CONFIG = {
 
 # used = 补全类工具(Cursor Tab / Copilot 内联)有标记但无法精确测占比时的等级
 AI_USAGE_VALUES = {"none", "light", "medium", "heavy", "used"}
+SECTION_TITLES = (
+    "背景",
+    "Background",
+    "变更内容",
+    "Changes",
+    "自测确认",
+    "Self Test",
+    "自测",
+    "风险与回滚",
+    "风险",
+    "Risk",
+    "不包含的内容",
+    "关联",
+)
 
 
 # ============================================================
@@ -96,11 +110,23 @@ def read_description(file_arg: str | None) -> str:
 # 字段检查
 # ============================================================
 def _has_section(text: str, *titles: str) -> bool:
-    """是否存在某二级标题段落且其下有非空内容。"""
+    """是否存在某标题段落且其下有非空内容。
+
+    接受 Markdown 标题和手工填写时常见的独立模块名行，例如
+    "## 背景"、"### 背景" 或 "背景"。
+    """
+    boundary_titles = "|".join(re.escape(item) for item in SECTION_TITLES)
+    next_section = (
+        r'(?=^(?:#{1,6}\s*)?(?:'
+        + boundary_titles
+        + r')\s*[:：]?\s*$|^---+\s*$|^<details\b|\Z)'
+    )
     for title in titles:
-        # 匹配 "## 标题" 后到下一个 "## " 或文末之间的内容
         pat = re.compile(
-            r'^##\s+' + re.escape(title) + r'\s*$(?P<body>.*?)(?=^##\s|\Z)',
+            r'^(?:#{1,6}\s*)?'
+            + re.escape(title)
+            + r'\s*[:：]?\s*$(?P<body>.*?)'
+            + next_section,
             re.MULTILINE | re.DOTALL,
         )
         m = pat.search(text)

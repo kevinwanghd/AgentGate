@@ -30,6 +30,7 @@ def _usage() -> str:
 
 Usage:
   agentgate.py mr prepare [create_mr.py args...]
+  agentgate.py mr body [create_mr.py args...]
   agentgate.py mr verify [create_mr.py args...]
   agentgate.py mr create [create_mr.py args...]
   agentgate.py mr validate-open [gitlab_mr_compat.py args...]
@@ -39,6 +40,7 @@ Usage:
 
 Examples:
   python governance/scripts/agentgate.py mr prepare --why "修复广告生命周期超时状态"
+  python governance/scripts/agentgate.py mr body
   python governance/scripts/agentgate.py mr verify --diff-base origin/master
   python governance/scripts/agentgate.py mr create --why "修复广告生命周期超时状态"
   python governance/scripts/agentgate.py mr validate-open --diff-base origin/master
@@ -56,6 +58,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if len(args) >= 2 and args[0] in ("mr", "pr") and args[1] == "prepare":
         return _delegate("create_mr", ["--prepare", *args[2:]])
+
+    if len(args) >= 2 and args[0] in ("mr", "pr") and args[1] == "body":
+        return _delegate("create_mr", ["--print-body", *args[2:]])
 
     if len(args) >= 2 and args[0] in ("mr", "pr") and args[1] == "verify":
         return _delegate("create_mr", ["--verify-manifest", *args[2:]])
