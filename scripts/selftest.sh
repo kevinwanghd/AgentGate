@@ -94,6 +94,9 @@ trap 'rm -rf "$WORK"' EXIT
 cd "$WORK"
 git init -q
 git config user.email t@t; git config user.name t
+FALLBACK_PATH="${WORK}/fallback-bin"
+mkdir -p "$FALLBACK_PATH"
+ln -s "$(command -v git)" "${FALLBACK_PATH}/git"
 
 # 断言: 期望退出码
 expect() {
@@ -542,8 +545,11 @@ expect "mr prepare 成功提示包含同步 MR 描述动作" 0 $rc
 
 # 无 token 且无 CLI fallback 时必须提示手工复制 MR 描述
 ( cd mr_dir && env -u AGENTGATE_GITLAB_TOKEN -u GITLAB_TOKEN -u GLAB_TOKEN \
+    -u AGENTGATE_GITLAB_READ_TOKEN -u AGENTGATE_GITLAB_URL -u AGENTGATE_GITLAB_PROJECT_ID \
+    -u CI_SERVER_URL -u CI_PROJECT_ID -u CI_PROJECT_PATH -u GITHUB_SERVER_URL \
+    -u GH_TOKEN -u GITHUB_TOKEN \
     -u PRIVATE_TOKEN -u GOVERNANCE_MR_VALIDATE_TOKEN -u GOVERNANCE_MERGE_BOT_TOKEN \
-    PATH="/usr/bin:/bin" python3 "$CREATE" --why "用户需求:接入支付" \
+    PATH="$FALLBACK_PATH" "$PYTHON_BIN" "$CREATE" --why "用户需求:接入支付" \
     --target-branch master --skip-risk-scan --skip-tests ) >/tmp/mr_fallback_out.txt 2>&1
 fallback_rc=$?
 grep -q "手工复制 MR 描述" /tmp/mr_fallback_out.txt \
