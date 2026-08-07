@@ -1,0 +1,18 @@
+api_version: agentgate.io/profile/v1
+kind: go-bazel
+languages: [go, bazel]
+source_extensions: [.go, .bzl, .proto]
+test_patterns: ["**/*_test.go", "**/test/**", "**/tests/**"]
+generated_patterns: ["**/*.gen.go", "**/bazel-out/**"]
+commands: {test: "bazel test //..."}
+required_checks: [risk-scan, secret-scan, mr-validate, test-check, bazel-test]
+risk_paths:
+  high: ["**/payment/**", "**/account/**", "**/withdraw/**", "**/billing/**"]
+  critical: ["**/deploy/**", "**/security/**"]
+checks:
+  bazel-test: {command: "bazel test //..."}
+plans:
+  low: [bazel-test]
+  medium: [bazel-test]
+  high: [bazel-test]
+  critical: [bazel-test]

@@ -1,0 +1,18 @@
+api_version: agentgate.io/profile/v1
+kind: dotnet-monorepo
+languages: [dotnet]
+source_extensions: [.cs, .cshtml, .fs, .fsx]
+test_patterns: ["**/*Tests.cs", "**/*Test.cs", "**/Tests/**", "**/test/**"]
+generated_patterns: ["**/*.Designer.cs", "**/*.g.cs"]
+commands: {test: "dotnet test --no-restore"}
+required_checks: [risk-scan, secret-scan, mr-validate, test-check, dotnet-test]
+risk_paths:
+  high: ["**/auth/**", "**/payment/**", "**/deploy/**", "**/*.cshtml"]
+  critical: ["**/Dockerfile", "**/helm/**", "**/deployment/**"]
+checks:
+  dotnet-test: {command: "dotnet test --no-restore"}
+plans:
+  low: [dotnet-test]
+  medium: [dotnet-test]
+  high: [dotnet-test]
+  critical: [dotnet-test]

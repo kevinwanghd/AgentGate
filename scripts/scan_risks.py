@@ -81,18 +81,19 @@ SCAN_EXTENSIONS = {
     ".kt", ".rs", ".scala", ".swift", ".dart",
 }
 
-# 测试文件判定 (与 check_tested.py 保持一致)
+# 测试文件判定 (与 check_tested.py 保持一致，收紧避免误匹配)
 _TEST_FILE_RE = re.compile(
-    r'(^|/)(tests?|spec|__tests?__)(/|$)'
+    r'(^|/)(tests?|spec|__tests?__)/'  # test/, spec/, __tests__/ 目录下
     r'|(_test|_spec)\.[a-z]+$'
+    r'|Tests?\.[a-z]+$'
     r'|(^|/)test_[^/]+$',
     re.IGNORECASE,
 )
 
 # 行内豁免标记: // scan:ignore reason:"..." 或 # scan:ignore reason:"..."
-# 出现在命中行同行或上方 1 行内即豁免该行所有模式
+# 提高门槛：reason 需≥10字符，对齐 risk: 注解要求
 _SCAN_IGNORE_RE = re.compile(
-    r'scan:ignore\b.*?reason:\s*"(?P<reason>[^"]{5,})"',
+    r'scan:ignore\b.*?reason:\s*"(?P<reason>[^"]{10,})"',
     re.IGNORECASE,
 )
 
@@ -270,14 +271,21 @@ def _load_pattern_includes(cfg: dict, config_path: str | None) -> None:
     for inc in includes:
         full_path = inc if os.path.isabs(inc) else os.path.join(base_dir, inc)
         if not os.path.isfile(full_path):
-            sys.stderr.write(f"[scan-risks] pattern_includes: 文件不存在: {full_path}\n")
+            msg = f"[scan-risks] pattern_includes: 文件不存在: {full_path}\n"
+            sys.stderr.write(msg)
+            # hard 模式下缺文件报错，不静默跳过
+            if cfg["risk_annotations"].get("enforcement") == "hard":
+                raise ConfigError(f"pattern_includes file missing: {full_path}")
             continue
         try:
             import yaml as _yaml  # type: ignore
             with open(full_path, encoding="utf-8") as f:
                 data = _yaml.safe_load(f) or {}
         except Exception as e:
-            sys.stderr.write(f"[scan-risks] pattern_includes: 无法读取 {full_path}: {e}\n")
+            msg = f"[scan-risks] pattern_includes: 无法读取 {full_path}: {e}\n"
+            sys.stderr.write(msg)
+            if cfg["risk_annotations"].get("enforcement") == "hard":
+                raise ConfigError(f"pattern_includes load failed: {full_path}: {e}")
             continue
         for pat in (data.get("patterns") or []):
             existing.append(pat)

@@ -178,6 +178,11 @@ governance:test-check:
       [ -f "$CONFIG_PATH" ] || CONFIG_PATH="governance/governance.config.yml"
       [ -f "$CONFIG_PATH" ] || { echo "[governance] policy file not found" >&2; exit 2; }
       CONFIG_ARG="--config $CONFIG_PATH"
+      if [ -f governance/scripts/selftest.sh ]; then
+        mkdir -p .governance
+        python governance/scripts/record_test_run.py \
+          --evidence .governance/test-evidence.jsonl -- bash governance/scripts/selftest.sh
+      fi
       python governance/scripts/check_tested.py --diff-base "$BASE" $CONFIG_ARG
       EXIT_CODE=$?
       echo "{\"status\": \"$([ $EXIT_CODE -eq 0 ] && echo 'pass' || echo 'fail')\"}" \
@@ -186,6 +191,7 @@ governance:test-check:
   artifacts:
     paths:
       - governance-test-check-result.json
+      - .governance/test-evidence.jsonl
     expire_in: 1 day
   allow_failure: false
 
@@ -492,7 +498,7 @@ governance:gate-decision:
       CONFIG_PATH="${GOVERNANCE_CONFIG_PATH:-governance.config.yml}"
       [ -f "$CONFIG_PATH" ] || CONFIG_PATH="governance/governance.config.yml"
       [ -f "$CONFIG_PATH" ] || { echo "[governance] policy file not found" >&2; exit 2; }
-      POLICY_SHA="$(git rev-parse "${SOURCE_SHA}:${CONFIG_PATH}" 2>/dev/null || echo "$SOURCE_SHA")"
+      POLICY_SHA="$(git rev-parse "${TARGET_SHA}:${CONFIG_PATH}" 2>/dev/null || exit 2)"
       python - <<'PY' > gate-evidence.json
       import json
       import os
@@ -540,6 +546,7 @@ governance:gate-decision:
         --policy-sha "$POLICY_SHA" \
         --diff-base "origin/$TB" \
         --target-branch "$TB" \
+        --target-ref "$TARGET_SHA" \
         --pipeline-kind mr \
         --config "$CONFIG_PATH" \
         --output gate-result.json

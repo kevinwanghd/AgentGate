@@ -28,7 +28,7 @@ except Exception:
 SCAN_EXTENSIONS = {
     ".cs", ".js", ".ts", ".jsx", ".tsx", ".java", ".go",
     ".py", ".rb", ".php", ".cpp", ".cc", ".c", ".h", ".hpp",
-    ".kt", ".rs", ".scala", ".swift",
+    ".kt", ".rs", ".scala", ".swift", ".dart", ".bzl", ".proto", ".cshtml",
 }
 
 DEFAULT_MAX_AGE = 180

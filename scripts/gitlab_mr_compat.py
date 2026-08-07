@@ -235,7 +235,13 @@ def resolve_description(
 ) -> DescriptionResolution:
     """Resolve one description without exposing source-selection complexity."""
 
-    if "CI_MERGE_REQUEST_DESCRIPTION" in os.environ:
+    pipeline_source = os.environ.get("CI_PIPELINE_SOURCE")
+    # Older GitLab MR jobs did not export CI_PIPELINE_SOURCE. Preserve that
+    # compatibility, but never trust an injected description when the pipeline
+    # explicitly identifies itself as a push/schedule pipeline.
+    if "CI_MERGE_REQUEST_DESCRIPTION" in os.environ and pipeline_source not in {
+        "push", "web", "schedule", "api", "trigger", "pipeline",
+    }:
         ci_description = os.environ.get("CI_MERGE_REQUEST_DESCRIPTION", "")
         return DescriptionResolution(
             text=ci_description,
@@ -324,7 +330,10 @@ def resolve_description(
 def validate_description(
     text: str, config_path: str | None, diff_base: str | None
 ) -> list[str]:
-    cfg = validate_mr.load_config(config_path)
+    # 显式要求配置路径，不静默用 DEFAULT_CONFIG
+    if config_path is None or not os.path.isfile(config_path):
+        raise ValueError(f"config path required and must exist: {config_path}")
+    cfg = validate_mr.load_config(config_path, explicit=True)
     return validate_mr.validate(text, cfg, diff_base)
 
 

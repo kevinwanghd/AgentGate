@@ -166,7 +166,10 @@ def _normalize_check(item: dict[str, Any]) -> dict[str, Any]:
         "type": str(item.get("type") or check_id),
         "status": status,
     }
-    for key in ("command", "command_id", "exit_code", "duration_seconds", "report"):
+    for key in (
+        "command", "command_id", "command_digest", "exit_code", "duration_seconds",
+        "started_at", "finished_at", "report",
+    ):
         if key in item:
             normalized[key] = item[key]
     return normalized
@@ -184,6 +187,7 @@ def build_bundle(args) -> dict[str, Any]:
         "policy_digest": args.policy_digest,
         "profile_digest": args.profile_digest,
         "runner_image_digest": args.runner_image_digest,
+        "runner_identity": args.runner_identity,
         "started_at": args.started_at,
         "finished_at": args.finished_at or _now(),
         "checks": checks,
@@ -192,13 +196,18 @@ def build_bundle(args) -> dict[str, Any]:
 
 def verify_bundle(bundle: dict[str, Any], expected: dict[str, str]) -> list[str]:
     problems = []
+    strict_expectations = not expected or all(
+        expected.get(key) for key in ("source_sha", "target_sha", "merge_sha", "policy_digest", "profile_digest")
+    )
     if bundle.get("schema_version") != SCHEMA_VERSION:
         problems.append("schema_version_mismatch")
     for key in ("source_sha", "target_sha", "merge_sha", "policy_digest", "profile_digest"):
         if not bundle.get(key):
             problems.append(f"{key}_missing")
         expected_value = expected.get(key)
-        if expected_value and bundle.get(key) != expected_value:
+        if strict_expectations and not expected_value:
+            problems.append(f"{key}_expected_missing")
+        elif expected_value and bundle.get(key) != expected_value:
             problems.append(f"{key}_mismatch")
     checks = bundle.get("checks")
     if not isinstance(checks, list) or not checks:
@@ -288,6 +297,7 @@ def main() -> int:
     bundle.add_argument("--policy-digest", required=True)
     bundle.add_argument("--profile-digest", required=True)
     bundle.add_argument("--runner-image-digest", required=True)
+    bundle.add_argument("--runner-identity", required=True)
     bundle.add_argument("--started-at", default="")
     bundle.add_argument("--finished-at", default="")
     bundle.add_argument("--checks", required=True)
@@ -296,11 +306,11 @@ def main() -> int:
 
     verify = sub.add_parser("verify", help="verify evidence bundle bindings")
     verify.add_argument("--bundle", required=True)
-    verify.add_argument("--source-sha", default="")
-    verify.add_argument("--target-sha", default="")
-    verify.add_argument("--merge-sha", default="")
-    verify.add_argument("--policy-digest", default="")
-    verify.add_argument("--profile-digest", default="")
+    verify.add_argument("--source-sha", required=True)
+    verify.add_argument("--target-sha", required=True)
+    verify.add_argument("--merge-sha", required=True)
+    verify.add_argument("--policy-digest", required=True)
+    verify.add_argument("--profile-digest", required=True)
     verify.set_defaults(func=cmd_verify)
 
     args = parser.parse_args()

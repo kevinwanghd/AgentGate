@@ -20,6 +20,11 @@ from typing import Any
 
 from governance_common import ConfigError, load_config
 
+try:
+    import yaml  # type: ignore
+except ImportError:  # pragma: no cover
+    yaml = None
+
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "auto_merge": {
@@ -82,6 +87,23 @@ def _changed_paths(diff_base: str, head: str) -> list[str]:
         errors="replace",
     )
     return [line.replace("\\", "/") for line in result.stdout.splitlines() if line.strip()]
+
+
+def load_policy_from_target_branch(target_ref: str, config_path: str) -> dict[str, Any]:
+    """Load policy from the trusted target ref, never from the PR worktree."""
+    path = Path(config_path)
+    if not target_ref or path.is_absolute() or ".." in path.parts:
+        raise ConfigError("target policy requires a safe repository-relative config path")
+    result = subprocess.run(
+        ["git", "show", f"{target_ref}:{path.as_posix()}"],
+        check=True, capture_output=True, text=True, encoding="utf-8",
+    )
+    if yaml is None:
+        raise ConfigError("PyYAML is required to load target policy")
+    policy = yaml.safe_load(result.stdout) or {}
+    if not isinstance(policy, dict):
+        raise ConfigError("target policy must be a mapping")
+    return policy
 
 
 def _is_protected(path: str, patterns: list[str]) -> bool:
@@ -172,14 +194,14 @@ def build_gate_result(
     if valid_approvals < required_approvals:
         reasons.append("approval_missing")
 
+    # 先计算 result（ERROR > FAIL > WAITING_APPROVAL > PASS），再决定 action
     checks_pass = not missing and not failed
     pass_result = checks_pass and not critical_paths and not is_direct_push_on_protected and valid_approvals >= required_approvals
-    enabled = bool(auto.get("enabled", True))
-    if not enabled:
-        reasons.append("auto_merge_disabled")
-    if not enabled:
-        result = "WAITING_APPROVAL"
-        action = "WAIT"
+
+    # 决定 result（与 auto_merge.enabled 无关）
+    if missing:
+        result = "ERROR"  # required check 缺失属基础设施错误
+        action = "BLOCK"
     elif is_direct_push_on_protected:
         # 受保护分支必须通过 MR 才能合并，直推流水线上禁止 bot 自动合并
         result = "FAIL"
@@ -190,7 +212,13 @@ def build_gate_result(
         action = "WAIT" if critical_paths or "approval_missing" in reasons else "BLOCK"
     else:
         result = "PASS"
-        action = "AUTO_MERGE"
+        # auto_merge.enabled 只影响 action，不影响 result
+        enabled = bool(auto.get("enabled", True))
+        if not enabled:
+            reasons.append("auto_merge_disabled")
+            action = "MANUAL_MERGE"
+        else:
+            action = "AUTO_MERGE"
 
     return {
         "schema_version": "v2",
@@ -233,10 +261,15 @@ def main() -> int:
         default="mr",
         help="流水线类型：mr=MR/PR 流水线（默认）；push=直推流水线，命中保护分支时阻断 bot 自动合并",
     )
+    parser.add_argument("--target-ref", help="trusted target ref used to load policy")
     args = parser.parse_args()
 
     try:
-        config = load_config(args.config, DEFAULT_CONFIG, ("auto_merge",))
+        config = (
+            load_policy_from_target_branch(args.target_ref, "governance.config.yml")
+            if args.target_ref
+            else load_config(args.config, DEFAULT_CONFIG, ("auto_merge",))
+        )
         # utf-8-sig 同时兼容 Linux CI 的 UTF-8 和 Windows/PowerShell 写出的 BOM。
         evidence = json.loads(Path(args.evidence).read_text(encoding="utf-8-sig"))
         for key, expected in (

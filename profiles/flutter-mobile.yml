@@ -3,6 +3,15 @@ kind: LanguageProfile
 name: flutter-mobile
 version: 1.0.0
 
+languages: [dart, flutter]
+source_extensions: [.dart, .yaml, .yml]
+test_patterns: ["**/*_test.dart", "**/test/**", "**/tests/**"]
+generated_patterns: ["**/*.g.dart", "**/*.freezed.dart"]
+commands:
+  analyze: flutter analyze
+  test: flutter test
+required_checks: [risk-scan, secret-scan, mr-validate, test-check, flutter-analyze, flutter-test]
+
 checks:
   dart-format:
     type: format

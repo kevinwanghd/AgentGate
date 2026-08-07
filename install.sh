@@ -16,6 +16,7 @@ TARGET_DIR="$PWD"
 AGENTS="all"   # 默认装所有 AI 指令文件
 PLATFORM="gitlab"
 MODE="pinned"
+PROFILE="flutter-mobile"
 AGENTGATE_REPO="kevinwanghd/AgentGate"
 AGENTGATE_REF="github-stable"
 while [[ $# -gt 0 ]]; do
@@ -26,6 +27,8 @@ while [[ $# -gt 0 ]]; do
     --platform=*) PLATFORM="${1#*=}"; shift ;;
     --mode) MODE="$2"; shift 2 ;;
     --mode=*) MODE="${1#*=}"; shift ;;
+    --profile) PROFILE="$2"; shift 2 ;;
+    --profile=*) PROFILE="${1#*=}"; shift ;;
     --agentgate-repo) AGENTGATE_REPO="$2"; shift 2 ;;
     --agentgate-repo=*) AGENTGATE_REPO="${1#*=}"; shift ;;
     --agentgate-ref) AGENTGATE_REF="$2"; shift 2 ;;
@@ -178,6 +181,17 @@ case "$PLATFORM" in
     err "无效的 --platform 值: $PLATFORM (可选: github/gitlab)"
     exit 1
     ;;
+esac
+
+case "$PROFILE" in
+  flutter-mobile|dotnet-monorepo|go-bazel) ;;
+  *) err "无效的 --profile 值: $PROFILE (可选: flutter-mobile/dotnet-monorepo/go-bazel)"; exit 1 ;;
+esac
+
+case "$PROFILE" in
+  flutter-mobile) PROFILE_REQUIRED_YAML=$'      - flutter-analyze\n      - flutter-test' ;;
+  dotnet-monorepo) PROFILE_REQUIRED_YAML='      - dotnet-test' ;;
+  go-bazel) PROFILE_REQUIRED_YAML='      - bazel-test' ;;
 esac
 
 case "$MODE" in
@@ -373,16 +387,19 @@ auto_merge:
       - secret-scan
       - mr-validate
       - test-check
+${PROFILE_REQUIRED_YAML}
     high:
       - risk-scan
       - secret-scan
       - mr-validate
       - test-check
+${PROFILE_REQUIRED_YAML}
     critical:
       - risk-scan
       - secret-scan
       - mr-validate
       - test-check
+${PROFILE_REQUIRED_YAML}
   required_checks:
     - risk-scan
     - secret-scan
@@ -549,7 +566,7 @@ create_repository_lessons_file
 
 # ---------- 4c. 语言验证 profile ----------
 log "安装语言验证 profile -> governance/profiles/"
-fetch_or_local "profiles/flutter-mobile.yml" | write_file "governance/profiles/flutter-mobile.yml"
+fetch_or_local "profiles/${PROFILE}.yml" | write_file "governance/profiles/${PROFILE}.yml"
 
 # 自动安装 AI-Usage 采集 git hook (提交时自动写 trailer, 无需人工填)
 if git -C "$TARGET_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
