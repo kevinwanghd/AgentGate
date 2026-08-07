@@ -340,8 +340,9 @@ python governance/scripts/risk_merge_decision.py \
 > ✅ **三个 job 全部就绪**：`risk-scan`（`scan_risks.py`，硬门禁）、`mr-validate`（`validate_mr.py`，软门禁）已实现并通过自测；`secret-scan` 用官方 `gitleaks` 镜像扫本次 MR 范围（硬门禁）。install.sh 生成的 `governance/ci-snippet.yml` 直接调用它们，不再是占位 echo。
 >
 > 运行环境要求：
-> - `risk-scan` / `mr-validate`：镜像需有 `python3` + `pyyaml`（ci-snippet 用 `python:3.11-slim`，`before_script` 里 `pip install pyyaml`）。
-> - `secret-scan`：用 `zricethezav/gitleaks:latest` 镜像，无需额外依赖；需 `GIT_DEPTH: 0` 拉完整历史以便按范围扫描。
+> - `risk-scan` / `mr-validate` / `secret-scan`：`GOVERNANCE_PY_IMAGE` 需有 `python3`、`git`、`pyyaml`。
+> - 语言测试 job 只通过 `GOVERNANCE_GO_IMAGE`、`GOVERNANCE_DOTNET_IMAGE` 等变量选择镜像。AgentGate 模板不会主动使用公网运行时镜像；需要真实运行某语言测试时，请把对应变量配置为内部预构建镜像。
+> - `secret-scan` 使用仓库内置 `scan_secrets.py` 扫本次 MR 范围，不在 CI 中下载或安装 scanner。
 >
 > 本地随时可验证脚本行为：
 > ```bash

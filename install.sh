@@ -19,6 +19,15 @@ MODE="pinned"
 PROFILE="flutter-mobile"
 AGENTGATE_REPO="kevinwanghd/AgentGate"
 AGENTGATE_REF="github-stable"
+CI_IMAGE_POLICY="${GOVERNANCE_CI_IMAGE_POLICY:-internal-only}"
+CI_PY_IMAGE="${GOVERNANCE_PY_IMAGE:-swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest}"
+CI_GO_IMAGE="${GOVERNANCE_GO_IMAGE:-$CI_PY_IMAGE}"
+CI_FLUTTER_IMAGE="${GOVERNANCE_FLUTTER_IMAGE:-$CI_PY_IMAGE}"
+CI_PYTHON_TEST_IMAGE="${GOVERNANCE_PYTHON_TEST_IMAGE:-$CI_PY_IMAGE}"
+CI_NODE_IMAGE="${GOVERNANCE_NODE_IMAGE:-$CI_PY_IMAGE}"
+CI_JAVA_IMAGE="${GOVERNANCE_JAVA_IMAGE:-$CI_PY_IMAGE}"
+CI_DOTNET_IMAGE="${GOVERNANCE_DOTNET_IMAGE:-$CI_PY_IMAGE}"
+CI_RUST_IMAGE="${GOVERNANCE_RUST_IMAGE:-$CI_PY_IMAGE}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --agents) AGENTS="$2"; shift 2 ;;
@@ -33,6 +42,46 @@ while [[ $# -gt 0 ]]; do
     --agentgate-repo=*) AGENTGATE_REPO="${1#*=}"; shift ;;
     --agentgate-ref) AGENTGATE_REF="$2"; shift 2 ;;
     --agentgate-ref=*) AGENTGATE_REF="${1#*=}"; shift ;;
+    --ci-image-policy) CI_IMAGE_POLICY="$2"; shift 2 ;;
+    --ci-image-policy=*) CI_IMAGE_POLICY="${1#*=}"; shift ;;
+    --ci-all-image)
+      CI_PY_IMAGE="$2"
+      CI_GO_IMAGE="$2"
+      CI_FLUTTER_IMAGE="$2"
+      CI_PYTHON_TEST_IMAGE="$2"
+      CI_NODE_IMAGE="$2"
+      CI_JAVA_IMAGE="$2"
+      CI_DOTNET_IMAGE="$2"
+      CI_RUST_IMAGE="$2"
+      shift 2
+      ;;
+    --ci-all-image=*)
+      CI_PY_IMAGE="${1#*=}"
+      CI_GO_IMAGE="${1#*=}"
+      CI_FLUTTER_IMAGE="${1#*=}"
+      CI_PYTHON_TEST_IMAGE="${1#*=}"
+      CI_NODE_IMAGE="${1#*=}"
+      CI_JAVA_IMAGE="${1#*=}"
+      CI_DOTNET_IMAGE="${1#*=}"
+      CI_RUST_IMAGE="${1#*=}"
+      shift
+      ;;
+    --ci-python-image) CI_PY_IMAGE="$2"; shift 2 ;;
+    --ci-python-image=*) CI_PY_IMAGE="${1#*=}"; shift ;;
+    --ci-go-image) CI_GO_IMAGE="$2"; shift 2 ;;
+    --ci-go-image=*) CI_GO_IMAGE="${1#*=}"; shift ;;
+    --ci-flutter-image) CI_FLUTTER_IMAGE="$2"; shift 2 ;;
+    --ci-flutter-image=*) CI_FLUTTER_IMAGE="${1#*=}"; shift ;;
+    --ci-python-test-image) CI_PYTHON_TEST_IMAGE="$2"; shift 2 ;;
+    --ci-python-test-image=*) CI_PYTHON_TEST_IMAGE="${1#*=}"; shift ;;
+    --ci-node-image) CI_NODE_IMAGE="$2"; shift 2 ;;
+    --ci-node-image=*) CI_NODE_IMAGE="${1#*=}"; shift ;;
+    --ci-java-image) CI_JAVA_IMAGE="$2"; shift 2 ;;
+    --ci-java-image=*) CI_JAVA_IMAGE="${1#*=}"; shift ;;
+    --ci-dotnet-image) CI_DOTNET_IMAGE="$2"; shift 2 ;;
+    --ci-dotnet-image=*) CI_DOTNET_IMAGE="${1#*=}"; shift ;;
+    --ci-rust-image) CI_RUST_IMAGE="$2"; shift 2 ;;
+    --ci-rust-image=*) CI_RUST_IMAGE="${1#*=}"; shift ;;
     *) TARGET_DIR="$1"; shift ;;
   esac
 done
@@ -119,12 +168,61 @@ fetch_or_local() {
   fi
 }
 
+sed_replacement_escape() {
+  printf '%s' "$1" | sed 's/[&|\\]/\\&/g'
+}
+
+is_public_image_ref() {
+  local image="$1"
+  case "$image" in
+    python:*|node:*|golang:*|maven:*|rust:*|ubuntu:*|debian:*|alpine:*|docker:*) return 0 ;;
+    mcr.microsoft.com/*|ghcr.io/*|docker.io/*|registry-1.docker.io/*|gcr.io/*|quay.io/*) return 0 ;;
+  esac
+  return 1
+}
+
+validate_ci_image_policy() {
+  case "$CI_IMAGE_POLICY" in
+    internal-only) ;;
+    *) err "无效的 --ci-image-policy 值: $CI_IMAGE_POLICY (当前支持: internal-only)"; exit 1 ;;
+  esac
+  local name image
+  for name in \
+    CI_PY_IMAGE CI_GO_IMAGE CI_FLUTTER_IMAGE CI_PYTHON_TEST_IMAGE \
+    CI_NODE_IMAGE CI_JAVA_IMAGE CI_DOTNET_IMAGE CI_RUST_IMAGE
+  do
+    image="${!name}"
+    if [[ -z "$image" ]]; then
+      err "$name 不能为空"
+      exit 1
+    fi
+    if is_public_image_ref "$image"; then
+      err "$name=$image 指向公网基础镜像；internal-only 策略下请改为内部预构建镜像或 CI 变量。"
+      exit 1
+    fi
+  done
+}
+
+render_gitlab_ci_template() {
+  fetch_or_local "ci/governance-ci.yml" | sed \
+    -e "s|GOVERNANCE_PY_IMAGE: \".*\"|GOVERNANCE_PY_IMAGE: \"$(sed_replacement_escape "$CI_PY_IMAGE")\"|" \
+    -e "s|GOVERNANCE_GO_IMAGE: \".*\"|GOVERNANCE_GO_IMAGE: \"$(sed_replacement_escape "$CI_GO_IMAGE")\"|" \
+    -e "s|GOVERNANCE_FLUTTER_IMAGE: \".*\"|GOVERNANCE_FLUTTER_IMAGE: \"$(sed_replacement_escape "$CI_FLUTTER_IMAGE")\"|" \
+    -e "s|GOVERNANCE_PYTHON_TEST_IMAGE: \".*\"|GOVERNANCE_PYTHON_TEST_IMAGE: \"$(sed_replacement_escape "$CI_PYTHON_TEST_IMAGE")\"|" \
+    -e "s|GOVERNANCE_NODE_IMAGE: \".*\"|GOVERNANCE_NODE_IMAGE: \"$(sed_replacement_escape "$CI_NODE_IMAGE")\"|" \
+    -e "s|GOVERNANCE_JAVA_IMAGE: \".*\"|GOVERNANCE_JAVA_IMAGE: \"$(sed_replacement_escape "$CI_JAVA_IMAGE")\"|" \
+    -e "s|GOVERNANCE_DOTNET_IMAGE: \".*\"|GOVERNANCE_DOTNET_IMAGE: \"$(sed_replacement_escape "$CI_DOTNET_IMAGE")\"|" \
+    -e "s|GOVERNANCE_RUST_IMAGE: \".*\"|GOVERNANCE_RUST_IMAGE: \"$(sed_replacement_escape "$CI_RUST_IMAGE")\"|"
+}
+
 # ---------- 前置检查 ----------
 log "MR 治理规范 ${VERSION} 安装到: ${TARGET_DIR}"
 
 if [[ ! -d "${TARGET_DIR}/.git" ]]; then
   warn "${TARGET_DIR} 不是 git 仓库根目录, 仍继续安装但 CI 集成可能失效。"
 fi
+
+validate_ci_image_policy
 
 # ---------- GitLab URL / project id 自动探测 ----------
 _detect_gitlab_url() {
@@ -371,6 +469,19 @@ large_change:
     - "migrations/**"
     - "*.proto"
 
+ci:
+  image_policy: ${CI_IMAGE_POLICY}
+  # AgentGate 生成的 GitLab job 不主动拉公网镜像；所有镜像必须来自内部预构建镜像或 CI 变量。
+  images:
+    python: "${CI_PY_IMAGE}"
+    go: "${CI_GO_IMAGE}"
+    flutter: "${CI_FLUTTER_IMAGE}"
+    python_test: "${CI_PYTHON_TEST_IMAGE}"
+    node: "${CI_NODE_IMAGE}"
+    java: "${CI_JAVA_IMAGE}"
+    dotnet: "${CI_DOTNET_IMAGE}"
+    rust: "${CI_RUST_IMAGE}"
+
 auto_merge:
   enabled: true
   strategy: squash
@@ -580,7 +691,7 @@ fi
 # ---------- 5. CI 钩子片段 ----------
 CI_SNIPPET="${TARGET_DIR}/governance/ci-snippet.yml"
 mkdir -p "$(dirname "$CI_SNIPPET")"
-fetch_or_local "ci/governance-ci.yml" | write_file "governance/ci-snippet.yml"
+render_gitlab_ci_template | write_file "governance/ci-snippet.yml"
 ok "生成 CI 片段 governance/ci-snippet.yml (已接入真实扫描脚本)"
 
 # ---------- 5. 完成提示 ----------
@@ -619,7 +730,10 @@ cat <<EOF
   governance/patterns/dart.yml          (Dart/Flutter 专属风险规则包: warn 模式)
   governance/lessons/*.yml              (hard lesson 可执行约束)
   governance/lessons/repository.yml     (本仓库本地 lessons, 已存在则保留)
-  governance/profiles/flutter-mobile.yml (Flutter 真实验证 profile)
+  governance/profiles/${PROFILE}.yml       (语言验证 profile)
+  CI 镜像策略: ${CI_IMAGE_POLICY}
+  CI Python 镜像: ${CI_PY_IMAGE}
+  CI .NET 镜像: ${CI_DOTNET_IMAGE}
   CLAUDE.md                     (Claude Code / Kiro)
   .hermes.md                    (Hermes Agent v0.17.0)
   AGENTS.md                     (OpenAI Codex CLI + Hermes fallback)

@@ -17,6 +17,13 @@
 #                                        默认告警并跳过(流水线保持绿, 人工合并)
 #
 # ── 镜像要求 ─────────────────────────────────────────────────────────────────
+# AgentGate never downloads runtimes or pulls public images from governed jobs.
+# Every job image is selected through GOVERNANCE_*_IMAGE variables. Defaults
+# point at the internal Python governance image so optional language jobs skip
+# cleanly unless the runner image already contains that runtime. Repositories
+# that require a language check should override the matching variable with an
+# internal, prebuilt runtime image.
+#
 # GOVERNANCE_PY_IMAGE: 必须包含 python3, git, pyyaml
 #   默认值: swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest
 #   若企业使用不同的镜像仓库, 在项目/组级 CI/CD Variables 里覆盖此变量
@@ -35,6 +42,13 @@ stages:
 
 variables:
   GOVERNANCE_PY_IMAGE: "swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest"
+  GOVERNANCE_GO_IMAGE: "swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest"
+  GOVERNANCE_FLUTTER_IMAGE: "swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest"
+  GOVERNANCE_PYTHON_TEST_IMAGE: "swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest"
+  GOVERNANCE_NODE_IMAGE: "swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest"
+  GOVERNANCE_JAVA_IMAGE: "swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest"
+  GOVERNANCE_DOTNET_IMAGE: "swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest"
+  GOVERNANCE_RUST_IMAGE: "swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest"
 
 # ── 0. Hard lessons: installation and policy invariants ──────────────────────
 governance:lessons-validate:
@@ -270,7 +284,7 @@ governance:expired-report-manual:
 # Bazel 单仓需覆盖此 job 或设置 GOVERNANCE_SKIP_GO_TEST=true 跳过。
 governance:go-test:
   stage: governance
-  image: "$GOVERNANCE_PY_IMAGE"
+  image: "$GOVERNANCE_GO_IMAGE"
   only:
     - branches
     - merge_requests
@@ -315,7 +329,7 @@ governance:go-test:
 # ── 7a. Flutter/Dart 测试: 无 pubspec.yaml 时自动跳过 ────────────────────────
 governance:flutter-test:
   stage: governance
-  image: "$GOVERNANCE_PY_IMAGE"
+  image: "$GOVERNANCE_FLUTTER_IMAGE"
   only:
     - branches
     - merge_requests
@@ -356,7 +370,7 @@ governance:flutter-test:
 # ── 7b. Python 测试: 无 requirements.txt / pyproject.toml / setup.py 时跳过 ──
 governance:python-test:
   stage: governance
-  image: "$GOVERNANCE_PY_IMAGE"
+  image: "$GOVERNANCE_PYTHON_TEST_IMAGE"
   only:
     - branches
     - merge_requests
@@ -400,7 +414,7 @@ governance:python-test:
 # ── 7c. Node.js/TypeScript 测试: 无 package.json 时跳过 ──────────────────────
 governance:node-test:
   stage: governance
-  image: "$GOVERNANCE_PY_IMAGE"
+  image: "$GOVERNANCE_NODE_IMAGE"
   only:
     - branches
     - merge_requests
@@ -450,7 +464,7 @@ governance:node-test:
 # ── 7d. Java 测试: 无 pom.xml / build.gradle 时跳过 ─────────────────────────
 governance:java-test:
   stage: governance
-  image: "$GOVERNANCE_PY_IMAGE"
+  image: "$GOVERNANCE_JAVA_IMAGE"
   only:
     - branches
     - merge_requests
@@ -503,7 +517,7 @@ governance:java-test:
 # ── 7e. .NET/C# 测试: 无 .sln / .csproj 时跳过 ──────────────────────────────
 governance:dotnet-test:
   stage: governance
-  image: "$GOVERNANCE_PY_IMAGE"
+  image: "$GOVERNANCE_DOTNET_IMAGE"
   only:
     - branches
     - merge_requests
@@ -552,7 +566,7 @@ governance:dotnet-test:
 # ── 7f. Rust 测试: 无 Cargo.toml 时跳过 ─────────────────────────────────────
 governance:rust-test:
   stage: governance
-  image: "$GOVERNANCE_PY_IMAGE"
+  image: "$GOVERNANCE_RUST_IMAGE"
   only:
     - branches
     - merge_requests

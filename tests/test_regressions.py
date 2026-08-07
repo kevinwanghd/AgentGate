@@ -3072,22 +3072,68 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
             self.assertEqual(original, agents.read_text(encoding="utf-8"))
 
     def test_gitlab_template_uses_prebuilt_images_and_legacy_syntax(self) -> None:
+        for rel in ("ci/governance-ci.yml", "gitlab/ci-snippet.yml"):
+            with self.subTest(template=rel):
+                template = (ROOT / rel).read_text(encoding="utf-8")
+                self.assertIn("GOVERNANCE_PY_IMAGE", template)
+                self.assertIn("GOVERNANCE_DOTNET_IMAGE", template)
+                self.assertIn('image: "$GOVERNANCE_DOTNET_IMAGE"', template)
+                self.assertIn("governance:flutter-test:", template)
+                self.assertIn("python -c \"import yaml; print('pyyaml ok')\"", template)
+                self.assertIn("dependencies:", template)
+                self.assertNotIn("timeout:", template)
+                self.assertNotIn("apt-get", template)
+                self.assertNotIn("pip install -q pyyaml", template)
+                self.assertNotIn("python:3.11-slim", template)
+                self.assertNotIn("image: python:3.11", template)
+                self.assertNotIn("golang:", template)
+                self.assertNotIn("node:20", template)
+                self.assertNotIn("maven:", template)
+                self.assertNotIn("mcr.microsoft.com/", template)
+                self.assertNotIn("ghcr.io/", template)
+                self.assertNotIn("rust:", template)
         template = (ROOT / "ci" / "governance-ci.yml").read_text(encoding="utf-8")
-        self.assertIn("GOVERNANCE_PY_IMAGE", template)
-        self.assertIn("GOVERNANCE_PY_IMAGE", template)
-        self.assertIn("governance:flutter-test:", template)
         self.assertIn("git --version", template)
-        self.assertIn("python -c \"import yaml; print('pyyaml ok')\"", template)
-        self.assertIn("dependencies:", template)
-        self.assertNotIn("timeout:", template)
-        self.assertNotIn("apt-get", template)
-        self.assertNotIn("pip install -q pyyaml", template)
-        self.assertNotIn("python:3.11-slim", template)
-        self.assertNotIn("image: python:3.11", template)
         self.assertNotIn("rules:", template)
         self.assertNotIn("needs:", template)
         self.assertNotRegex(template, r"(?m)^\s+timeout:")
         self.assertNotIn("dotenv:", template)
+
+    def test_installer_renders_internal_only_ci_images(self) -> None:
+        bash = os.environ.get("AGENTGATE_BASH") or shutil.which("bash")
+        if not bash:
+            self.skipTest("bash is required for install.sh integration coverage")
+
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            dotnet_image = "$HW_CI_REGISTRY/flowop/sdk:9.0-bookworm-slim"
+            subprocess.run(
+                [
+                    bash,
+                    "-l",
+                    (ROOT / "install.sh").as_posix(),
+                    target.as_posix(),
+                    "--agents",
+                    "none",
+                    "--profile",
+                    "dotnet-monorepo",
+                    "--ci-dotnet-image",
+                    dotnet_image,
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+
+            snippet = (target / "governance" / "ci-snippet.yml").read_text(encoding="utf-8")
+            config = (target / "governance.config.yml").read_text(encoding="utf-8")
+            self.assertIn(f'GOVERNANCE_DOTNET_IMAGE: "{dotnet_image}"', snippet)
+            self.assertIn(f'dotnet: "{dotnet_image}"', config)
+            self.assertNotIn("mcr.microsoft.com/", snippet)
+            self.assertNotIn("python:3.11", snippet)
+            self.assertNotIn("ghcr.io/", snippet)
 
     def test_gitlab_legacy_lessons_are_recorded(self) -> None:
         lessons = (ROOT / "lessons" / "gitlab-legacy-ci.yml").read_text(encoding="utf-8")
@@ -3277,8 +3323,10 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
         self.assertIn("scripts/agentgate.py", installer)
         self.assertIn("scripts/evidence_bundle.py", installer)
         self.assertIn("scripts/risk_merge_decision.py", installer)
-        self.assertIn("profiles/flutter-mobile.yml", installer)
-        self.assertIn('fetch_or_local "ci/governance-ci.yml" | write_file "governance/ci-snippet.yml"', installer)
+        self.assertIn('fetch_or_local "profiles/${PROFILE}.yml"', installer)
+        self.assertIn("render_gitlab_ci_template | write_file \"governance/ci-snippet.yml\"", installer)
+        self.assertIn("--ci-dotnet-image", installer)
+        self.assertIn("internal-only", installer)
 
 
 class CheckTestedLogicInversionTests(unittest.TestCase):
@@ -3307,9 +3355,13 @@ class CheckTestedLogicInversionTests(unittest.TestCase):
             cfg["testing"]["enforcement"] = "hard"
             cfg["testing"]["accept_tested_trailer"] = False  # 最严配置
 
+            previous_cwd = os.getcwd()
             os.chdir(repo)
-            # check() 返回 (硬错误列表, 未测文件违规列表)
-            errors, untested = check_tested.check(diff, [], cfg, None, None)
+            try:
+                # check() 返回 (硬错误列表, 未测文件违规列表)
+                errors, untested = check_tested.check(diff, [], cfg, None, None)
+            finally:
+                os.chdir(previous_cwd)
 
             # 应报告 src/app.py 未测，不能因碰了 tests/test_noop.py 就豁免
             all_violations = errors + [u["file"] for u in untested]

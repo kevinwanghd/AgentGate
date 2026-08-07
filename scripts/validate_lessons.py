@@ -48,11 +48,30 @@ def check_gitlab_modern_schema_unsupported(root: Path, errors: list[str]) -> Non
 
 
 def check_gitlab_optional_language_image_pull(root: Path, errors: list[str]) -> None:
-    template = _read_first(root, "ci/governance-ci.yml", "governance/ci-snippet.yml")
-    forbidden = ("python:3.11", "python:3.11-slim", "apt-get", "pip install -q pyyaml")
-    for needle in forbidden:
-        if needle in template:
-            _fail(errors, f"gitlab_legacy.optional_language_image_pull: ci/governance-ci.yml contains {needle}")
+    templates: list[tuple[str, str]] = []
+    for rel in ("ci/governance-ci.yml", "gitlab/ci-snippet.yml", "governance/ci-snippet.yml"):
+        path = root / rel
+        if path.exists():
+            templates.append((rel, path.read_text(encoding="utf-8")))
+    if not templates:
+        templates.append(("ci/governance-ci.yml", _read_first(root, "ci/governance-ci.yml", "governance/ci-snippet.yml")))
+    forbidden = (
+        "python:3.11",
+        "python:3.11-slim",
+        "golang:",
+        "node:",
+        "maven:",
+        "rust:",
+        "mcr.microsoft.com/",
+        "ghcr.io/",
+        "docker.io/",
+        "apt-get",
+        "pip install -q pyyaml",
+    )
+    for rel, template in templates:
+        for needle in forbidden:
+            if needle in template:
+                _fail(errors, f"gitlab_legacy.optional_language_image_pull: {rel} contains {needle}")
 
 
 def check_gitlab_governance_core_required_checks(root: Path, errors: list[str]) -> None:
