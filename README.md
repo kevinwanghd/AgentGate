@@ -142,7 +142,7 @@ git add .agentgate/mr-description.md
 git commit -m "docs: prepare merge request description"
 ```
 
-CI 会确认该文件由当前分支修改过，再按正常 MR 规范校验。现代 GitLab 的 MR pipeline 仍直接校验真实 MR 描述；GitLab API 只保留为可选回退，不再依赖个人 PAT。手工创建 MR 时，将清单内容粘贴到 GitLab 描述框。
+CI 会确认该文件由当前分支修改过，并通过 GitLab API 读取真实 MR 描述后按正常 MR 规范校验。现代 GitLab 的 MR pipeline 仍直接校验真实 MR 描述。手工创建 MR 时，可将清单正文作为描述起点；真实 MR 描述不需要和清单逐字一致，但必须保留必填模块内容。
 
 ### 留痕与审计
 
@@ -196,7 +196,7 @@ AgentGate 包含 15 个 Python 脚本(在 `scripts/` 目录):
 | `record_test_run.py` | 记录测试运行(盖 Tested trailer) |
 | `create_mr.py` | 自动生成 MR(从 commit 提取信息)，支持生成分支 MR 描述清单 |
 | `agentgate.py` | 统一 CLI 入口；`mr prepare` 准备清单，`mr create` 提交 MR |
-| `gitlab_mr_compat.py` | GitLab CE 11.x 兼容校验：CI 实际描述 → 当前分支清单 → 显式只读 API 回退 |
+| `gitlab_mr_compat.py` | GitLab CE 11.x 兼容校验：读取真实 MR 描述，并用当前分支清单校验新鲜度 |
 | `gitlab_controller.py` | GitLab 11.4 外部 Controller 最小版，检查 Bot/API/保护分支/目标策略并创建 MR |
 | `evidence_bundle.py` | 生成 Evidence Plan/Bundle v2，校验证据与 source/target/merge/policy/profile 绑定 |
 | `risk_merge_decision.py` | 基于证据包做风险分级、审批校验、自动合并动作和审计记录 |

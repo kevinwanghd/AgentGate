@@ -259,7 +259,7 @@ if [[ "$HAS_YAML" == "1" ]]; then
   expect "缺字段deadline已过应阻断" 1 $?
 
   python3 "$VAL" --file plain_heading_mr.md --config hard.yml >/dev/null 2>&1
-  expect "普通文本标题不能通过硬门禁" 1 $?
+  expect "普通文本标题可通过硬门禁" 0 $?
 
   # 空模板的占位符不算填写 → 硬模式 FAIL
   TPL="${SCRIPT_DIR}/../templates/merge_request_default.md"
@@ -269,7 +269,7 @@ if [[ "$HAS_YAML" == "1" ]]; then
   fi
 else
   skip "缺字段deadline已过应阻断"
-  skip "普通文本标题不能通过硬门禁"
+  skip "普通文本标题可通过硬门禁"
   skip "空模板占位符不算填写"
 fi
 
@@ -529,6 +529,41 @@ Tested: pass (1/1)" )
 ( cd mr_dir && python3 "$CREATE" --why "改CI" --target-branch master --dry-run ) >/tmp/mr_out2.txt 2>&1
 grep -q "高敏路径" /tmp/mr_out2.txt
 expect "敏感路径自动评估大变更" 0 $?
+
+# prepare 成功提示必须告诉开发同步真实 GitLab MR 描述
+( cd mr_dir && python3 "$CREATE" --prepare --why "用户需求:接入支付" \
+    --target-branch master --skip-risk-scan --skip-tests ) >/tmp/mr_prepare_out.txt 2>&1
+prepare_rc=$?
+grep -q "同步 GitLab MR 描述" /tmp/mr_prepare_out.txt \
+  && grep -q ".agentgate/mr-description.md" /tmp/mr_prepare_out.txt
+prepare_hint_rc=$?
+if [[ "$prepare_rc" -eq 0 && "$prepare_hint_rc" -eq 0 ]]; then rc=0; else rc=1; fi
+expect "mr prepare 成功提示包含同步 MR 描述动作" 0 $rc
+
+# 无 token 且无 CLI fallback 时必须提示手工复制 MR 描述
+( cd mr_dir && env -u AGENTGATE_GITLAB_TOKEN -u GITLAB_TOKEN -u GLAB_TOKEN \
+    -u PRIVATE_TOKEN -u GOVERNANCE_MR_VALIDATE_TOKEN -u GOVERNANCE_MERGE_BOT_TOKEN \
+    PATH="/usr/bin:/bin" python3 "$CREATE" --why "用户需求:接入支付" \
+    --target-branch master --skip-risk-scan --skip-tests ) >/tmp/mr_fallback_out.txt 2>&1
+fallback_rc=$?
+grep -q "手工复制 MR 描述" /tmp/mr_fallback_out.txt \
+  && grep -q "不要复制第一行 agentgate-pr-bind 注释" /tmp/mr_fallback_out.txt
+fallback_hint_rc=$?
+if [[ "$fallback_rc" -eq 1 && "$fallback_hint_rc" -eq 0 ]]; then rc=0; else rc=1; fi
+expect "无 token fallback 提示手工复制 MR 描述" 0 $rc
+
+# CI stale manifest 文案必须包含可执行修复步骤
+PYTHONPATH="$SCRIPT_DIR" python3 - <<'PY' >/tmp/mr_compat_fix.txt
+import gitlab_mr_compat
+print(
+    "description manifest .agentgate/mr-description.md was not changed "
+    "relative to origin/master."
+    + gitlab_mr_compat._manifest_sync_fix_steps(".agentgate/mr-description.md")
+)
+PY
+grep -q "agentgate.py mr prepare" /tmp/mr_compat_fix.txt \
+  && grep -q "excluding the first agentgate-pr-bind comment line" /tmp/mr_compat_fix.txt
+expect "gitlab_mr_compat stale manifest 文案包含修复步骤" 0 $?
 
 # == create_mr.py × DeliverHQ 需求文档 ==
 echo

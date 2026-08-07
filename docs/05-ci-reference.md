@@ -134,8 +134,8 @@
 1. 按平台能力读取描述：
    - MR pipeline：读取 `CI_MERGE_REQUEST_DESCRIPTION`，标记 `actual_mr_verified=true`。
    - 旧版 branch pipeline：强制通过 GitLab API 读取实际打开的 MR 描述；读取失败时门禁失败。
-   - `.agentgate/mr-description.md` 只用于分支绑定和与实际描述的一致性校验，不能替代实际 MR 描述。
-2. 检查 MR 描述含 3 个必填段落：`## 背景`、`## 变更内容`、`## 自测确认`。
+   - `.agentgate/mr-description.md` 只用于分支绑定和新鲜度校验，不能替代实际 MR 描述。
+2. 检查 MR 描述含 3 个必填段落：`背景`、`变更内容`、`自测确认`。可以是 Markdown 标题，也可以是独立一行的普通模块名。
 3. **AI-Usage 不从描述读**：优先从本次 MR 的 commit trailer 读取（由 `collect_ai_usage.py` 在提交时自动写入）；trailer 缺失时退回看描述（兼容老 MR），并提示安装 hook。
 4. 判断是否"大变更"，是则要求 `## 风险与回滚`。
 5. v1 软模式：缺失项只打 `[warn]`，job 仍绿；`soft_deadline` 后转硬阻断。

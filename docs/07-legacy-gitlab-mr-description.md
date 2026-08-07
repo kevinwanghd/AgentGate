@@ -26,9 +26,9 @@ diff_base + target_branch + config + output
 |---|---|---:|---:|
 | 1 | `CI_MERGE_REQUEST_DESCRIPTION` | 是 | 是 |
 | 2 | GitLab 项目接口 | 是 | 是（branch pipeline） |
-| 辅助 | `.agentgate/mr-description.md` | 否，只做绑定与一致性校验 | 可选 |
+| 辅助 | `.agentgate/mr-description.md` | 否，只做绑定与新鲜度校验 | 可选 |
 
-分支清单不能作为 MR 描述的替代输入。清单存在时，必须相对目标分支发生变化，并且去除绑定头后的内容必须与 GitLab 实际 MR 描述一致。
+分支清单不能作为 MR 描述的替代输入。清单存在时，必须相对目标分支发生变化；GitLab 实际 MR 描述会单独校验必填模块，不要求和清单正文逐字一致。
 
 旧版 branch pipeline 必须通过 GitLab 项目接口读取实际打开的 MR。AgentGate 会按通用顺序读取可用的 GitLab token 环境变量，最终由 GitLab API 判断该 token 是否有权限；接口、项目 ID、token 或实际 MR 读取失败时一律失败。支持的常见变量包括：
 
@@ -70,7 +70,7 @@ git commit -m "docs: prepare merge request description"
 git push
 ```
 
-手工创建 MR 时，将清单原文粘贴到 GitLab 描述框。现代 MR pipeline 会直接校验网页中的实际描述。
+手工创建 MR 时，可用 `agentgate.py mr body` 输出清单正文作为起点，也可以人工整理格式；只要真实 MR 描述保留必填模块内容即可。现代 MR pipeline 会直接校验网页中的实际描述。
 
 ## 失败策略
 
@@ -78,5 +78,5 @@ git push
 - 项目接口、项目 ID 或 GitLab token 缺失：失败；
 - 找不到当前 source branch 对应的打开 MR：失败；
 - 清单存在但未由当前分支更新：失败；
-- 清单存在但与实际 MR 描述不一致：失败；
+- 实际 MR 描述缺少必填模块：失败；
 - 默认分支自身流水线：跳过，因为不存在待校验 MR。

@@ -98,11 +98,17 @@ def check_gitlab_actual_mr_description_authoritative(root: Path, errors: list[st
     required = {
         'source="gitlab-api"': compat,
         "actual_mr_verified=True": compat,
-        "actual GitLab MR description does not match the branch manifest": compat,
+        "manifest_changed": compat,
     }
     if tests:
         required[
             "test_branch_pipeline_rejects_empty_actual_mr_even_with_valid_manifest"
+        ] = tests
+        required[
+            "test_branch_pipeline_allows_actual_mr_to_differ_from_manifest_format"
+        ] = tests
+        required[
+            "test_branch_pipeline_validates_actual_mr_with_real_validator"
         ] = tests
         required[
             "test_deprecated_allow_missing_description_cannot_bypass_gate"

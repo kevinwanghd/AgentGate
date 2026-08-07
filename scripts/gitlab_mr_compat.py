@@ -34,6 +34,17 @@ READ_TOKEN_ENV = "AGENTGATE_GITLAB_READ_TOKEN"
 TOKEN_ENV_NAMES = (READ_TOKEN_ENV, *create_mr.GITLAB_TOKEN_ENV_NAMES)
 
 
+def _manifest_sync_fix_steps(manifest_path: str) -> str:
+    return (
+        f"\nFix:\n"
+        f"  1. Run: python3 governance/scripts/agentgate.py mr prepare --why \"...\"\n"
+        f"  2. Commit and push {manifest_path}\n"
+        f"  3. Update the GitLab MR description with the body from {manifest_path}\n"
+        f"     excluding the first agentgate-pr-bind comment line.\n"
+        f"  4. Retry this job."
+    )
+
+
 @dataclass(frozen=True)
 class DescriptionResolution:
     """Resolved description plus the authority represented by its source."""
@@ -196,10 +207,6 @@ def _manifest_changed(path: str, diff_base: str | None) -> bool:
     )
 
 
-def _normalize_description(value: str) -> str:
-    return value.replace("\r\n", "\n").strip()
-
-
 def _ensure_target_ref(target_branch: str) -> str:
     diff_base = f"origin/{target_branch}"
     verify = subprocess.run(
@@ -295,7 +302,8 @@ def resolve_description(
         if not _manifest_changed(args.manifest_path, actual_diff_base):
             raise DescriptionSourceError(
                 f"description manifest {args.manifest_path} was not changed "
-                f"relative to {actual_diff_base}; run `agentgate.py mr prepare`",
+                f"relative to {actual_diff_base}."
+                f"{_manifest_sync_fix_steps(args.manifest_path)}",
                 source="gitlab-api",
                 actual_mr_verified=True,
                 metadata=metadata,
@@ -303,20 +311,11 @@ def resolve_description(
         manifest_description = create_mr.strip_binding_header(
             manifest.read_text(encoding="utf-8-sig")
         )
-        if _normalize_description(manifest_description) != _normalize_description(
-            actual_description
-        ):
-            raise DescriptionSourceError(
-                "actual GitLab MR description does not match the branch manifest",
-                source="gitlab-api",
-                actual_mr_verified=True,
-                metadata={
-                    **metadata,
-                    "manifest_path": str(manifest).replace("\\", "/"),
-                },
-            )
         metadata["manifest_path"] = str(manifest).replace("\\", "/")
-        metadata["manifest_matches_actual"] = True
+        metadata["manifest_changed"] = True
+        metadata["manifest_description_sha256"] = hashlib.sha256(
+            manifest_description.encode("utf-8")
+        ).hexdigest()
 
     return DescriptionResolution(
         text=actual_description,
@@ -333,7 +332,7 @@ def validate_description(
     # 显式要求配置路径，不静默用 DEFAULT_CONFIG
     if config_path is None or not os.path.isfile(config_path):
         raise ValueError(f"config path required and must exist: {config_path}")
-    cfg = validate_mr.load_config(config_path, explicit=True)
+    cfg = validate_mr.load_config(config_path)
     return validate_mr.validate(text, cfg, diff_base)
 
 

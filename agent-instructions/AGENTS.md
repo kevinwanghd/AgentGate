@@ -5,14 +5,21 @@
 所有 AI agent 创建 MR 时必须走统一入口，不允许手写空描述或绕过本地校验。
 
 ```bash
+python governance/scripts/agentgate.py mr prepare \
+  --why "<用中文说明本次任务背景>"
+```
+
+已配置本地 GitLab API 凭据时，仍可使用原自动创建入口：
+
+```bash
 python governance/scripts/create_mr.py \
   --gitlab-api \
   --why "<用中文说明本次任务背景>"
 ```
 
-**不要用 glab**：glab 在自托管 GitLab（11.x）有两个已知问题——token 写不进 config、project 路径解析返回 404。必须走 `--gitlab-api` 直连 REST API。
+**不要用 glab**：glab 在自托管 GitLab（11.x）有两个已知问题——token 写不进 config、project 路径解析返回 404。有本地 token 时用 `agentgate.py mr create --gitlab-api` 直连 REST API；无本地 token 时提交 `.agentgate/mr-description.md` 后手工同步 MR 描述正文。
 
-前置环境变量（一次性配置）：
+可选环境变量（一次性配置，用于自动创建/更新 MR）：
 ```bash
 export AGENTGATE_GITLAB_TOKEN="你的token"       # GitLab Access Token，scope: api
 export AGENTGATE_GITLAB_PROJECT_ID="123"        # 数字 project id（不要用 owner/repo 路径）
@@ -40,13 +47,32 @@ export AGENTGATE_GITLAB_URL="https://gitlab.example.com"  # 不填时自动从 g
 
 MR 描述必须由 AgentGate 统一入口生成：
 
+无本地 token 时：
+
 ```bash
-python governance/scripts/create_mr.py \
-  --gitlab-api \
-  --why “<从用户原始需求提取的任务背景>”
+python governance/scripts/agentgate.py mr prepare \
+  --why "<从用户原始需求提取的任务背景>"
+git add .agentgate/mr-description.md
+git commit
+git push
+python governance/scripts/agentgate.py mr body
+# 将输出正文手工复制到 GitLab MR 描述
 ```
 
-`--gitlab-api` 模式直连 GitLab REST API，不依赖 glab/gh CLI。只需提供 `--why`，其余全自动。若源分支已有 open MR，自动更新描述。
+有本地 token 时：
+
+```bash
+python governance/scripts/agentgate.py mr prepare \
+  --why "<从用户原始需求提取的任务背景>"
+git add .agentgate/mr-description.md
+git commit
+git push
+python governance/scripts/agentgate.py mr create \
+  --gitlab-api \
+  --why "<从用户原始需求提取的任务背景>"
+```
+
+`--gitlab-api` 模式直连 GitLab REST API，不依赖 glab/gh CLI。只需提供 `--why`，其余全自动。若源分支已有 open MR，自动更新描述。CI 会校验真实 GitLab MR 描述的必填模块，并校验 `.agentgate/mr-description.md` 是否由当前分支更新；不要求两者逐字一致。
 
 ## CI 兜底
 
