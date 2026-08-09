@@ -1,0 +1,13 @@
+api_version: agentgate.io/profile/v1
+kind: CoreProfile
+name: core
+version: 1.0.0
+
+# The default profile only enables repository-agnostic governance checks.
+languages: []
+required_checks: [risk-scan, secret-scan, mr-validate, test-check]
+plans:
+  low: [risk-scan, secret-scan, mr-validate]
+  medium: [risk-scan, secret-scan, mr-validate, test-check]
+  high: [risk-scan, secret-scan, mr-validate, test-check]
+  critical: [risk-scan, secret-scan, mr-validate, test-check]
