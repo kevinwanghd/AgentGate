@@ -79,7 +79,7 @@ GitLab 不跟随 `github-stable`。GitLab 仓库继续使用本地 pinned 安装
 include:
   - project: 'platform/AgentGate'
     ref: gitlab-stable
-    file: '/gitlab/ci-snippet.yml'
+    file: '/ci/governance-ci.yml'
 ```
 
 因此更新 GitHub 自动更新线不会影响 GitLab 上的其他仓库。
@@ -109,7 +109,11 @@ include:
 
 ### CI 镜像策略
 
-GitLab 模板默认采用 `internal-only` 镜像策略：AgentGate job 不主动引用 Docker Hub、MCR、GHCR 等公网运行时镜像，也不在 CI 中安装运行时依赖。所有 job image 都通过变量选择：
+GitLab 模板默认采用 `internal-only` 镜像策略：AgentGate job 不主动引用 Docker Hub、MCR、GHCR 等公网运行时镜像，也不在 CI 中安装运行时依赖。所有 job image 都通过变量选择。`/gitlab/ci-snippet.yml` 仍保留为兼容入口，并只转发到 `/ci/governance-ci.yml`。
+
+安装器默认只启用 core gate；Flutter、.NET、Go 等语言 profile 必须显式通过 `--profile` 选择，不会因为接入 AgentGate 自动改变业务仓库的语言测试流程。
+
+所有 job image 都通过以下变量选择：
 
 - `GOVERNANCE_PY_IMAGE`
 - `GOVERNANCE_GO_IMAGE`

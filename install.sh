@@ -16,7 +16,7 @@ TARGET_DIR="$PWD"
 AGENTS="all"   # 默认装所有 AI 指令文件
 PLATFORM="gitlab"
 MODE="pinned"
-PROFILE="flutter-mobile"
+PROFILE="core"
 AGENTGATE_REPO="kevinwanghd/AgentGate"
 AGENTGATE_REF="github-stable"
 CI_IMAGE_POLICY="${GOVERNANCE_CI_IMAGE_POLICY:-internal-only}"
@@ -282,11 +282,12 @@ case "$PLATFORM" in
 esac
 
 case "$PROFILE" in
-  flutter-mobile|dotnet-monorepo|go-bazel) ;;
-  *) err "无效的 --profile 值: $PROFILE (可选: flutter-mobile/dotnet-monorepo/go-bazel)"; exit 1 ;;
+  core|flutter-mobile|dotnet-monorepo|go-bazel) ;;
+  *) err "无效的 --profile 值: $PROFILE (可选: core/flutter-mobile/dotnet-monorepo/go-bazel)"; exit 1 ;;
 esac
 
 case "$PROFILE" in
+  core) PROFILE_REQUIRED_YAML='' ;;
   flutter-mobile) PROFILE_REQUIRED_YAML=$'      - flutter-analyze\n      - flutter-test' ;;
   dotnet-monorepo) PROFILE_REQUIRED_YAML='      - dotnet-test' ;;
   go-bazel) PROFILE_REQUIRED_YAML='      - bazel-test' ;;

@@ -645,7 +645,7 @@ class GitLabMrCompatTests(unittest.TestCase):
             self.assertEqual("feature/reborn-testnew", payload["target_branch"])
             self.assertEqual("origin/feature/reborn-testnew", payload["diff_base"])
             self.assertIn("missing ## Background section", payload["problems"])
-            self.assertEqual(str(manifest), payload["manifest_path"])
+            self.assertEqual(str(manifest).replace("\\", "/"), payload["manifest_path"])
             self.assertTrue(payload["manifest_changed"])
             validate.assert_called_once_with(
                 "",
@@ -699,7 +699,7 @@ class GitLabMrCompatTests(unittest.TestCase):
             payload = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual("pass", payload["status"])
             self.assertEqual(2172, payload["iid"])
-            self.assertEqual(str(manifest), payload["manifest_path"])
+            self.assertEqual(str(manifest).replace("\\", "/"), payload["manifest_path"])
             self.assertTrue(payload["manifest_changed"])
             validate.assert_called_once()
 
@@ -3072,26 +3072,28 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
             self.assertEqual(original, agents.read_text(encoding="utf-8"))
 
     def test_gitlab_template_uses_prebuilt_images_and_legacy_syntax(self) -> None:
-        for rel in ("ci/governance-ci.yml", "gitlab/ci-snippet.yml"):
-            with self.subTest(template=rel):
-                template = (ROOT / rel).read_text(encoding="utf-8")
-                self.assertIn("GOVERNANCE_PY_IMAGE", template)
-                self.assertIn("GOVERNANCE_DOTNET_IMAGE", template)
-                self.assertIn('image: "$GOVERNANCE_DOTNET_IMAGE"', template)
-                self.assertIn("governance:flutter-test:", template)
-                self.assertIn("python -c \"import yaml; print('pyyaml ok')\"", template)
-                self.assertIn("dependencies:", template)
-                self.assertNotIn("timeout:", template)
-                self.assertNotIn("apt-get", template)
-                self.assertNotIn("pip install -q pyyaml", template)
-                self.assertNotIn("python:3.11-slim", template)
-                self.assertNotIn("image: python:3.11", template)
-                self.assertNotIn("golang:", template)
-                self.assertNotIn("node:20", template)
-                self.assertNotIn("maven:", template)
-                self.assertNotIn("mcr.microsoft.com/", template)
-                self.assertNotIn("ghcr.io/", template)
-                self.assertNotIn("rust:", template)
+        template = (ROOT / "ci" / "governance-ci.yml").read_text(encoding="utf-8")
+        compatibility = (ROOT / "gitlab" / "ci-snippet.yml").read_text(encoding="utf-8")
+        self.assertIn("GOVERNANCE_PY_IMAGE", template)
+        self.assertIn("GOVERNANCE_DOTNET_IMAGE", template)
+        self.assertIn('image: "$GOVERNANCE_DOTNET_IMAGE"', template)
+        self.assertIn("governance:flutter-test:", template)
+        self.assertIn("python -c \"import yaml; print('pyyaml ok')\"", template)
+        self.assertIn("dependencies:", template)
+        self.assertIn("local: '/ci/governance-ci.yml'", compatibility)
+        self.assertNotIn("governance:flutter-test:", compatibility)
+        for published in (template, compatibility):
+            self.assertNotIn("timeout:", published)
+            self.assertNotIn("apt-get", published)
+            self.assertNotIn("pip install -q pyyaml", published)
+            self.assertNotIn("python:3.11-slim", published)
+            self.assertNotIn("image: python:3.11", published)
+            self.assertNotIn("golang:", published)
+            self.assertNotIn("node:20", published)
+            self.assertNotIn("maven:", published)
+            self.assertNotIn("mcr.microsoft.com/", published)
+            self.assertNotIn("ghcr.io/", published)
+            self.assertNotIn("rust:", published)
         template = (ROOT / "ci" / "governance-ci.yml").read_text(encoding="utf-8")
         self.assertIn("git --version", template)
         self.assertNotIn("rules:", template)
@@ -3134,6 +3136,29 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
             self.assertNotIn("mcr.microsoft.com/", snippet)
             self.assertNotIn("python:3.11", snippet)
             self.assertNotIn("ghcr.io/", snippet)
+
+    def test_installer_defaults_to_core_governance_profile(self) -> None:
+        bash = os.environ.get("AGENTGATE_BASH") or shutil.which("bash")
+        if not bash:
+            self.skipTest("bash is required for install.sh integration coverage")
+
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            subprocess.run(
+                [bash, "-l", (ROOT / "install.sh").as_posix(), target.as_posix(), "--agents", "none"],
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            config = (target / "governance.config.yml").read_text(encoding="utf-8")
+            self.assertTrue((target / "governance" / "profiles" / "core.yml").exists())
+            self.assertIn("- risk-scan", config)
+            self.assertIn("- test-check", config)
+            self.assertNotIn("- flutter-analyze", config)
+            self.assertNotIn("- flutter-test", config)
+            self.assertNotIn("- dotnet-test", config)
 
     def test_gitlab_legacy_lessons_are_recorded(self) -> None:
         lessons = (ROOT / "lessons" / "gitlab-legacy-ci.yml").read_text(encoding="utf-8")

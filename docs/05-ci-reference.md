@@ -117,7 +117,7 @@
 
 ## secret-scan 做了什么
 
-1. 用官方 `gitleaks` 镜像扫描**本次 MR 引入的提交**（`base..HEAD`），不扫历史全量。
+1. 用 `GOVERNANCE_SECRET_IMAGE` 指定的内部 gitleaks 镜像扫描**本次 MR 引入的提交**（`base..HEAD`），不扫历史全量。
 2. 命中任何密钥/凭据模式（API key、token、私钥、连接串等）→ job 失败，**硬阻断**。
 3. 输出用 `--redact` 脱敏，不在日志里回显密钥明文，只显示文件、行号、规则名。
 
@@ -337,7 +337,7 @@ python governance/scripts/risk_merge_decision.py \
 
 ## v1 阶段的实现状态
 
-> ✅ **三个 job 全部就绪**：`risk-scan`（`scan_risks.py`，硬门禁）、`mr-validate`（`validate_mr.py`，软门禁）已实现并通过自测；`secret-scan` 用官方 `gitleaks` 镜像扫本次 MR 范围（硬门禁）。install.sh 生成的 `governance/ci-snippet.yml` 直接调用它们，不再是占位 echo。
+> ✅ **三个 job 全部就绪**：`risk-scan`（`scan_risks.py`，硬门禁）、`mr-validate`（`validate_mr.py`，软门禁）已实现并通过自测；`secret-scan` 使用 `GOVERNANCE_SECRET_IMAGE` 指定的内部 gitleaks 镜像扫描本次 MR 范围（硬门禁）。install.sh 生成的 `governance/ci-snippet.yml` 直接调用它们，不再是占位 echo。
 >
 > 运行环境要求：
 > - `risk-scan` / `mr-validate` / `secret-scan`：`GOVERNANCE_PY_IMAGE` 需有 `python3`、`git`、`pyyaml`。
