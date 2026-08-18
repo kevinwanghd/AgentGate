@@ -413,6 +413,19 @@ jobs:
           MERGE_ACTION="$(python3 -c 'import json; print(json.load(open("gate-result.json", encoding="utf-8"))["merge_action"])')"
           echo "merge_action=$MERGE_ACTION" >> "$GITHUB_OUTPUT"
           echo "GateResult:"; cat gate-result.json
+          # 门禁失败时让 job 也失败（不只是写 merge_action）
+          if [ "$MERGE_ACTION" != "AUTO_MERGE" ]; then
+            echo "门禁决策: $MERGE_ACTION，不允许自动合并。"
+            # block_list = ["BLOCK", "WAIT", "MANUAL_MERGE"]
+            if [ "$MERGE_ACTION" = "BLOCK" ]; then
+              echo "BLOCK — 立即阻断，禁止合并。"
+              exit 1
+            elif [ "$MERGE_ACTION" = "WAIT" ]; then
+              echo "WAIT — 需人工审批或满足前置条件。"
+              exit 1
+            fi
+            # MANUAL_MERGE / 其他：让 job 通过，auto-merge job 会自动跳过
+          fi
 
   # Merge Bot：只在 GateResult 成功后启用平台自动合并。
   # 开发 agent、测试 runner 和 Gate Controller 均不直接获得该权限。
