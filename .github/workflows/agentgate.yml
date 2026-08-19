@@ -64,6 +64,12 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Checkout AgentGate
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.agentgate-repository }}
+          ref: ${{ inputs.agentgate-ref }}
+          path: .agentgate
       - name: Scan introduced secrets (standard library)
         run: |
           BASE_REF="${{ github.event.pull_request.base.ref }}"

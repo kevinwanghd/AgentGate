@@ -183,16 +183,22 @@ def build_gate_result(
     if failed:
         reasons.append("required_check_failed")
 
-    if risk_level == "critical":
-        required_approvals = int(auto.get("critical_approvals", 1))
-    elif risk_level == "high":
-        required_approvals = int(auto.get("high_approvals", 0))
-    else:
+    # 单人维护者模式：跳过审批要求
+    single_maintainer = bool(auto.get("single_maintainer_mode", False))
+    if single_maintainer:
         required_approvals = 0
-    if risk_level == "critical":
-        reasons.append("critical_risk_requires_human_approval")
-    if valid_approvals < required_approvals:
-        reasons.append("approval_missing")
+        reasons.append("single_maintainer_mode_skip_approval")
+    else:
+        if risk_level == "critical":
+            required_approvals = int(auto.get("critical_approvals", 1))
+        elif risk_level == "high":
+            required_approvals = int(auto.get("high_approvals", 0))
+        else:
+            required_approvals = 0
+        if risk_level == "critical":
+            reasons.append("critical_risk_requires_human_approval")
+        if valid_approvals < required_approvals:
+            reasons.append("approval_missing")
 
     # 先计算 result（ERROR > FAIL > WAITING_APPROVAL > PASS），再决定 action
     checks_pass = not missing and not failed
