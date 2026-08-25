@@ -10,8 +10,8 @@ auto_merge:
   require_all_required_checks: true
   critical_approvals: 1       # critical 风险路径变更时需要的人工审批数
   high_approvals: 0
-  # 单人维护者模式：启用后跳过审批要求（适用于只有 1 人维护的仓库）
-  single_maintainer_mode: true
+  # 单人维护者模式：关闭，正常走审批流
+  single_maintainer_mode: false
   required_checks_by_risk:
     low:
       - risk-scan
