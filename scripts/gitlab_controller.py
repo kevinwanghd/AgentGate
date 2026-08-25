@@ -161,19 +161,24 @@ def build_readiness(args, require_source: bool = False) -> dict[str, Any]:
         checks.append(_check("target_branch_exists", "fail", str(exc)))
 
     if require_source or getattr(args, "source_branch", None):
-        source = args.source_branch or create_mr.current_branch()
         try:
-            source_payload = _branch(args, source)
-            checks.append(
-                _check(
-                    "source_branch_exists",
-                    "pass",
-                    f"source {source} exists",
-                    {"source_sha": _commit_sha(source_payload)},
+            source = args.source_branch or create_mr.current_branch()
+        except SystemExit:
+            source = None
+            checks.append(_check("source_branch_exists", "fail", "无法获取当前分支（git 不可用或不在仓库中）"))
+        if source:
+            try:
+                source_payload = _branch(args, source)
+                checks.append(
+                    _check(
+                        "source_branch_exists",
+                        "pass",
+                        f"source {source} exists",
+                        {"source_sha": _commit_sha(source_payload)},
+                    )
                 )
-            )
-        except RuntimeError as exc:
-            checks.append(_check("source_branch_exists", "fail", str(exc)))
+            except RuntimeError as exc:
+                checks.append(_check("source_branch_exists", "fail", str(exc)))
 
     try:
         protected_payload = _protected_branch(args, args.target_branch)

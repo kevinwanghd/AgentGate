@@ -21,7 +21,8 @@ if [[ -z "$PYTHON_BIN" ]]; then
   done
 fi
 if [[ -z "$PYTHON_BIN" ]]; then
-  echo "[selftest] 找不到 python3 或 python" >&2
+  echo "[selftest] 错误: 找不到可用的 python3 或 python (AGENTGATE_PYTHON 未设置且 PATH 中无 python)" >&2
+  echo "[selftest] 提示: 设置 AGENTGATE_PYTHON=/path/to/python 或确保 python 在 PATH 中" >&2
   exit 2
 fi
 python3() { "$PYTHON_BIN" "$@"; }

@@ -1053,11 +1053,12 @@ def detect_cli(remote_url: str | None = None) -> str | None:
 
 def submit_mr(title: str, description: str, target: str, cli: str) -> int:
     # 用临时文件传 description, 避免 shell 转义问题
-    with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False,
-                                     encoding="utf-8") as tf:
-        tf.write(description)
-        desc_file = tf.name
+    desc_file = None
     try:
+        with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False,
+                                         encoding="utf-8") as tf:
+            tf.write(description)
+            desc_file = tf.name
         if cli == "glab":
             cmd = ["glab", "mr", "create", "--title", title,
                    "--description", description,
@@ -1069,7 +1070,11 @@ def submit_mr(title: str, description: str, target: str, cli: str) -> int:
         r = subprocess.run(cmd, text=True)
         return r.returncode
     finally:
-        os.unlink(desc_file)
+        if desc_file:
+            try:
+                os.unlink(desc_file)
+            except OSError:
+                pass  # 文件可能已被 CLI 移动或无权限删除
 
 
 def validate_submitted_cli_description(cli: str, args) -> int:
@@ -1233,10 +1238,16 @@ def main() -> int:
                                          encoding="utf-8") as tf:
             tf.write(description)
             path = tf.name
-        subprocess.run([editor, path])
-        with open(path, encoding="utf-8") as f:
-            description = f.read()
-        os.unlink(path)
+        try:
+            subprocess.run([editor, path], check=True)
+            with open(path, encoding="utf-8") as f:
+                description = f.read()
+        finally:
+            # 即使编辑器崩溃或被强制终止，也要清理临时文件
+            try:
+                os.unlink(path)
+            except OSError:
+                pass  # 文件可能已被编辑器删除或无权限
 
     if not args.dry_run:
         rc = run_local_preflight(description, args, cfg)
