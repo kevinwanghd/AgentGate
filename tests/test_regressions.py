@@ -2017,7 +2017,7 @@ class GoPatternHardeningTests(unittest.TestCase):
         violations = self._scan_go(source)
         self.assertIn(risk_type, self._types(violations), violations)
         matched = [v for v in violations if risk_type in v["type"].split("/")]
-        self.assertTrue(all(v["mode"] == "warn" for v in matched), matched)
+        self.assertTrue(all(v["mode"] == "block" for v in matched), matched)
 
     def assertDoesNotHit(self, risk_type: str, source: str) -> None:
         violations = self._scan_go(source)
