@@ -721,9 +721,8 @@ def _write_summary(blocking: list[dict], warn_only: list[dict]) -> None:
                 lines.append(f"| {loc} | `{v['type']}` | {problems} |")
             lines.append("")
         if warn_only:
-            lines.append(f"### ⚠️ scan-risks: {len(warn_only)} 处 warn 命中 (不阻断, 观察期)\n")
-            lines.append("> 这些规则处于 `mode: warn` 阶段。命中多说明规则有效或有误报，"
-                         "积累数据后再决定是否升级为 `block`。\n")
+            lines.append(f"### ⚠️ scan-risks: {len(warn_only)} 处 warn 命中 (不阻断)\n")
+            lines.append("> 这些规则当前为 `mode: warn`，可按需升为 `mode: block`。\n")
             lines.append("| 文件:行 | 类型 | 说明 |")
             lines.append("|---|---|---|")
             for v in warn_only:

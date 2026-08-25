@@ -1,37 +1,45 @@
 # JavaScript / TypeScript 风险检测规则
 # 适用范围: ES5+ / TypeScript 3.x+
-# 更新: 2026-07-23
+#
+# 分级说明:
+#   mode: block  — 高精度规则，误报极低，命中阻断 CI
+#   mode: warn   — 观察期规则，误报较高，仅在 Job Summary 显示，不阻断 CI
+#
+# Tier 1 (block):  dangerous-eval | xss-injection | react-dangerous-html | hardcoded-secret | sql-injection | command-injection | weak-random | sensitive-storage | cors-wildcard
+# Tier 2 (warn):  console-log-production
 
 patterns:
+
   # 1. eval 动态执行
   - type: dangerous-eval
     regex: '\beval\s*\(|new\s+Function\s*\('
     desc: "eval 或 new Function 存在代码注入风险，应避免动态执行不可信代码"
     exts: [".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"]
-    mode: warn
+    mode: block
 
   # 2. innerHTML XSS 风险
   - type: xss-injection
     regex: '\.innerHTML\s*=|\.outerHTML\s*=|document\.write\s*\('
     desc: "直接操作 innerHTML 存在 XSS 风险，应使用 textContent 或 DOMPurify"
     exts: [".js", ".jsx", ".ts", ".tsx"]
-    mode: warn
+    mode: block
 
   # 3. dangerouslySetInnerHTML (React)
   - type: react-dangerous-html
     regex: 'dangerouslySetInnerHTML\s*=\s*\{\{__html:'
     desc: "React dangerouslySetInnerHTML 存在 XSS 风险，应确保内容已清理"
     exts: [".jsx", ".tsx"]
-    mode: warn
+    mode: block
 
   # 4. 硬编码密钥
   - type: hardcoded-secret
     regex: "(?i)(?:password|passwd|secret|apiKey|api_key|token|accessKey|access_key)\\s*[:=]\\s*[\"'][^\"']{8,}"
     desc: "敏感信息硬编码，应使用环境变量或密钥管理服务"
     exts: [".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"]
-    mode: warn
+    mode: block
 
   # 5. console.log 生产泄露
+  # ⚠️ warn: 几乎所有项目都有 console.log，误报率极高，先观察
   - type: console-log-production
     regex: '\bconsole\.(?:log|debug|info|warn|error)\s*\('
     desc: "console.log 可能在生产环境泄露敏感信息，应使用日志框架或移除"
@@ -43,32 +51,32 @@ patterns:
     regex: "(?:query|execute)\\s*\\([^)]*\\$\\{|\\.concat\\s*\\(|[+]\\s*[\"']SELECT|INSERT|UPDATE|DELETE"
     desc: "SQL 语句拼接存在注入风险，应使用参数化查询"
     exts: [".js", ".ts", ".mjs", ".cjs"]
-    mode: warn
+    mode: block
 
   # 7. 命令注入 (child_process)
   - type: command-injection
     regex: "(?:exec|execSync|spawn|spawnSync)\\s*\\([^)]*\\$\\{|\\.concat\\s*\\("
     desc: "命令拼接存在注入风险，应使用参数数组或验证输入"
     exts: [".js", ".ts", ".mjs", ".cjs"]
-    mode: warn
+    mode: block
 
   # 8. 弱随机数 (Math.random 用于安全场景)
   - type: weak-random
     regex: 'Math\.random\s*\(\).*(?:token|secret|salt|nonce|session|password)'
     desc: "Math.random 不适合安全场景，应使用 crypto.randomBytes"
     exts: [".js", ".ts", ".mjs", ".cjs"]
-    mode: warn
+    mode: block
 
   # 9. localStorage 存储敏感信息
   - type: sensitive-storage
     regex: "(?i)localStorage\\.setItem\\s*\\([^)]*(?:token|password|secret|session)"
     desc: "localStorage 明文存储敏感信息，应加密或使用 httpOnly cookie"
     exts: [".js", ".jsx", ".ts", ".tsx"]
-    mode: warn
+    mode: block
 
   # 10. CORS 配置过宽
   - type: cors-wildcard
     regex: "Access-Control-Allow-Origin.*\\*|cors\\s*\\(\\s*\\{[^}]*origin:\\s*[\"']?\\*"
     desc: "CORS 配置为 * 可能允许任意来源，应限制为可信域名"
     exts: [".js", ".ts", ".mjs", ".cjs"]
-    mode: warn
+    mode: block
