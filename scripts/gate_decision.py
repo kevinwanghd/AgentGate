@@ -215,6 +215,8 @@ def build_gate_result(
 
     # 先计算 result（ERROR > FAIL > WAITING_APPROVAL > PASS），再决定 action
     checks_pass = not missing and not failed
+    # critical_paths: 是否命中 protected_paths（由 _classify_risk 内部处理）
+    critical_paths = risk_level == "critical"
     pass_result = checks_pass and not critical_paths and not is_direct_push_on_protected and valid_approvals >= required_approvals
 
     # 决定 result（与 auto_merge.enabled 无关）
