@@ -1,44 +1,52 @@
 # Java 风险检测规则
 # 适用范围: Java 8+ / Spring Boot / Jakarta EE
-# 更新: 2026-07-23
+#
+# 分级说明:
+#   mode: block  — 高精度规则，误报极低，命中阻断 CI
+#   mode: warn   — 观察期规则，误报较高，仅在 Job Summary 显示，不阻断 CI
+#
+# Tier 1 (block):  sql-injection | hardcoded-secret | unsafe-deserialization | command-injection | xss-injection | weak-crypto | path-traversal | ssrf
+# Tier 2 (warn):  swallowed-exception | sensitive-log
 
 patterns:
+
   # 1. SQL 注入
   - type: sql-injection
     regex: '(?:createQuery|createNativeQuery|prepareStatement|executeQuery|executeUpdate)\s*\([^)]*\+|String\.format\s*\([^)]*SELECT|INSERT|UPDATE|DELETE'
     desc: "SQL 语句拼接存在注入风险，应使用 PreparedStatement 或参数化查询"
     exts: [".java"]
-    mode: warn
+    mode: block
 
   # 2. 硬编码密钥
   - type: hardcoded-secret
-    regex: '(?i)(?:password|passwd|secret|apiKey|api_key|token|accessKey|access_key)\s*=\s*"[^"]{8,}"'
+    regex: '(?i)(?:password|passwd|secret|apiKey|api_key|token|accessKey|access_key)\s*=\s*"[^\"]{8,}"'
     desc: "敏感信息硬编码，应使用配置中心或环境变量"
     exts: [".java"]
-    mode: warn
+    mode: block
 
   # 3. 反序列化漏洞
   - type: unsafe-deserialization
-    regex: '\bnew\s+ObjectInputStream\s*\(|\.readObject\s*\(\)'
+    regex: '\bnew\s+ObjectInputStream\s*\(|\\.readObject\s*\(\)'
     desc: "反序列化不可信数据存在 RCE 风险，应验证来源或使用白名单"
     exts: [".java"]
-    mode: warn
+    mode: block
 
   # 4. 命令注入
   - type: command-injection
     regex: 'Runtime\.getRuntime\s*\(\s*\)\.exec\s*\([^)]*\+|ProcessBuilder\s*\([^)]*\+'
     desc: "命令拼接存在注入风险，应使用参数数组或验证输入"
     exts: [".java"]
-    mode: warn
+    mode: block
 
   # 5. XSS 漏洞 (Spring MVC)
   - type: xss-injection
-    regex: '@ResponseBody.*\+|response\.getWriter\s*\(\s*\)\.write\s*\([^)]*\+'
+    regex: '@ResponseBody.*\+|\.getWriter\s*\(\s*\)\.write\s*\([^)]*\+'
     desc: "未转义的用户输入写入响应，存在 XSS 风险，应使用模板引擎或手动转义"
     exts: [".java"]
-    mode: warn
+    mode: block
 
   # 6. 异常吞没
+  # ⚠️ warn: Java 遗留代码里空 catch 块极多，误报率高，先观察
   - type: swallowed-exception
     regex: 'catch\s*\([^)]+\)\s*\{\s*(?://.*)?(?:\n\s*)?(?://.*)?(?:\n\s*)?\}'
     desc: "异常被吞没，应至少记录日志"
@@ -50,23 +58,24 @@ patterns:
     regex: '\b(?:DES|MD5|SHA1|RC4)(?:"|\.getInstance)'
     desc: "使用已弃用的弱加密算法，应使用 AES-256、SHA-256 或更高"
     exts: [".java"]
-    mode: warn
+    mode: block
 
   # 8. 路径遍历
   - type: path-traversal
     regex: 'new\s+File\s*\([^)]*\+|Paths\.get\s*\([^)]*\+|\.getResourceAsStream\s*\([^)]*\+'
     desc: "文件路径拼接存在遍历风险，应验证或规范化路径"
     exts: [".java"]
-    mode: warn
+    mode: block
 
   # 9. SSRF 风险
   - type: ssrf
     regex: 'new\s+URL\s*\([^)]*\+|HttpClient.*\.execute\s*\([^)]*\+|RestTemplate.*\.(?:getForObject|postForObject)\s*\([^)]*\+'
     desc: "URL 拼接存在 SSRF 风险，应验证或限制目标域名"
     exts: [".java"]
-    mode: warn
+    mode: block
 
   # 10. 敏感信息日志
+  # ⚠️ warn: 仅因日志行中含敏感词变量名就阻断，误报率高，先观察
   - type: sensitive-log
     regex: '(?i)(?:log|logger)\.(?:info|debug|warn|error)\s*\([^)]*(?:password|passwd|token|secret|ssn|creditCard|idCard)'
     desc: "敏感字段可能被写入日志，应脱敏处理"

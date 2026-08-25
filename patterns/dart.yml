@@ -1,15 +1,22 @@
 # Dart / Flutter 风险检测规则
 # 适用范围: Dart 2.x+ / Flutter 2.x+
-# 更新: 2026-07-23
+#
+# 分级说明:
+#   mode: block  — 高精度规则，误报极低，命中阻断 CI
+#   mode: warn   — 观察期规则，误报较高，仅在 Job Summary 显示，不阻断 CI
+#
+# Tier 1 (block):  hardcoded-secret | sql-injection | command-injection | insecure-http | disabled-cert-validation | sensitive-storage | dangerous-reflection | webview-javascript
+# Tier 2 (warn):  debug-print | swallowed-exception | sensitive-log
 
 patterns:
+
   # 1. 硬编码密钥
   - type: hardcoded-secret
     regex: >-
       (?i)(?:password|passwd|secret|apiKey|api_key|token|accessKey|access_key)\s*[:=]\s*["\'][^"\']{8,}
     desc: "敏感信息硬编码，应使用 flutter_dotenv 或 flutter_secure_storage"
     exts: [".dart"]
-    mode: warn
+    mode: block
 
   # 2. HTTP 明文传输
   - type: insecure-http
@@ -17,30 +24,31 @@ patterns:
       (?:http\.get|http\.post|Dio\(\)).*["\']http://(?!localhost|127\.0\.0\.1)
     desc: "使用 HTTP 明文传输敏感数据，应使用 HTTPS"
     exts: [".dart"]
-    mode: warn
+    mode: block
 
   # 3. 证书校验禁用
   - type: disabled-cert-validation
     regex: 'badCertificateCallback.*true|allowBadCertificates.*true'
     desc: "禁用证书校验存在中间人攻击风险，生产环境不应禁用"
     exts: [".dart"]
-    mode: warn
+    mode: block
 
   # 4. SQL 注入 (sqflite)
   - type: sql-injection
-    regex: 'rawQuery\s*\([^)]*\$\{|\.rawInsert\s*\([^)]*\$\{|\.rawUpdate\s*\([^)]*\$\{'
+    regex: 'rawQuery\s*\([^)]*\$\{|\\.rawInsert\s*\([^)]*\$\{|\\.rawUpdate\s*\([^)]*\$\{'
     desc: "SQL 语句拼接存在注入风险，应使用参数化查询"
     exts: [".dart"]
-    mode: warn
+    mode: block
 
   # 5. SharedPreferences 存储敏感信息
   - type: sensitive-storage
     regex: '(?i)prefs\.set(?:String|Int|Bool)\s*\([^)]*(?:token|password|secret|session)'
     desc: "SharedPreferences 明文存储敏感信息，应使用 flutter_secure_storage"
     exts: [".dart"]
-    mode: warn
+    mode: block
 
   # 6. print 语句泄露
+  # ⚠️ warn: 调试用 print 在 Flutter 项目中极其常见，误报率高，先观察
   - type: debug-print
     regex: '\bprint\s*\('
     desc: "print 在生产环境会输出到系统日志，可能泄露敏感信息，应使用 debugPrint 或日志框架"
@@ -53,16 +61,17 @@ patterns:
       import\s+["\']dart:mirrors["\']
     desc: "dart:mirrors 允许动态反射，可能绕过类型检查，应谨慎使用"
     exts: [".dart"]
-    mode: warn
+    mode: block
 
   # 8. WebView JavaScript 启用
   - type: webview-javascript
     regex: 'javascriptMode:\s*JavascriptMode\.unrestricted'
     desc: "WebView 启用不受限 JavaScript 存在 XSS 风险，应验证内容来源"
     exts: [".dart"]
-    mode: warn
+    mode: block
 
   # 9. 异常吞没
+  # ⚠️ warn: 空 catch 块在 Flutter 项目中常见，误报率高，先观察
   - type: swallowed-exception
     regex: 'catch\s*\([^)]+\)\s*\{\s*(?://.*)?(?:\n\s*)?(?://.*)?(?:\n\s*)?\}'
     desc: "异常被吞没，应至少记录日志"
@@ -70,8 +79,9 @@ patterns:
     mode: warn
 
   # 10. 敏感信息日志
+  # ⚠️ warn: 仅因日志行中含敏感词变量名就阻断，误报率高，先观察
   - type: sensitive-log
-    regex: '(?i)\b(?:log|debugPrint|print)\s*\([^)]*(?:password|passwd|token|secret|ssn|creditCard|idCard)'
+    regex: '(?i)\b(?:log|debugPrint|print)\b.*\b(?:password|passwd|token|secret|ssn|creditCard|idCard)\b'
     desc: "敏感字段可能被写入日志，应脱敏处理"
     exts: [".dart"]
     mode: warn
