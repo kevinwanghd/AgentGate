@@ -10,6 +10,8 @@ auto_merge:
   require_all_required_checks: true
   critical_approvals: 1       # critical 风险路径变更时需要的人工审批数
   high_approvals: 0
+  # 单人维护者模式：关闭，正常走审批流
+  single_maintainer_mode: false
   required_checks_by_risk:
     low:
       - risk-scan
@@ -91,13 +93,19 @@ risk_annotations:
   enforcement: hard           # 自举展示严格模式 (消费仓库默认 soft)
   reviewed_max_age_days: 90
   scan_exclude_paths:
+    # 测试文件: 整目录豁免，避免测试代码含规则模式字面量导致自指误报
+    - "tests/**"
+    - "**/test*/**"       # test/, tests/, __tests__/ 等
+    - "**/*.spec.*"        # .spec.ts / .spec.js 等
+    - "**/*.test.*"        # .test.ts / .test.js 等
+    # 第三方/生成代码: 不扫生成物
     - "**/vendor/**"
     - "**/node_modules/**"
     - "**/*.generated.*"
     - "**/dist/**"
     - "**/build/**"
-    - "tests/**"      # AgentGate 自身测试文件含规则模式字面量, 同 DEFAULT_CONFIG 的 governance/scripts/ 豁免原因
-    - "scripts/**"    # AgentGate 自身脚本含规则正则字面量 (如 TODO|FIXME|HACK), 自指误报
+    # AgentGate 自身脚本含规则正则字面量 (如 TODO|FIXME|HACK)，自指误报
+    - "scripts/**"
   registered_types:
     - auth-bypass
     - magic-id

@@ -496,6 +496,11 @@ def find_annotation(
 
     # 再试多行块 risk-begin ... risk-end
     if "risk-begin" in window_text and "risk-end" in window_text:
+        # 验证 risk-begin 和 risk-end 的顺序（risk-end 不能在 risk-begin 之前）
+        begin_pos = window_text.find("risk-begin")
+        end_pos = window_text.find("risk-end")
+        if end_pos < begin_pos:
+            return (False, ["多行注解格式错误: risk-end 不能在 risk-begin 之前"])
         fields = {}
         for key, rx in _BLOCK_FIELD_RE.items():
             fm = rx.search(window_text)
@@ -635,8 +640,12 @@ def scan(diff_text: str, cfg: dict) -> list[dict]:
                 if is_test and rtype not in _TEST_FILE_PATTERNS:
                     continue
                 match = rx.search(scan_text)
-                if match and match.start() <= len(content):
-                    hits.append((rtype, desc, pmode))
+                if match:
+                    # 检查匹配是否落在第一行内容范围内
+                    # 注意：自定义 pattern 可能跨越多行，此时 match.start() 在 content 范围内即可
+                    # （因为跨行模式如 risk-begin...risk-end 的风险信息从第一行开始）
+                    if match.start() <= len(content):
+                        hits.append((rtype, desc, pmode))
             if not hits:
                 continue
 
@@ -721,9 +730,8 @@ def _write_summary(blocking: list[dict], warn_only: list[dict]) -> None:
                 lines.append(f"| {loc} | `{v['type']}` | {problems} |")
             lines.append("")
         if warn_only:
-            lines.append(f"### ⚠️ scan-risks: {len(warn_only)} 处 warn 命中 (不阻断, 观察期)\n")
-            lines.append("> 这些规则处于 `mode: warn` 阶段。命中多说明规则有效或有误报，"
-                         "积累数据后再决定是否升级为 `block`。\n")
+            lines.append(f"### ⚠️ scan-risks: {len(warn_only)} 处 warn 命中 (不阻断)\n")
+            lines.append("> 这些规则当前为 `mode: warn`，可按需升为 `mode: block`。\n")
             lines.append("| 文件:行 | 类型 | 说明 |")
             lines.append("|---|---|---|")
             for v in warn_only:

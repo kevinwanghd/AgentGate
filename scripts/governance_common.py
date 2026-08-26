@@ -60,9 +60,28 @@ def load_config(
             value = {}
         if not isinstance(value, dict):
             raise ConfigError(f"配置字段 {section} 必须是 mapping")
-        merged[section] = {**defaults.get(section, {}), **value}
+        # 深度合并：递归合并嵌套字典，避免嵌套键丢失
+        merged[section] = _deep_merge(defaults.get(section, {}), value)
     _validate_config(merged)
     return merged
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """
+    深度合并两个字典。
+    - base 中的值会被保留（除非 override 显式覆盖）
+    - 若两者都是 dict，递归合并
+    - 若 override 中的值为 None，该键会被跳过（保留 base 的值）
+    """
+    result = copy.deepcopy(base)
+    for key, value in override.items():
+        if value is None:
+            continue
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = copy.deepcopy(value)
+    return result
 
 
 def _validate_config(config: dict[str, Any]) -> None:

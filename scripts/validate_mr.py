@@ -114,6 +114,8 @@ def _has_section(text: str, *titles: str) -> bool:
 
     接受 Markdown 标题和手工填写时常见的独立模块名行，例如
     "## 背景"、"### 背景" 或 "背景"。
+
+    模板占位符（如 - <!-- 请补充 -->）会被视为空内容，不算填写。
     """
     boundary_titles = "|".join(re.escape(item) for item in SECTION_TITLES)
     next_section = (
@@ -134,10 +136,24 @@ def _has_section(text: str, *titles: str) -> bool:
             body = m.group("body")
             # 去掉 html 注释和空白后是否还有内容
             body = re.sub(r'<!--.*?-->', '', body, flags=re.DOTALL)
-            # 去掉纯模板占位 (如 "-" 空列表项 / 尖括号占位)
-            stripped = re.sub(r'[-*\s]', '', body)
-            stripped = re.sub(r'<[^>]*>', '', stripped)
-            if stripped.strip():
+            # 去掉模板占位符模式（更精确的匹配）：
+            # - 列表项占位符: - [ ] ... 或 - <!-- ... --> 形式
+            # - 尖括号占位符: <...>
+            # - 纯空白行和列表标记
+            lines = body.splitlines()
+            has_real_content = False
+            for line in lines:
+                # 去掉 Markdown 列表标记（- * 或数字.）
+                line = re.sub(r'^[\s]*[-*]\s*', '', line)
+                line = re.sub(r'^[\s]*\d+\.\s*', '', line)
+                # 去掉尖括号内容（包括占位符）
+                line = re.sub(r'<[^>]*>', '', line)
+                # 去掉纯空白
+                line = line.strip()
+                if line:
+                    has_real_content = True
+                    break
+            if has_real_content:
                 return True
     return False
 
@@ -232,10 +248,14 @@ def detect_large_change(cfg: dict, diff_base: str | None) -> tuple[bool, list[st
             check=True, capture_output=True, text=True,
             encoding="utf-8", errors="replace",
         ).stdout
-    except Exception as exc:
-        # git 失败时 fail-closed：报告错误并当作大变更，不静默放行 sensitive_paths
+    except subprocess.CalledProcessError as exc:
+        # git diff 失败时 fail-closed：报告错误并当作大变更，不静默放行 sensitive_paths
         print(f"[validate-mr] WARN: detect_large_change git failed: {exc}", file=sys.stderr)
         return (True, ["git_diff_failed_treated_as_large"])
+    except OSError as exc:
+        # 文件系统错误（如磁盘满、权限问题）也 fail-closed
+        print(f"[validate-mr] WARN: detect_large_change OS error: {exc}", file=sys.stderr)
+        return (True, ["os_error_treated_as_large"])
 
     total = 0
     excluded = lc.get("excluded_paths", [])

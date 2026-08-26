@@ -115,9 +115,21 @@ def _max_risk(left: str, right: str) -> str:
     return left if order[left] >= order[right] else right
 
 
-def _classify_risk(changed_paths: list[str], auto: dict[str, Any], critical_paths: list[str]) -> str:
-    if critical_paths:
-        return "critical"
+def _classify_risk(changed_paths: list[str], auto: dict[str, Any]) -> str:
+    """
+    根据变更路径分类风险等级。
+    风险等级顺序: low < medium < high < critical
+    - protected_paths 中的路径 → critical（最高风险，必须人工审批）
+    - risk_paths.critical 中的路径 → critical
+    - risk_paths.high 中的路径 → high
+    - risk_paths.low 中的路径 → low
+    - 其余路径 → medium
+    """
+    protected = [str(item) for item in auto.get("protected_paths", [])]
+    # 检查是否命中 protected_paths（内部自包含，无需调用方额外处理）
+    for path in changed_paths:
+        if _is_protected(path, protected):
+            return "critical"
     risk = "low"
     risk_paths = auto.get("risk_paths", {})
     if not isinstance(risk_paths, dict):
@@ -160,17 +172,17 @@ def build_gate_result(
     pipeline_kind: str = "mr",
 ) -> dict[str, Any]:
     auto = config.get("auto_merge", {})
-    protected = [str(item) for item in auto.get("protected_paths", [])]
-    critical_paths = [path for path in changed_paths if _is_protected(path, protected)]
     protected_branches = [str(item) for item in auto.get("protected_branches", [])]
     is_protected_branch = bool(target_branch) and any(
         fnmatch.fnmatch(target_branch, pattern) for pattern in protected_branches
     )
     # 只有直推（push）流水线命中保护分支才需要门禁拦截；MR 合入受保护分支是正常路径。
     is_direct_push_on_protected = is_protected_branch and pipeline_kind == "push"
-    risk_level = _classify_risk(changed_paths, auto, critical_paths)
+    risk_level = _classify_risk(changed_paths, auto)
     reasons: list[str] = []
-    if critical_paths:
+    # 检查是否命中 protected_paths（由 _classify_risk 内部处理，但 reason 仍需记录）
+    protected = [str(item) for item in auto.get("protected_paths", [])]
+    if any(_is_protected(p, protected) for p in changed_paths):
         reasons.append("protected_paths_changed")
     if is_direct_push_on_protected:
         reasons.append("protected_branch_direct_push")
@@ -183,19 +195,28 @@ def build_gate_result(
     if failed:
         reasons.append("required_check_failed")
 
-    if risk_level == "critical":
-        required_approvals = int(auto.get("critical_approvals", 1))
-    elif risk_level == "high":
-        required_approvals = int(auto.get("high_approvals", 0))
-    else:
+    # 单人维护者模式：跳过审批要求
+    single_maintainer = bool(auto.get("single_maintainer_mode", False))
+    if single_maintainer:
         required_approvals = 0
-    if risk_level == "critical":
-        reasons.append("critical_risk_requires_human_approval")
-    if valid_approvals < required_approvals:
-        reasons.append("approval_missing")
+        reasons.append("single_maintainer_mode_skip_approval")
+    else:
+        if risk_level == "critical":
+            required_approvals = int(auto.get("critical_approvals", 1))
+            reasons.append("critical_risk_requires_human_approval")
+        elif risk_level == "high":
+            required_approvals = int(auto.get("high_approvals", 0))
+        elif risk_level == "medium":
+            required_approvals = int(auto.get("medium_approvals", 0))
+        else:
+            required_approvals = 0
+        if valid_approvals < required_approvals:
+            reasons.append("approval_missing")
 
     # 先计算 result（ERROR > FAIL > WAITING_APPROVAL > PASS），再决定 action
     checks_pass = not missing and not failed
+    # critical_paths: 是否命中 protected_paths（由 _classify_risk 内部处理）
+    critical_paths = risk_level == "critical"
     pass_result = checks_pass and not critical_paths and not is_direct_push_on_protected and valid_approvals >= required_approvals
 
     # 决定 result（与 auto_merge.enabled 无关）
