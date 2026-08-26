@@ -75,7 +75,12 @@ SCAN_EXTENSIONS = {
 # ============================================================
 # git 交互
 # ============================================================
-def run_git(args: list[str]) -> str:
+def run_git(args: list[str], check: bool = True) -> str:
+    """
+    运行 git 命令。
+    check=True (默认): git 失败时抛出 CalledProcessError，由调用方处理。
+    check=False: 捕获异常并返回空字符串（适用于 git log 等"可接受失败"的场景）。
+    """
     try:
         return subprocess.run(
             ["git", *args], check=True, capture_output=True, text=True,
@@ -84,7 +89,9 @@ def run_git(args: list[str]) -> str:
     except FileNotFoundError:
         sys.stderr.write("[ai-usage] 找不到 git\n")
         sys.exit(0)
-    except subprocess.CalledProcessError:
+    except subprocess.CalledProcessError as e:
+        if check:
+            raise
         return ""
 
 

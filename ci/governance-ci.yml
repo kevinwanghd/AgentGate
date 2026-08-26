@@ -42,6 +42,10 @@ stages:
 
 variables:
   GOVERNANCE_PY_IMAGE: "swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest"
+  # 语言运行时镜像: 各语言 job 在检查项目标记文件后再判断是否需要真实运行时。
+  # 若 runner 镜像不含该语言，job 会静默 skip (exit 0) 并记录 skip 状态，
+  # 而不是报错退出——这是为了避免非该语言仓库的流水线被阻断。
+  # 如需强制报错，可在项目 CI/CD Variables 中覆盖为含真实运行时的镜像。
   GOVERNANCE_GO_IMAGE: "swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest"
   GOVERNANCE_FLUTTER_IMAGE: "swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest"
   GOVERNANCE_PYTHON_TEST_IMAGE: "swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest"

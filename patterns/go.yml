@@ -1,4 +1,4 @@
-# Go 专项风险规则包 (mode: warn — 新规则先观察误报率, 不直接硬阻断)
+# Go 专项风险规则包
 #
 # 接入方式: 在消费仓库的 governance.config.yml 中添加:
 #
@@ -19,11 +19,18 @@
 #       - go-panic-in-handler
 #       - go-weak-random
 #
-# 所有规则默认 mode: warn (仅警告), 观察几周误报率后可逐条改为 mode: block。
+# 分级说明:
+#   mode: block  — 高精度规则，误报极低，命中阻断 CI
+#   mode: warn   — 观察期规则，误报较高，仅在 Job Summary 显示，不阻断 CI
+#
+# Tier 1 (block):  hardcoded-secret | sql-injection | command-injection | go-tls-skip-verify
+# Tier 2 (warn):  swallowed-error | context-background | sensitive-log
+# Tier 1 (block):  go-sql-concat | go-cmd-inject | go-ssrf | go-panic-in-handler | go-weak-random
 
 patterns:
 
   # ── 吞错: _ = err 或空错误处理块 ──────────────────────────────────────────
+  # ⚠️ warn: _ = fn() 是 Go 惯用写法，regex 误报率高，先观察
   - type: swallowed-error
     regex: '\b_\s*=\s*\w[\w.]*\('
     desc: "显式丢弃 error 返回值 (_ = func(...))"
@@ -31,6 +38,7 @@ patterns:
     mode: warn
 
   # ── context.Background/TODO 在请求链路中使用 ──────────────────────────────
+  # ⚠️ warn: context.Background()/TODO() 在请求链路中截断 ctx，误报率中等，先观察
   - type: context-background
     regex: 'context\.(Background|TODO)\(\)'
     desc: "context.Background()/TODO() 可能截断请求链路的 ctx 传递"
@@ -38,6 +46,7 @@ patterns:
     mode: warn
 
   # ── 敏感字段写入日志 ──────────────────────────────────────────────────────
+  # ⚠️ warn: 仅因日志行中含敏感词变量名（如 userId）就阻断，误报率高，先观察
   - type: sensitive-log
     regex: '(?i)\b(?:log|logger|zap|zerolog)\b.*\b(?:password|passwd|token|secret|id_?card|mobile|phone|card_?no|cvv|pin)\b'
     desc: "敏感字段疑似写入日志"
@@ -50,7 +59,7 @@ patterns:
     regex: '(?i)(?:fmt\.Sprintf\s*\(\s*(?:"[^"]{0,220}\b(?:SELECT|INSERT|UPDATE|DELETE|WHERE)\b[^"]{0,220}%[^"]*"|`[^`]{0,220}\b(?:SELECT|INSERT|UPDATE|DELETE|WHERE)\b[^`]{0,220}%[^`]*`)|(?:"[^"]{0,220}\b(?:SELECT|INSERT|UPDATE|DELETE|WHERE)\b[^"]{0,220}"|`[^`]{0,220}\b(?:SELECT|INSERT|UPDATE|DELETE|WHERE)\b[^`]{0,220}`)\s*\+[\s\S]{0,220}|(?:query|sql|stmt)\s*(?::=|=)\s*(?:"[^"]{0,220}\b(?:SELECT|INSERT|UPDATE|DELETE|WHERE)\b[^"]{0,220}"|`[^`]{0,220}\b(?:SELECT|INSERT|UPDATE|DELETE|WHERE)\b[^`]{0,220}`)[\s\S]{0,220}\+)'
     desc: "Go SQL 文本通过 fmt.Sprintf 或字符串拼接构造，建议改用参数化查询"
     exts: [".go"]
-    mode: warn
+    mode: block
 
   # ── 硬编码密钥/密码 ──────────────────────────────────────────────────────
   # 字符串变量名含 key/secret/password/token 且直接赋字面量
@@ -58,28 +67,28 @@ patterns:
     regex: '(?i)\b(?:password|passwd|secret|api_?key|access_?key|access_?token|auth_?token|private_?key|client_?secret)\b\s*(?::=|=|:)\s*(?:"[^"\n]{8,}"|`[^`\n]{8,}`)'
     desc: "疑似硬编码密钥，应从环境变量或配置中心读取"
     exts: [".go"]
-    mode: warn
+    mode: block
 
   # ── 命令注入: exec.Command 拼接用户输入 ───────────────────────────────────
   - type: go-cmd-inject
     regex: 'exec\.Command\s*\([\s\S]{0,260}\+[\s\S]{0,160}\)'
     desc: "exec.Command 参数含字符串拼接，存在命令注入风险"
     exts: [".go"]
-    mode: warn
+    mode: block
 
   # ── 不安全的 HTTP 客户端 (跳过 TLS 验证) ────────────────────────────────
   - type: go-tls-skip-verify
     regex: 'InsecureSkipVerify\s*:\s*true'
     desc: "InsecureSkipVerify:true 跳过 TLS 证书验证，生产环境禁用"
     exts: [".go"]
-    mode: warn
+    mode: block
 
   # ── SSRF: url 拼接后直接请求 ─────────────────────────────────────────────
   - type: go-ssrf
     regex: 'http\.(?:Get|Post|Do|NewRequest)\s*\([\s\S]{0,260}\+[\s\S]{0,160}\)'
     desc: "HTTP 请求 URL 含字符串拼接，存在 SSRF 风险；间接数据流仍需后续 AST/污点分析覆盖"
     exts: [".go"]
-    mode: warn
+    mode: block
 
   # ── panic 在业务处理函数中 ───────────────────────────────────────────────
   # Handler/Service 层直接 panic 会导致进程崩溃，应返回 error
@@ -87,12 +96,12 @@ patterns:
     regex: '\bpanic\s*\('
     desc: "非测试 Go 业务代码中使用 panic，应优先返回 error"
     exts: [".go"]
-    mode: warn
+    mode: block
 
   # ── math/rand 用于安全场景 ───────────────────────────────────────────────
   # 伪随机数不适合 token/nonce 生成，应用 crypto/rand
   - type: go-weak-random
-    regex: '(?i)(?:(?:token|nonce|password|secret|captcha|otp)[\w\s:=,(){}\[\]."]{0,140}\brand\.(?:Int|Intn|Int31|Int31n|Int63|Int63n|Read|Float32|Float64)\b|\brand\.(?:Int|Intn|Int31|Int31n|Int63|Int63n|Read|Float32|Float64)\b[\w\s:=,(){}\[\]."]{0,140}(?:token|nonce|password|secret|captcha|otp))'
+    regex: '(?i)(?:(?:token|nonce|password|secret|captcha|otp)[\w\s:=,(){}[\]."]{0,140}\brand\.(?:Int|Intn|Int31|Int31n|Int63|Int63n|Read|Float32|Float64)\b|\brand\.(?:Int|Intn|Int31|Int31n|Int63|Int63n|Read|Float32|Float64)\b[\w\s:=,(){}[\]."]{0,140}(?:token|nonce|password|secret|captcha|otp))'
     desc: "math/rand 出现在 token/nonce/验证码等安全生成上下文中，应使用 crypto/rand"
     exts: [".go"]
-    mode: warn
+    mode: block
