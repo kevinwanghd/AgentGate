@@ -70,6 +70,8 @@ uses: kevinwanghd/AgentGate/.github/workflows/agentgate.yml@github-stable
 以后只要推进 AgentGate 的 `github-stable` 分支, 所有引用该分支的 GitHub 仓库
 会在下一次 PR 检查时自动使用新版门禁。
 
+> ⚠️ **重要**：`github-stable` 分支是给其他项目做门禁的稳定引用分支，**禁止删除或强制推送**。
+
 ### GitLab 项目发布线
 
 GitLab 不跟随 `github-stable`。GitLab 仓库继续使用本地 pinned 安装, 或由平台管理员
