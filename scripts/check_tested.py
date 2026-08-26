@@ -431,6 +431,11 @@ def main() -> int:
     ap.add_argument("--config", help="governance.config.yml 路径")
     ap.add_argument("--evidence", default=EVIDENCE_PATH, help="测试证据文件")
     ap.add_argument("--soft", action="store_true", help="强制软模式")
+    ap.add_argument(
+        "--ci-mode", action="store_true",
+        help="CI 模式: 无 evidence 文件且无 Tested:pass trailer 时硬阻断"
+             "（防止直接跑 dotnet test 绕过 record_test_run.py 的绕过）"
+    )
     ap.add_argument("--emit-trailer", action="store_true",
                     help="只输出 Tested: trailer 值 (供提交 hook 写入 commit), 不做检查")
     args = ap.parse_args()
@@ -475,6 +480,23 @@ def main() -> int:
     trailer = None
     if not evidence and not args.diff_file and cfg["testing"].get("accept_tested_trailer", True):
         trailer = read_tested_trailer(args.diff_base)
+
+    # --ci-mode: 无 evidence 文件 且 无 Tested:pass trailer → 硬阻断
+    # 这是防止"直接跑 dotnet test / pytest"绕过 record_test_run.py 的护城河。
+    # CI 的语言测试 jobs (python-test / dotnet-test 等) 通过 record_test_run.py 记录证据，
+    # 如果 evidence 文件为空/不存在，说明测试没走 record_test_run.py，即绕过了治理。
+    if args.ci_mode and not evidence and (not trailer or not trailer.startswith("pass")):
+        # 读取 evidence 文件看是否真的为空
+        if not os.path.isfile(args.evidence) or os.path.getsize(args.evidence) == 0:
+            print(
+                "[check-tested] FAIL (CI 模式) — test-evidence.jsonl 为空或不存在，"
+                "说明测试未通过 record_test_run.py 记录。\n"
+                "修复: 语言测试必须通过 record_test_run.py 包装，例如:\n"
+                "  python record_test_run.py -- pytest ...\n"
+                "  python record_test_run.py -- dotnet test ...\n"
+            )
+            return 1
+
     hard_errors, violations = check(diff_text, evidence, cfg, trailer,
                                     status_map=locals().get("status_map"))
     mode, mode_why = resolve_mode(cfg, args.soft)
