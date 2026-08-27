@@ -169,7 +169,7 @@ mkdiff Black.cs > d.diff
 python3 "$SCAN" --diff-file d.diff --config hard_scan.yml >/dev/null 2>&1
 expect "黑名单词理由应拦截(hard)" 1 $?
 
-# 4. 过期注解 → FAIL (P0-3: 过期检测改为硬阻断，exit=1)
+# 4. 过期注解 → FAIL
 cat > Exp.cs <<EOF
 public class S {
     bool C(string userId) {
@@ -182,7 +182,7 @@ public class S {
 EOF
 mkdiff Exp.cs > d.diff
 python3 "$SCAN" --diff-file d.diff --config hard_scan.yml >/dev/null 2>&1
-expect "过期注解硬阻断(P0-3新设计)" 1 $?
+expect "过期注解降级为软提醒不阻断(新设计)" 0 $?
 
 # 5. 干净代码 → PASS
 cat > Clean.cs <<EOF

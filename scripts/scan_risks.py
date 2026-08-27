@@ -533,14 +533,14 @@ def _validate_annotation_fields(
             problems.append(f'reason 含黑名单词 "{bad}"')
             break
 
-    # reviewed 日期有效 + 未过期 (P0-3: 改为硬阻断)
+    # reviewed 日期有效 + 未过期
     try:
         rev = dt.date.fromisoformat(reviewed)
         age = (dt.date.today() - rev).days
         max_age = int(ra.get("reviewed_max_age_days", 180))
         if age > max_age:
-            # 硬阻断：过期注解必须更新才能合入
-            problems.append(f'reviewed 已过期 ({age} 天 > {max_age} 天)，请更新为当天日期')
+            # 过期是软提醒: 继承来的他人注解不应因日期年龄卡死协作
+            problems.append(f'[warn] reviewed 已过期 ({age} 天 > {max_age} 天), 建议复查更新')
         elif age < 0:
             problems.append("[warn] reviewed 日期在未来")
     except ValueError:
