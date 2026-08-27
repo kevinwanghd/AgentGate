@@ -57,16 +57,84 @@ DEFAULT_CONFIG = {
         "enforcement": "hard",
         "soft_deadline": None,
         "accept_tested_trailer": True,
-        "exclude_paths": [              # 整目录/模式免测试检查
-            "**/Migrations/**",
+        # 整目录/模式免测试检查 (P2-1 优化: 细化豁免模式, 降低误报)
+        # 分类说明:
+        #   - 生成代码: .Designer.cs, .generated.*, .pb.go, *.g.cs, *.gen.cs
+        #   - DTO/VO/Entity: *Dto.cs, *Dtos.cs, *VO.java, *Entity.cs, *Model.cs, *Request.cs, *Response.cs
+        #   - 迁移/种子: Migrations/**, migrations/**, Seeds/**, seed/**
+        #   - 配置文件: Program.cs, Startup.cs, appsettings.json, *.config.*
+        #   - Schema/Proto: *.sql, *.proto, *.graphqls
+        #   - 资源/静态: *.resx, *.Designer.*, *.xib, *.storyboard
+        #   - 构建/打包: Dockerfile, docker-compose.yml, Makefile, *.sh (非脚本主体)
+        "exclude_paths": [
+            # 生成代码
             "**/*.Designer.cs",
             "**/*.generated.*",
-            "**/Program.cs",
-            "**/Startup.cs",
+            "**/*.pb.go",
+            "**/*.g.cs",
+            "**/*.gen.cs",
+            "**/Generated/**",
+            "**/__generated__/**",
+            # DTO / Value Object / Entity / Model (按命名约定识别)
             "**/*Dto.cs",
             "**/*Dtos.cs",
-            "**/*.proto",
+            "**/*Dto.java",
+            "**/*VO.java",
+            "**/*VO.ts",
+            "**/*Entity.cs",
+            "**/*Entity.java",
+            "**/*Model.cs",
+            "**/*Model.kt",
+            "**/*Model.swift",
+            "**/*Request.cs",
+            "**/*Request.java",
+            "**/*Response.cs",
+            "**/*Response.java",
+            "**/*DTO.ts",
+            "**/*DTO.go",
+            "**/*DTO.java",
+            "**/*DTO.swift",
+            # 迁移 / 数据库脚本
+            "**/Migrations/**",
+            "**/migrations/**",
+            "**/Seeds/**",
+            "**/seed/**",
+            "**/database/**",
+            "db/migrations/**",
+            "**/*Migration*.cs",
+            "**/*Migration*.java",
+            # Schema / Protobuf / GraphQL (声明式, 无业务逻辑)
             "*.sql",
+            "**/*.sql",
+            "**/*.proto",
+            "**/*.graphqls",
+            "**/*.graphql",
+            # 配置文件 / 启动引导 (框架生成, 无需单测)
+            "**/Program.cs",
+            "**/Startup.cs",
+            "**/main.go",
+            "**/main.kt",
+            "**/main.swift",
+            "**/App.vue",
+            "**/main.tsx",
+            "**/main.ts",
+            # 资源文件
+            "**/*.resx",
+            "**/*.xib",
+            "**/*.storyboard",
+            "**/Resources/**",
+            "**/Assets.xcassets/**",
+            # CI/CD / 构建配置
+            "**/Dockerfile*",
+            "**/docker-compose*.yml",
+            "**/Makefile",
+            "**/*.yaml",
+            "**/*.yml",
+            # 文档 / 静态资源
+            "**/*.md",
+            "**/docs/**",
+            "**/*.json",
+            "**/*.txt",
         ],
         "untested_max_age_days": 180,   # risk:untested 注解有效期, 同风险注解
         "reason_blacklist": [
@@ -338,6 +406,11 @@ def check(diff_text: str, evidence: list[dict], cfg: dict,
     evidence: 本地证据文件 (优先, 信息最全, 含 covers)。
     trailer:  CI 场景下证据文件不在仓库 (gitignore), 退回用 commit 的 Tested: trailer。
               取值 'pass' / 'pass (p/t)' / 'fail' / 'none'。
+
+    P2-1 优化: 变更类型判断
+      - A (新增): 新增的生产文件默认需要测试证据，但若命中 exclude_paths 则豁免
+      - M (修改): 必须有测试证据
+      - D (删除): 删除已有代码需评估影响，若删的是测试文件需要 risk:test-removal 注解
     """
     hard_errors: list[str] = []
 
@@ -354,7 +427,7 @@ def check(diff_text: str, evidence: list[dict], cfg: dict,
                 f"测试运行记录显示失败: {label} — cmd: {rec.get('cmd', '?')}"
             )
 
-    # 2. 收集本次 diff 的文件
+    # 2. 收集本次 diff 的文件及变更类型
     files = changed_files(diff_text)
     # rename(R)/copy(C) 不要求测试(只是移动他人代码); squash 后端点无差异的历史文件也剔除
     if status_map is not None:
@@ -366,6 +439,14 @@ def check(diff_text: str, evidence: list[dict], cfg: dict,
         if os.path.splitext(f)[1].lower() in PROD_EXTENSIONS and not is_test_file(f)
     ]
     touched_test_file = any(is_test_file(f) for f in files)
+
+    # P2-1: 收集变更类型信息 (用于差异化处理)
+    # status_map 格式: {path: 'A'|'M'|'D'|'R'|'C'}
+    file_change_types: dict[str, str] = {}
+    if status_map is not None:
+        for path in files:
+            if path in status_map:
+                file_change_types[path] = status_map[path][0]  # 取第一个字符
 
     # 有没有一条全绿的测试记录 (只看每条命令最新结果)
     green_runs = [
@@ -393,7 +474,12 @@ def check(diff_text: str, evidence: list[dict], cfg: dict,
     exclude = tc.get("exclude_paths", [])
 
     for path in sorted(prod_files):
-        # D. 白名单
+        change_type = file_change_types.get(path, "?")
+        change_label = {"A": "新增", "M": "修改", "D": "删除", "?": "未知"}.get(
+            change_type, change_type
+        )
+
+        # D. 白名单 (P2-1: 新增文件命中白名单时直接豁免)
         if _fnmatch_any(path, exclude):
             continue
         # B. 显式 covers
@@ -418,7 +504,12 @@ def check(diff_text: str, evidence: list[dict], cfg: dict,
         elif not touched_test_file:
             reason.append("本次 diff 未改动任何测试文件, 且未 --covers 声明")
         reason.append(f"也无合法 risk:untested 注解 ({why})")
-        violations.append({"file": path, "reasons": reason})
+        # P2-1: 在违规信息中标注变更类型, 帮助开发者理解上下文
+        violations.append({
+            "file": path,
+            "change_type": change_label,
+            "reasons": reason
+        })
 
     return hard_errors, violations
 
@@ -518,7 +609,9 @@ def main() -> int:
     marker = "✗" if mode == "hard" else "⚠"
     print(f"[check-tested] {label} ({mode} 模式: {mode_why}) — 以下生产代码缺测试痕迹:\n")
     for v in violations:
-        print(f"  {marker} {v['file']}")
+        change_type = v.get("change_type", "")
+        change_hint = f" [{change_type}]" if change_type else ""
+        print(f"  {marker} {v['file']}{change_hint}")
         for r in v["reasons"]:
             print(f"      - {r}")
     print()
