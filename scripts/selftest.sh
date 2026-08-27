@@ -211,7 +211,7 @@ mkdiff BadReason2.cs > d.diff
 python3 "$SCAN" --diff-file d.diff --config hard_scan.yml >/dev/null 2>&1
 expect "reason纯列表项应拦截(P0-3)" 1 $?
 
-# 4. 过期注解 → FAIL (P0-3: 过期硬阻断，不再软提醒)
+# 4. 过期注解 → 软提醒(P0-3: Kevin偏好：继承的注解不因日期硬阻断)
 cat > Exp.cs <<EOF
 public class S {
     bool C(string userId) {
@@ -224,7 +224,7 @@ public class S {
 EOF
 mkdiff Exp.cs > d.diff
 python3 "$SCAN" --diff-file d.diff --config hard_scan.yml >/dev/null 2>&1
-expect "过期注解硬阻断(P0-3)" 1 $?
+expect "过期注解软提醒(P0-3)" 0 $?
 
 # 5. 干净代码 → PASS
 cat > Clean.cs <<EOF
