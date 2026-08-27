@@ -60,10 +60,22 @@ DEFAULT_CONFIG = {
             "env-hardcode",
             "todo-no-context",
             "test-removal",
+            # P1-3: 新增模式
+            "hardcoded-url",
+            "sensitive-log",
+            "sql-string-concat",
+            "command-injection",
+            "weak-crypto",
         ],
         "reason_blacklist": [
+            # 中文黑名单
             "临时", "先这样", "历史原因", "TODO", "待确认",
+            "不知道", "随便", "暂时", "以后再说", "以后修复",
+            "暂不处理", "先凑合", "权宜之计", "临时方案",
+            # 英文黑名单
             "quick fix", "temp", "wip", "hack", "for now",
+            "not sure", "not tested", "TODO later", "TODO fix",
+            "placeholder", "dummy", "magic number", "magic value",
         ],
     },
 }
@@ -215,6 +227,74 @@ def _build_patterns() -> list[tuple[str, re.Pattern, str, frozenset, str]]:
         "todo-no-context",
         re.compile(r'(?i)\b(TODO|FIXME|HACK)(?![-\w])(?!\s*\(\s*@?\w+\s*,\s*\d{4}-\d{2}-\d{2})'),
         "TODO/FIXME/HACK 缺少 (owner, 日期)",
+        frozenset(),
+        "block",
+    ))
+
+    # 9. hardcoded-url: 硬编码 URL（生产事故常见根因）
+    # 匹配 http:// / https:// / ftp:// 开头的 URL 字面量
+    p.append((
+        "hardcoded-url",
+        re.compile(
+            r'(?i)(?:["\']https?://[^\s"\'`;)>]+["\']|'
+            r'https?://[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}[/\s])',
+        ),
+        "硬编码 URL，生产环境可能需要动态配置",
+        frozenset(),
+        "block",
+    ))
+
+    # 10. sensitive-log: 敏感字段明文打印到日志
+    # 匹配常见敏感字段名后紧跟的日志打印
+    SENSITIVE_FIELD_PATTERN = (
+        r'password|passwd|pwd|secret|token|key|api[_-]?key|'
+        r'access[_-]?token|refresh[_-]?token|private[_-]?key|'
+        r'credit[_-]?card|card[_-]?no|cvv|ssn'
+    )
+    p.append((
+        "sensitive-log",
+        re.compile(
+            rf'(?i)(log|console\.(log|debug|info|warn)|Logger\.(Debug|Info|Warn|Error))'
+            rf'.*?["\']({SENSITIVE_FIELD_PATTERN})',
+        ),
+        "敏感字段可能明文打印到日志",
+        frozenset(),
+        "block",
+    ))
+
+    # 11. sql-string-concat: SQL 字符串拼接（SQL 注入风险）
+    p.append((
+        "sql-string-concat",
+        re.compile(
+            r'(?i)(SELECT|INSERT|UPDATE|DELETE|FROM|WHERE)\s*["\']'
+            r'.*?["\'].*?\+|["\'].*?\+.*?["\'].*?(SELECT|INSERT|UPDATE|DELETE)',
+        ),
+        "SQL 语句使用字符串拼接，可能导致注入风险",
+        frozenset({".cs", ".java", ".py", ".js", ".ts", ".php", ".rb"}),
+        "block",
+    ))
+
+    # 12. command-injection: 命令注入风险（exec/system/shell 调用外部输入）
+    p.append((
+        "command-injection",
+        re.compile(
+            r'(?i)(exec|system|shell|bash|popen|subprocess|ProcessBuilder|Runtime)'
+            r'\s*\('
+            r'.*?(user|input|param|request|query|args?|argv)',
+        ),
+        "系统命令调用可能包含外部输入，存在命令注入风险",
+        frozenset({".cs", ".java", ".py", ".js", ".ts", ".php", ".rb", ".sh"}),
+        "block",
+    ))
+
+    # 13. weak-crypto: 弱加密算法（MD5/SHA1/DES 用于安全场景）
+    p.append((
+        "weak-crypto",
+        re.compile(
+            r'(?i)(?<![a-zA-Z])(MD5|SHA1|des|rc4|ECB)(?![a-zA-Z])'
+            r'|(?<![a-zA-Z])(RC4)(?![a-zA-Z])',
+        ),
+        "使用弱加密算法，不适合安全敏感场景",
         frozenset(),
         "block",
     ))
@@ -436,6 +516,16 @@ def _validate_annotation_fields(
     # reason 长度
     if len(reason.strip()) < MIN_REASON_LEN:
         problems.append(f'reason 过短 (<{MIN_REASON_LEN} 字)')
+    
+    # P0-3: reason 最小语义验证 - 防止理由只是重复风险类型
+    reason_lower = reason.lower().strip()
+    risk_name_lower = risk_type.lower().replace("-", " ").replace("_", " ")
+    # 如果理由只是风险名称本身（可能加了标点或前缀），视为无效
+    if len(reason_lower) < MIN_REASON_LEN + 5:
+        # 理由过短且几乎等于风险名称
+        if reason_lower.replace(".", "").replace(",", "").replace(":", "") == risk_name_lower:
+            problems.append(f'reason 过于简单，仅重复风险类型名称 "{risk_type}"，请说明业务权衡或上下文')
+    
     # reason 黑名单词
     low = reason.lower()
     for bad in ra["reason_blacklist"]:
@@ -443,14 +533,14 @@ def _validate_annotation_fields(
             problems.append(f'reason 含黑名单词 "{bad}"')
             break
 
-    # reviewed 日期有效 + 未过期
+    # reviewed 日期有效 + 未过期 (P0-3: 改为硬阻断)
     try:
         rev = dt.date.fromisoformat(reviewed)
         age = (dt.date.today() - rev).days
         max_age = int(ra.get("reviewed_max_age_days", 180))
         if age > max_age:
-            # 过期是软提醒: 继承来的他人注解不应因日期年龄卡死协作
-            problems.append(f'[warn] reviewed 已过期 ({age} 天 > {max_age} 天), 建议复查更新')
+            # 硬阻断：过期注解必须更新才能合入
+            problems.append(f'reviewed 已过期 ({age} 天 > {max_age} 天)，请更新为当天日期')
         elif age < 0:
             problems.append("[warn] reviewed 日期在未来")
     except ValueError:
