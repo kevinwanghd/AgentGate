@@ -236,6 +236,10 @@ def main() -> int:
     ap.add_argument("--evidence", default=EVIDENCE_PATH, help="证据文件路径")
     ap.add_argument("--trailer-only", action="store_true", help="仅输出 trailer 文本")
     ap.add_argument("--json", action="store_true", help="输出汇总 JSON")
+    ap.add_argument(
+        "--pre-push", action="store_true",
+        help="pre-push fallback: 检查最新 commit 是否缺 trailer, 有则输出"
+    )
     args = ap.parse_args()
 
     changed = diff_numstat(args.diff_base, args.staged)
@@ -250,6 +254,20 @@ def main() -> int:
 
     if args.trailer_only:
         print(trailer)
+        return 0
+
+    # pre-push fallback: 只输出有实质改动的 commit 的 trailer（避免无变更时也输出）
+    if args.pre_push:
+        # 检查最新 commit message 是否已有 AI-Usage trailer
+        try:
+            msg_out = run_git(["log", "-1", "--format=%B"], check=False)
+        except Exception:
+            return 0
+        if msg_out and re.search(r"(?im)^AI-Usage:", msg_out):
+            return 0  # 已有 trailer，无需补偿
+        # 无 trailer 且有真实改动 → 输出提示
+        if total_changed := sum(diff_numstat(None, False).values()):
+            print(trailer)
         return 0
 
     # 默认: 人类可读摘要 + trailer

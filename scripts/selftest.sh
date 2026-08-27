@@ -134,7 +134,7 @@ risk_annotations:
   enforcement: hard
   reviewed_max_age_days: 180
   registered_types: [auth-bypass, magic-id, swallowed-exception, suppressed-warning, skipped-test, time-bypass, env-hardcode, todo-no-context, test-removal]
-  reason_blacklist: ["临时", "先这样", "历史原因", hack, wip]
+  reason_blacklist: ["临时", "先这样", "历史原因", hack, wip, "以后再说", "以后", "下个版本", "后面再改"]
 CFG
 mkdiff Bad.cs > d.diff
 python3 "$SCAN" --diff-file d.diff --config hard_scan.yml >/dev/null 2>&1
@@ -169,7 +169,49 @@ mkdiff Black.cs > d.diff
 python3 "$SCAN" --diff-file d.diff --config hard_scan.yml >/dev/null 2>&1
 expect "黑名单词理由应拦截(hard)" 1 $?
 
-# 4. 过期注解 → FAIL
+# 3b. P0-3 新增黑名单词: "以后"/"以后再说"/"下个版本" → FAIL
+cat > Black2.cs <<EOF
+public class S {
+    bool C(string userId) {
+        // risk:auth-bypass reason:"这个以后再说吧，下个版本优化" owner:@team reviewed:$TODAY
+        if (userId == "626786582b50ab8ec08b0fa0") { return true; }
+        return false;
+    }
+}
+EOF
+mkdiff Black2.cs > d.diff
+python3 "$SCAN" --diff-file d.diff --config hard_scan.yml >/dev/null 2>&1
+expect "新黑名单词(以后/以后再说/下个版本)应拦截" 1 $?
+
+# 3c. P0-3 reason 语义不足(纯标点) → FAIL
+cat > BadReason.cs <<EOF
+public class S {
+    bool C(string userId) {
+        // risk:auth-bypass reason:"..." owner:@team reviewed:$TODAY
+        if (userId == "626786582b50ab8ec08b0fa0") { return true; }
+        return false;
+    }
+}
+EOF
+mkdiff BadReason.cs > d.diff
+python3 "$SCAN" --diff-file d.diff --config hard_scan.yml >/dev/null 2>&1
+expect "reason语义不足(纯标点)应拦截(P0-3)" 1 $?
+
+# 3d. P0-3 reason 纯列表项 → FAIL
+cat > BadReason2.cs <<EOF
+public class S {
+    bool C(string userId) {
+        // risk:auth-bypass reason:"1. 2. 3." owner:@team reviewed:$TODAY
+        if (userId == "626786582b50ab8ec08b0fa0") { return true; }
+        return false;
+    }
+}
+EOF
+mkdiff BadReason2.cs > d.diff
+python3 "$SCAN" --diff-file d.diff --config hard_scan.yml >/dev/null 2>&1
+expect "reason纯列表项应拦截(P0-3)" 1 $?
+
+# 4. 过期注解 → FAIL (P0-3: 过期硬阻断，不再软提醒)
 cat > Exp.cs <<EOF
 public class S {
     bool C(string userId) {
@@ -182,7 +224,7 @@ public class S {
 EOF
 mkdiff Exp.cs > d.diff
 python3 "$SCAN" --diff-file d.diff --config hard_scan.yml >/dev/null 2>&1
-expect "过期注解降级为软提醒不阻断(新设计)" 0 $?
+expect "过期注解硬阻断(P0-3)" 1 $?
 
 # 5. 干净代码 → PASS
 cat > Clean.cs <<EOF

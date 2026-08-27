@@ -64,6 +64,10 @@ DEFAULT_CONFIG = {
         "reason_blacklist": [
             "临时", "先这样", "历史原因", "TODO", "待确认",
             "quick fix", "temp", "wip", "hack", "for now",
+            # P0-3 新增: 更多临时性表述
+            "以后", "后续再说", "再说", "稍后", "X分钟后",
+            "暂时", "先凑合", "先跑通", "先用", "先这样",
+            "后面再改", "以后再优化", "下个版本",
         ],
     },
 }
@@ -436,21 +440,29 @@ def _validate_annotation_fields(
     # reason 长度
     if len(reason.strip()) < MIN_REASON_LEN:
         problems.append(f'reason 过短 (<{MIN_REASON_LEN} 字)')
-    # reason 黑名单词
+    # reason 黑名单词 (P0-3: 硬阻断，不再只是警告)
     low = reason.lower()
     for bad in ra["reason_blacklist"]:
         if bad.lower() in low:
             problems.append(f'reason 含黑名单词 "{bad}"')
             break
+    # reason 最小语义验证 (P0-3: 防止无意义理由如"无"/"."/纯符号)
+    stripped = reason.strip()
+    if stripped:
+        meaningful_chars = sum(1 for c in stripped if c.isalnum() or c in ("-", "_", ".", "·"))
+        if meaningful_chars < 3:
+            problems.append(f'reason 语义不足 (<3个有效字符): "{reason}"')
+        # 纯列表/标点理由即使字符够也无效（如 "1. 2. 3." 有3个数字仍无效）
+        if re.match(r"^[\d.、，、\s]+$", stripped):
+            problems.append(f'reason 为纯列表/标点，无实际说明: "{reason}"')
 
-    # reviewed 日期有效 + 未过期
+    # reviewed 日期有效 + 未过期 (P0-3: 过期硬阻断，不再只是 warn)
     try:
         rev = dt.date.fromisoformat(reviewed)
         age = (dt.date.today() - rev).days
         max_age = int(ra.get("reviewed_max_age_days", 180))
         if age > max_age:
-            # 过期是软提醒: 继承来的他人注解不应因日期年龄卡死协作
-            problems.append(f'[warn] reviewed 已过期 ({age} 天 > {max_age} 天), 建议复查更新')
+            problems.append(f'reviewed 已过期 ({age} 天 > {max_age} 天), 必须更新')
         elif age < 0:
             problems.append("[warn] reviewed 日期在未来")
     except ValueError:
