@@ -2579,6 +2579,113 @@ class ChineseContentValidationTests(unittest.TestCase):
         self.assertFalse(any("中文" in p for p in problems), f"Chinese text should pass, but got: {problems}")
 
 
+class LargeChangeRiskSectionTests(unittest.TestCase):
+    """P2-3: 大变更必须填写"风险与回滚"段落的测试验证。"""
+
+    def _cfg(self, enforcement: str = "hard", threshold: int = 500) -> dict:
+        return {
+            "metadata": {
+                "enforcement": enforcement,
+                "mandatory_fields": ["background", "changes", "self_test"],
+            },
+            "large_change": {
+                "line_threshold": threshold,
+                "excluded_paths": ["*.lock", "*.Designer.cs", "migrations/**", "**/*.generated.*"],
+                "sensitive_paths": ["ci/", "CODEOWNERS", "*secret*"],
+                "schema_paths": ["*.sql", "*.proto"],
+            },
+        }
+
+    def _mr_desc(self, extra: str = "") -> str:
+        return (
+            "## 背景\n\n这是一个大规模重构项目。\n\n"
+            "## 变更内容\n\n- 重构核心模块\n- 更新依赖版本\n\n"
+            "## 自测确认\n\n- [x] 本地测试通过\n"
+            + extra
+        )
+
+    def test_large_change_without_risk_section_fails(self) -> None:
+        """大变更（≥500行）但缺少"风险与回滚"段落时应报错。"""
+        cfg = self._cfg()
+        with mock.patch.object(validate_mr, "detect_large_change", return_value=(True, ["净改动 600 行 ≥ 500"])):
+            problems = validate_mr.validate(self._mr_desc(), cfg, None)
+        self.assertTrue(
+            any("风险与回滚" in p for p in problems),
+            f"大变更应要求风险与回滚, 实际问题: {problems}",
+        )
+
+    def test_large_change_with_risk_section_passes(self) -> None:
+        """大变更有"风险与回滚"段落时应通过。"""
+        cfg = self._cfg()
+        desc = self._mr_desc(
+            "## 风险与回滚\n\n本次重构风险可控，回滚方案是切回旧分支。\n"
+        )
+        with mock.patch.object(validate_mr, "detect_large_change", return_value=(True, ["净改动 600 行 ≥ 500"])):
+            problems = validate_mr.validate(desc, cfg, None)
+        risk_problems = [p for p in problems if "风险与回滚" in p]
+        self.assertEqual([], risk_problems, f"有风险与回滚不应报错: {risk_problems}")
+
+    def test_small_change_without_risk_section_passes(self) -> None:
+        """小变更（<500行）不要求"风险与回滚"段落。"""
+        cfg = self._cfg()
+        with mock.patch.object(validate_mr, "detect_large_change", return_value=(False, [])):
+            problems = validate_mr.validate(self._mr_desc(), cfg, None)
+        risk_problems = [p for p in problems if "风险与回滚" in p]
+        self.assertEqual([], risk_problems, f"小变更不应要求风险与回滚: {risk_problems}")
+
+    def test_large_change_sensitive_path_requires_risk_section(self) -> None:
+        """触碰敏感路径（CI/CODEOWNERS 等）即使用户行数少也需风险与回滚。"""
+        cfg = self._cfg(threshold=1000)  # 提高阈值，确保不是行数触发
+        desc = self._mr_desc()  # 无风险与回滚
+        with mock.patch.object(
+            validate_mr, "detect_large_change",
+            return_value=(True, ["触及高敏路径: ci/, CODEOWNERS"])
+        ):
+            problems = validate_mr.validate(desc, cfg, None)
+        self.assertTrue(
+            any("风险与回滚" in p for p in problems),
+            f"敏感路径变更应要求风险与回滚, 实际问题: {problems}",
+        )
+
+    def test_large_change_schema_change_requires_risk_section(self) -> None:
+        """含 schema 变更（.sql/.proto）的大变更需风险与回滚。"""
+        cfg = self._cfg()
+        desc = self._mr_desc()
+        with mock.patch.object(
+            validate_mr, "detect_large_change",
+            return_value=(True, ["含 schema 变更: db/schema.sql, api.proto"])
+        ):
+            problems = validate_mr.validate(desc, cfg, None)
+        self.assertTrue(
+            any("风险与回滚" in p for p in problems),
+            f"schema 变更应要求风险与回滚, 实际问题: {problems}",
+        )
+
+    def test_risk_section_empty_content_fails(self) -> None:
+        """风险与回滚段落存在但内容为纯占位符时应报错。"""
+        cfg = self._cfg()
+        # 纯占位符或空内容
+        desc = self._mr_desc("## 风险与回滚\n\n<请填写风险与回滚方案>\n")
+        with mock.patch.object(validate_mr, "detect_large_change", return_value=(True, ["净改动 600 行 ≥ 500"])):
+            problems = validate_mr.validate(desc, cfg, None)
+        self.assertTrue(
+            any("风险与回滚" in p for p in problems),
+            f"空风险与回滚应报错, 实际问题: {problems}",
+        )
+
+    def test_soft_mode_large_change_warns_but_does_not_block(self) -> None:
+        """软模式下大变更缺少风险与回滚应警告但不阻断。"""
+        cfg = self._cfg(enforcement="soft")
+        with mock.patch.object(validate_mr, "detect_large_change", return_value=(True, ["净改动 600 行 ≥ 500"])):
+            # 验证函数返回 problems 但不区分 hard/soft
+            problems = validate_mr.validate(self._mr_desc(), cfg, None)
+        self.assertTrue(
+            any("风险与回滚" in p for p in problems),
+            f"软模式仍应检测缺失, 实际问题: {problems}",
+        )
+        # main() 函数会根据 mode 决定退出码，这里验证 validate 能检测问题
+
+
 class GateDecisionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.config = json.loads(json.dumps(gate_decision.DEFAULT_CONFIG))
