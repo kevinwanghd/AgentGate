@@ -494,11 +494,14 @@ def _validate_annotation_fields(
     reviewed: str,
     expected_types: set[str],
     cfg: dict,
+    annotation_covers_hit: bool = True,
 ) -> list[str]:
     """
     返回问题列表; 空列表表示注解合法。
     expected_types: 该命中行涉及的所有风险类型集合。注解类型只要属于其中之一即视为匹配
     (一行可能同时命中多个模式, 如认证比较的字符串同时是 ObjectId)。
+    annotation_covers_hit: 该注解是否真正覆盖了本次命中的风险行。
+                           只有覆盖命中时才检查过期时间，避免噪音警告。
     """
     problems: list[str] = []
     ra = cfg["risk_annotations"]
@@ -533,18 +536,19 @@ def _validate_annotation_fields(
             problems.append(f'reason 含黑名单词 "{bad}"')
             break
 
-    # reviewed 日期有效 + 未过期
-    try:
-        rev = dt.date.fromisoformat(reviewed)
-        age = (dt.date.today() - rev).days
-        max_age = int(ra.get("reviewed_max_age_days", 180))
-        if age > max_age:
-            # 过期是软提醒: 继承来的他人注解不应因日期年龄卡死协作
-            problems.append(f'[warn] reviewed 已过期 ({age} 天 > {max_age} 天), 建议复查更新')
-        elif age < 0:
-            problems.append("[warn] reviewed 日期在未来")
-    except ValueError:
-        problems.append(f'reviewed 日期格式非法 "{reviewed}"')
+    # reviewed 日期有效 + 未过期（仅当注解覆盖命中时才检查，避免噪音）
+    if annotation_covers_hit:
+        try:
+            rev = dt.date.fromisoformat(reviewed)
+            age = (dt.date.today() - rev).days
+            max_age = int(ra.get("reviewed_max_age_days", 180))
+            if age > max_age:
+                # 过期是软提醒: 继承来的他人注解不应因日期年龄卡死协作
+                problems.append(f'[warn] reviewed 已过期 ({age} 天 > {max_age} 天), 建议复查更新')
+            elif age < 0:
+                problems.append("[warn] reviewed 日期在未来")
+        except ValueError:
+            problems.append(f'reviewed 日期格式非法 "{reviewed}"')
 
     return problems
 
@@ -572,8 +576,11 @@ def find_annotation(
         problems: list[str] = []
         for m in matches:
             risk_type = m.group("type").lower()
+            # 只有当注解类型真正覆盖了本次命中的风险类型时，才检查过期
+            annotation_covers_hit = risk_type in expected_types
             current = _validate_annotation_fields(
-                risk_type, m.group("reason"), m.group("reviewed"), expected_types, cfg
+                risk_type, m.group("reason"), m.group("reviewed"), expected_types, cfg,
+                annotation_covers_hit=annotation_covers_hit
             )
             if not current or all(p.startswith("[warn]") for p in current):
                 covered.add(risk_type)
@@ -599,12 +606,16 @@ def find_annotation(
         missing = [k for k in ("type", "reason", "owner", "reviewed") if k not in fields]
         if missing:
             return (False, [f"多行注解缺字段: {', '.join(missing)}"])
+        # 多行块显式声明类型，只有声明的类型覆盖命中时才检查过期
+        block_type = fields["type"].lower()
+        annotation_covers_hit = block_type in expected_types
         problems = _validate_annotation_fields(
-            fields["type"].lower(),
+            block_type,
             fields["reason"],
             fields["reviewed"],
             expected_types,
             cfg,
+            annotation_covers_hit=annotation_covers_hit,
         )
         return (len(problems) == 0, problems)
 
