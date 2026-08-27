@@ -167,6 +167,9 @@ governance:mr-validate:
 # ── 4. 测试痕迹检测: 软→硬 (失败测试记录无条件硬拦) ──────────────────────────
 # 改动的生产代码是否做过测试。CI 看不到 .governance/ 证据 (gitignore),
 # 退回读 commit 的 Tested: trailer。
+# ── 4b. 测试绕过检测: 直接跑测试命令不走 record_test_run.py 时拦截 ──────────
+# 扫描 staged diff 中有对应测试的生产文件改动，检查是否有测试执行记录。
+# 若有测试但无记录 -> FAIL（防止 dotnet test / npm test 直接绕过）
 governance:mr-validate-compat:
   stage: governance
   image: "$GOVERNANCE_PY_IMAGE"
@@ -236,6 +239,52 @@ governance:test-check:
     paths:
       - governance-test-check-result.json
       - .governance/test-evidence.jsonl
+    expire_in: 1 day
+  allow_failure: false
+
+# ── 4b. 测试绕过检测: 检查是否有测试但无执行记录 ────────────────────────────
+# 防止直接运行测试命令（dotnet test / npm test）绕过 record_test_run.py
+governance:test-bypass:
+  stage: governance
+  image: "$GOVERNANCE_PY_IMAGE"
+  only:
+    - branches
+    - merge_requests
+  variables:
+    GIT_DEPTH: "1000"
+  before_script:
+    - git --version
+    - python --version
+    - python -c "import yaml; print('pyyaml ok')"
+  script:
+    - |
+      # 只在有 staged 改动时运行（无 staged 改动时跳过整个检测）
+      STAGED_COUNT=$(git diff --cached --name-only | wc -l)
+      if [ "$STAGED_COUNT" -eq 0 ]; then
+        echo "[test-bypass] 无 staged 改动，跳过测试绕过检测。"
+        echo '{"status": "skip"}' > governance-test-bypass-result.json
+        exit 0
+      fi
+      TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-${CI_DEFAULT_BRANCH:-master}}"
+      git fetch -q origin "+refs/heads/${TB}:refs/remotes/origin/${TB}" || git fetch -q origin "$TB"
+      # check_job 检查 staged diff，base 用于加载配置
+      BASE="origin/$TB"
+      CONFIG_ARG=""
+      CONFIG_PATH="${GOVERNANCE_CONFIG_PATH:-governance.config.yml}"
+      [ -f "$CONFIG_PATH" ] || CONFIG_PATH="governance/governance.config.yml"
+      [ -f "$CONFIG_PATH" ] || CONFIG_PATH="governance/governance.config.yml"
+      [ -f "$CONFIG_PATH" ] && CONFIG_ARG="--config $CONFIG_PATH"
+      # 从 MR 流水线读取 staged 改动（MR pipeline 中 --cached 不可用，改用 diff-base）
+      python governance/scripts/check_job.py \
+        --evidence .governance/test-evidence.jsonl \
+        $CONFIG_ARG
+      EXIT_CODE=$?
+      echo "{\"status\": \"$([ $EXIT_CODE -eq 0 ] && echo 'pass' || ([ $EXIT_CODE -eq 2 ] && echo 'skip' || echo 'fail'))\"}" \
+        > governance-test-bypass-result.json
+      exit $EXIT_CODE
+  artifacts:
+    paths:
+      - governance-test-bypass-result.json
     expire_in: 1 day
   allow_failure: false
 

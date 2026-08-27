@@ -271,6 +271,81 @@ if (Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") == "Development
 
 ---
 
+### 9. `hardcoded-url` — 硬编码 URL
+
+**模式**：代码中出现带协议前缀的 URL 字面量。
+
+```csharp
+// 命中
+var apiUrl = "https://api.example.com/v1/users";
+// 命中
+logger.Info($"Calling https://internal.service.local/health");
+```
+
+**典型例外**：本地开发环境 URL、测试环境 URL、明确的配置文件替代方案。
+
+---
+
+### 10. `sensitive-log` — 敏感字段明文打印
+
+**模式**：日志打印语句中包含敏感字段名（password/token/secret/key 等）。
+
+```csharp
+// 命中
+logger.Info($"password={user.Password}");
+// 命中
+console.log("token:", accessToken);
+```
+
+**典型例外**：脱敏后的日志（如 `password=***`）、安全审计专用日志系统。
+
+---
+
+### 11. `sql-string-concat` — SQL 字符串拼接
+
+**模式**：SQL 语句使用字符串拼接或字符串格式化。
+
+```csharp
+// 命中
+var sql = "SELECT * FROM users WHERE id=" + userId;
+// 命中
+query = f"SELECT * FROM orders WHERE status='{status}'"
+```
+
+**典型例外**：参数化查询内部实现、仅拼接表名/列名（无用户输入）、ORM 内部实现。
+
+---
+
+### 12. `command-injection` — 命令注入风险
+
+**模式**：系统命令调用中可能包含外部输入。
+
+```python
+# 命中
+os.system(f"grep {user_input} logs.txt")
+# 命中
+subprocess.run(f"rm -rf {directory}", shell=True)
+```
+
+**典型例外**：命令字面量全为内部常量、无外部输入路径、明确的输入校验。
+
+---
+
+### 13. `weak-crypto` — 弱加密算法
+
+**模式**：使用 MD5/SHA1/DES/RC4/ECB 等弱加密算法。
+
+```python
+# 命中
+hashlib.md5(password.encode()).hexdigest()
+# 命中
+Cipher.getInstance("DES/ECB/PKCS5Padding")
+```
+
+**典型例外**：仅用于非安全场景（如 checksum、测试数据）、明确注释说明"仅用于兼容旧系统"。
+
+---
+
 ## 测试删除保护
 
 `test-removal` 是一个特殊类型，专用于**删除已有测试**的场景。CI 检测到 `[Fact]` / `[Test]` / `it(` 等被删除时，要求 commit message 或 MR 描述含：
