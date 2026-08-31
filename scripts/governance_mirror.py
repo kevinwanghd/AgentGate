@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3  # risk:untested reason:"CLI 同步工具，无直接业务逻辑路径" owner:@kevinwanghd reviewed:2026-08-31
 """
 governance_mirror.py — 扫描结果写入 pending lessons
 

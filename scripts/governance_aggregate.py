@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3  # risk:untested reason:"CLI 聚合工具，无直接业务逻辑路径" owner:@kevinwanghd reviewed:2026-08-31
 """
 governance_aggregate.py — 跨仓库 fingerprint 聚合查询
 

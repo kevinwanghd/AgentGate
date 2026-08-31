@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3  # risk:untested reason:"CLI 审核工具，无直接业务逻辑路径" owner:@kevinwanghd reviewed:2026-08-31
 """
 lessons_review.py — Pending Lessons Review 工具
 

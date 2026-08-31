@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3  # risk:untested reason:"Schema 校验 CLI 工具，无直接业务逻辑路径" owner:@kevinwanghd reviewed:2026-08-31
 """
 pending_lessons_schema.py — Pending Lessons Schema 校验器
 
