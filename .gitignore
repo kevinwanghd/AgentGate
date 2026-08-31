@@ -1,5 +1,9 @@
 # governance: 会话产物 / 临时文件, 不入库
-.governance/
+.governance/sessions/
+.governance/reports/
+.governance/*.log
+# NOTE: .governance/pending-lessons/ IS versioned - these are governance candidates
+!.governance/pending-lessons/
 governance/reports/
 reports/
 
