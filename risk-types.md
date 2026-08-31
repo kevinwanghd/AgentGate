@@ -50,6 +50,125 @@ quick fix   temp   wip   hack   for now   not sure
 
 ---
 
+## 理由模板（reason 怎么写）
+
+好的 reason 应该回答三个问题：**做什么**、**为什么不能按常规方式做**、**有什么后果**。
+
+### 模板公式
+
+```
+// risk:<type> reason:"<动作/场景>，因为<约束/特殊情况>，风险/影响是<后果>（<确认人/依据>）"
+```
+
+### 场景模板示例
+
+#### auth-bypass（鉴权旁路）
+
+```
+// risk:auth-bypass reason:"内部定时任务使用服务账号做数据同步，无人工登录路径，已在 SecurityReview-123 确认" owner:@data-platform reviewed:2026-08-26
+```
+
+```
+// risk:auth-bypass reason:"健康检查端点需要绕过登录以便 K8s liveness probe 调用，已在 infra-456 确认" owner:@infra reviewed:2026-08-26
+```
+
+#### magic-id（业务硬编码 ID）
+
+```
+// risk:magic-id reason:"种子数据预置的系统管理员账号，ID 来自历史数据迁移，业务方确认见 TICKET-789" owner:@backend reviewed:2026-08-26
+```
+
+```
+// risk:magic-id reason:"测试夹具中硬编码的 Mock 用户 ID，用于集成测试隔离，由 QA 团队确认" owner:@qa reviewed:2026-08-26
+```
+
+#### swallowed-exception（异常吞没）
+
+```
+// risk:swallowed-exception reason:"finally 块 cleanup 阶段的日志记录异常，吞没以避免掩盖主业务错误，上层已重试兜底" owner:@backend reviewed:2026-08-26
+```
+
+```
+// risk:swallowed-exception reason:"优雅退出时的信号处理，忽略所有异常以确保进程干净终止（已有监控告警兜底）" owner:@infra reviewed:2026-08-26
+```
+
+#### suppressed-warning（静态检查抑制）
+
+```
+// risk:suppressed-warning reason:"CA2000 规则在此处误报（对象生命周期由容器管理），已与 SecurityTeam 确认无需修改" owner:@security reviewed:2026-08-26
+```
+
+```
+// risk:suppressed-warning reason:"禁用特定行号 eslint-disable/no-unused-vars 用于占位 API 参数，短期内会重构" owner:@api-team reviewed:2026-08-26
+```
+
+#### skipped-test（测试跳过）
+
+```
+// risk:skipped-test reason:"Flaky 网络测试，已提交 ISSUE-123 跟踪，计划在测试环境稳定后恢复" owner:@qa reviewed:2026-08-26
+```
+
+```
+// risk:skipped-test reason:"需要外部支付沙箱的集成测试，当前环境不可用，在 STAGING-456 环境配置好后恢复" owner:@payment-team reviewed:2026-08-26
+```
+
+#### time-bypass（时间硬编码）
+
+```
+// risk:time-bypass reason:"迁移期双写窗口，截止到 2026-09-30，届时删除（已在 MIGRATION-789 记录）" owner:@migration reviewed:2026-08-26
+```
+
+```
+// risk:time-bypass reason:"Feature Flag 临时硬编码为 true 用于 A/B 测试验证，验证完成后删除" owner:@product reviewed:2026-08-26
+```
+
+#### env-hardcode（环境硬编码）
+
+```
+// risk:env-hardcode reason:"调试模式下输出详细日志用于排查问题，已在 DEBUG-123 确认，发布前删除" owner:@backend reviewed:2026-08-26
+```
+
+```
+// risk:env-hardcode reason:"构建期产物注入，CI 编译时替换占位符，源码中无真实环境信息" owner:@ci-team reviewed:2026-08-26
+```
+
+#### todo-no-context（无主 TODO）
+
+```
+// risk:todo-no-context reason:"遗留代码，待重构但当前无带宽；已在 TECH-DEBT-456 记录，计划 Q4 处理" owner:@team reviewed:2026-08-26
+```
+
+#### test-removal（测试删除）
+
+```
+// risk:test-removal reason:"用例已合并到 IntegrationTests.A，后者覆盖更全面" owner:@qa reviewed:2026-08-26
+```
+
+#### untested（无法单测）
+
+```
+// risk:untested reason:"纯 DTO 无业务逻辑，由集成测试间接覆盖" owner:@team reviewed:2026-08-26
+```
+
+```
+// risk:untested reason:"启动引导代码，依赖框架初始化，无法单测" owner:@infra reviewed:2026-08-26
+```
+
+### 模板要点
+
+| 要点 | 错误示例 | 正确示例 |
+|------|----------|----------|
+| 说清做什么 | `临时修改` | `内部服务账号做数据同步` |
+| 说明约束 | `历史原因` | `无人工登录路径，SecurityReview-123 确认` |
+| 量化后果 | `可能有风险` | `已在 STAGING 验证无数据泄露风险` |
+| 提供依据 | `先这样` | `业务方 @张三 确认，TICKET-456` |
+
+---
+
+
+
+---
+
 ## 已注册风险类型（8 类模式 + test-removal + untested 两个特殊类型）
 
 ### 1. `auth-bypass` — 鉴权旁路
@@ -149,6 +268,81 @@ if (Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") == "Development
 ```
 
 **例外说明要点**：无法立即修复的根因。
+
+---
+
+### 9. `hardcoded-url` — 硬编码 URL
+
+**模式**：代码中出现带协议前缀的 URL 字面量。
+
+```csharp
+// 命中
+var apiUrl = "https://api.example.com/v1/users";
+// 命中
+logger.Info($"Calling https://internal.service.local/health");
+```
+
+**典型例外**：本地开发环境 URL、测试环境 URL、明确的配置文件替代方案。
+
+---
+
+### 10. `sensitive-log` — 敏感字段明文打印
+
+**模式**：日志打印语句中包含敏感字段名（password/token/secret/key 等）。
+
+```csharp
+// 命中
+logger.Info($"password={user.Password}");
+// 命中
+console.log("token:", accessToken);
+```
+
+**典型例外**：脱敏后的日志（如 `password=***`）、安全审计专用日志系统。
+
+---
+
+### 11. `sql-string-concat` — SQL 字符串拼接
+
+**模式**：SQL 语句使用字符串拼接或字符串格式化。
+
+```csharp
+// 命中
+var sql = "SELECT * FROM users WHERE id=" + userId;
+// 命中
+query = f"SELECT * FROM orders WHERE status='{status}'"
+```
+
+**典型例外**：参数化查询内部实现、仅拼接表名/列名（无用户输入）、ORM 内部实现。
+
+---
+
+### 12. `command-injection` — 命令注入风险
+
+**模式**：系统命令调用中可能包含外部输入。
+
+```python
+# 命中
+os.system(f"grep {user_input} logs.txt")
+# 命中
+subprocess.run(f"rm -rf {directory}", shell=True)
+```
+
+**典型例外**：命令字面量全为内部常量、无外部输入路径、明确的输入校验。
+
+---
+
+### 13. `weak-crypto` — 弱加密算法
+
+**模式**：使用 MD5/SHA1/DES/RC4/ECB 等弱加密算法。
+
+```python
+# 命中
+hashlib.md5(password.encode()).hexdigest()
+# 命中
+Cipher.getInstance("DES/ECB/PKCS5Padding")
+```
+
+**典型例外**：仅用于非安全场景（如 checksum、测试数据）、明确注释说明"仅用于兼容旧系统"。
 
 ---
 

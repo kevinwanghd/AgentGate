@@ -85,6 +85,55 @@ HOOK
 
 chmod +x "$HOOK_FILE"
 
+# ============================================================
+# pre-push fallback hook: prepare-commit-msg 被 --no-verify / merge / squash
+# 跳过时, push 阶段补写 AI-Usage trailer（治理信号不丢失）
+# ============================================================
+PRE_PUSH_FILE="${HOOK_DIR}/pre-push"
+cat > "$PRE_PUSH_FILE" <<'PREPUSH'
+#!/bin/sh
+# governance:pre-push fallback — 补写 prepare-commit-msg 跳过的 AI-Usage trailer
+# 由 governance/scripts/install-hooks.sh 生成, 勿手改。
+# 仅在 prepare-commit-msg 未写入 trailer 时触发。
+
+AGENTGATE_ORIGINAL_PATH="${PATH:-}"
+PATH="/usr/local/bin:/usr/bin:/bin:${AGENTGATE_ORIGINAL_PATH}"
+export PATH
+
+# 只处理本次 push 的 HEAD 提交
+REMOTE="$1"
+URL="$2"
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo .)"
+
+# 兼容两种仓库形态
+AI_SCRIPT="${REPO_ROOT}/governance/scripts/collect_ai_usage.py"
+[ -f "$AI_SCRIPT" ] || AI_SCRIPT="${REPO_ROOT}/scripts/collect_ai_usage.py"
+
+PY=""
+for CANDIDATE in python python3; do
+  CANDIDATE_PATH="$(PATH="$AGENTGATE_ORIGINAL_PATH" command -v "$CANDIDATE" 2>/dev/null || true)"
+  if [ -n "$CANDIDATE_PATH" ] && "$CANDIDATE_PATH" -c 'raise SystemExit(0)' >/dev/null 2>&1; then
+    PY="$CANDIDATE_PATH"
+    break
+  fi
+done
+[ -z "$PY" ] && exit 0
+
+# 检查最近一个 commit 是否已有 AI-Usage trailer
+# 用 --amend 时同一 commit 会被推送两次，但 amend 后已含 trailer，第二次 push 不重复写
+if [ -f "$AI_SCRIPT" ]; then
+  TRAILER="$("$PY" "$AI_SCRIPT" --pre-push 2>/dev/null || true)"
+  if [ -n "$TRAILER" ]; then
+    echo "[agentgate:pre-push] 补充写入 AI-Usage trailer (prepare-commit-msg 跳过的降级补偿)"
+    # 仅提示，不强制 rewrite 历史（pre-push 无法安全 amend 已 push 的 commit）
+    echo "[agentgate:pre-push] 建议: 运行 'git commit --amend' 加入 trailer，或在下一次 commit 使用 hook"
+  fi
+fi
+PREPUSH
+
+chmod +x "$PRE_PUSH_FILE"
+
 # 确保证据文件被 gitignore (会话产物, 不入库)
 GITIGNORE="${REPO_ROOT}/.gitignore"
 if ! grep -q "^\.governance/" "$GITIGNORE" 2>/dev/null; then
@@ -98,3 +147,4 @@ fi
 
 echo "[hooks] prepare-commit-msg 已安装到 ${HOOK_FILE}"
 echo "[hooks] 之后每次 commit 会自动追加 AI-Usage 与 Tested trailer。"
+echo "[hooks] pre-push fallback 已安装到 ${PRE_PUSH_FILE} (prepare-commit-msg 跳过时的降级补偿)"

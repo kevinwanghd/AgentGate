@@ -96,7 +96,9 @@ jobs:
               | python3 scripts/validate_mr.py --diff-base "origin/$BASE_REF" --config governance.config.yml
           fi
 
-  # 测试痕迹检测: 硬门禁 (失败测试记录无条件硬拦); 读 commit 的 Tested: trailer
+  # 测试痕迹检测: 硬门禁 (失败测试记录无条件硬拦)
+  # AgentGate 是工具包仓库，无语言项目 → 直接跑 selftest.sh 生成 evidence
+  # (不用 language-specific jobs artifact，因为 python-test/dotnet-test 等被跳过)
   test-check:
     runs-on: ubuntu-latest
     steps:
@@ -105,15 +107,23 @@ jobs:
           fetch-depth: 0
       - name: Verify preinstalled Python dependencies
         run: python3 -c "import yaml; print('pyyaml ok')"
+      - name: generate test evidence via selftest
+        run: |
+          set -euo pipefail
+          mkdir -p .governance
+          python3 scripts/record_test_run.py \
+            --evidence .governance/test-evidence.jsonl \
+            --tool "selftest" \
+            -- bash scripts/selftest.sh
       - name: check tested
         run: |
           BASE_REF="${{ github.event.pull_request.base.ref }}"
           if [ -z "$BASE_REF" ]; then echo "::error::PR base.ref 缺失, 拒绝扫描"; exit 1; fi
           git fetch -q origin "$BASE_REF"
-          mkdir -p .governance
-          python3 scripts/record_test_run.py \
-            --evidence .governance/test-evidence.jsonl -- bash scripts/selftest.sh
-          python3 scripts/check_tested.py --diff-base "origin/$BASE_REF" --config governance.config.yml
+          python3 scripts/check_tested.py \
+            --diff-base "origin/$BASE_REF" \
+            --config governance.config.yml \
+            --ci-mode
 
   # Go 受影响包测试 (含反向依赖一跳扩展)
   # 跳过条件: 仓库无 go.mod (非 Go 仓库), 或 vars.GOVERNANCE_SKIP_GO_TEST == "true"
@@ -171,14 +181,16 @@ jobs:
           exit $OVERALL
 
   # Python 测试: 无 requirements.txt / pyproject.toml / setup.py 时跳过
+  # 记录证据到 .governance/test-evidence.jsonl（被 test-check 验证）
   python-test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: run python tests
+      - name: run python tests with evidence recording
         env:
           GOVERNANCE_SKIP_PYTHON_TEST: ${{ vars.GOVERNANCE_SKIP_PYTHON_TEST }}
         run: |
+          set -euo pipefail
           if [ "${GOVERNANCE_SKIP_PYTHON_TEST}" = "true" ]; then exit 0; fi
           DIRS=$(find . -maxdepth 3 \( -name "requirements.txt" -o -name "pyproject.toml" -o -name "setup.py" \) \
                  -not -path "*/.*" -not -path "*/node_modules/*" | xargs -I{} dirname {} | sort -u)
@@ -191,17 +203,29 @@ jobs:
             fi
           done
           if [ -z "$TEST_DIRS" ]; then echo "[python-test] 未找到 pytest 项目声明, 跳过。"; exit 0; fi
-          command -v pytest >/dev/null 2>&1 || { echo "[python-test] pytest must be preinstalled in the runner image" >&2; exit 1; }
-          python3 -c "import yaml" || { echo "[python-test] pyyaml must be preinstalled in the runner image" >&2; exit 1; }
+          command -v pytest >/dev/null 2>&1 || { echo "[python-test] pytest must be preinstalled" >&2; exit 1; }
+          python3 -c "import yaml" || { echo "[python-test] pyyaml must be preinstalled" >&2; exit 1; }
+          mkdir -p .governance
           OVERALL=0
           for DIR in $TEST_DIRS; do
-            echo "[python-test] 在 $DIR 运行 pytest"
+            echo "[python-test] 在 $DIR 运行 pytest (记录证据)"
             (
               cd "$DIR"
-              python3 -m pytest --tb=short -q
+              python3 "$GITHUB_WORKSPACE/scripts/record_test_run.py" \
+                --evidence "$GITHUB_WORKSPACE/.governance/test-evidence.jsonl" \
+                --tool "pytest" \
+                -- python3 -m pytest --tb=short -q
             ) || OVERALL=1
           done
           exit $OVERALL
+      - name: upload test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-test-evidence
+          path: .governance/test-evidence.jsonl
+          retention-days: 1
+
 
   # Node.js/TypeScript 测试: 无 package.json 时跳过
   node-test:
@@ -265,6 +289,7 @@ jobs:
           exit $OVERALL
 
   # .NET/C# 测试: 无 .sln / .csproj 时跳过
+  # 记录证据到 .governance/test-evidence.jsonl（被 test-check 验证）
   dotnet-test:
     runs-on: ubuntu-latest
     steps:
@@ -272,23 +297,33 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0"
-      - name: run dotnet tests
+      - name: run dotnet tests with evidence recording
         env:
           GOVERNANCE_SKIP_DOTNET_TEST: ${{ vars.GOVERNANCE_SKIP_DOTNET_TEST }}
+          DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+          GITHUB_WORKSPACE: ${{ github.workspace }}
         run: |
+          set -euo pipefail
           if [ "${GOVERNANCE_SKIP_DOTNET_TEST}" = "true" ]; then exit 0; fi
           SLN=$(find . -maxdepth 3 -name "*.sln" -not -path "*/.*" | head -1)
-          if [ -n "$SLN" ]; then
-            dotnet test "$SLN" --verbosity quiet
-          elif find . -maxdepth 3 -name "*.csproj" -not -path "*/.*" | grep -q .; then
-            OVERALL=0
-            for PROJ in $(find . -maxdepth 3 -name "*.csproj" -not -path "*/.*"); do
-              dotnet test "$PROJ" --verbosity quiet || OVERALL=1
-            done
-            exit $OVERALL
-          else
+          TEST_PROJ=$(find . -maxdepth 3 -name "*.csproj" -not -path "*/.*" | head -1)
+          if [ -z "$SLN" ] && [ -z "$TEST_PROJ" ]; then
             echo "[dotnet-test] 未找到 .sln / .csproj, 跳过。"
             exit 0
+          fi
+          mkdir -p .governance
+          if [ -n "$SLN" ]; then
+            echo "[dotnet-test] 运行 dotnet test $SLN (记录证据)"
+            python3 "$GITHUB_WORKSPACE/scripts/record_test_run.py" \
+              --evidence "$GITHUB_WORKSPACE/.governance/test-evidence.jsonl" \
+              --tool "dotnet-test" \
+              -- dotnet test "$SLN" --verbosity quiet
+          else
+            echo "[dotnet-test] 运行 dotnet test $TEST_PROJ (记录证据)"
+            python3 "$GITHUB_WORKSPACE/scripts/record_test_run.py" \
+              --evidence "$GITHUB_WORKSPACE/.governance/test-evidence.jsonl" \
+              --tool "dotnet-test" \
+              -- dotnet test "$TEST_PROJ" --verbosity quiet
           fi
 
   # Rust 测试: 无 Cargo.toml 时跳过

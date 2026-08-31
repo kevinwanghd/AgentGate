@@ -264,3 +264,38 @@ jobs:
             --auto \
             --squash \
             --delete-branch
+
+  # =============================================================================
+  # Governance Compound Flywheel: Pending Lessons Validation
+  # =============================================================================
+  pending-lessons-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Checkout AgentGate
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.agentgate-repository }}
+          ref: ${{ inputs.agentgate-ref }}
+          path: .agentgate
+      - name: Verify preinstalled Python dependencies
+        run: python3 -c "import yaml; print('pyyaml ok')"
+      - name: Validate pending lessons schema
+        run: |
+          # Validate pending lessons if directory exists and has files
+          if [ -d ".governance/pending-lessons" ] && [ -n "$(ls -A .governance/pending-lessons/*.yml 2>/dev/null)" ]; then
+            python3 .agentgate/scripts/validate_pending.py --root .
+            echo "pending-validate=pass" >> $GITHUB_OUTPUT
+          else
+            echo "No pending lessons to validate (this is normal)"
+            echo "pending-validate=skip" >> $GITHUB_OUTPUT
+          fi
+        id: validate
+      - name: Run governance metrics (informational)
+        if: always()
+        run: |
+          # Always show metrics for observability
+          python3 .agentgate/scripts/governance_metrics.py --root . 2>/dev/null || true

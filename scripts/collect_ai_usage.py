@@ -9,10 +9,15 @@ collect_ai_usage.py — 自动采集 AI 代码使用情况, 输出 commit traile
      (由各 agent 指令文件要求 agent 自己做, 见 agent-instructions/)。
   2. 提交时本脚本对照本次 diff 真实行数, 算出 AI 改动行 / 总改动行的占比。
   3. 按阈值映射 none/light/medium/heavy, 输出 commit trailer 文本。
+  4. P1-1: post-commit hook 可用 --collect-commit 自动采集本次 commit 的 diff 行数,
+     不依赖 AI agent 手动记录。
 
 证据行格式 (.governance/ai-evidence.jsonl, 每行一个 JSON):
   {"ts":"2026-06-26T10:00:00Z","tool":"claude-code","model":"opus-4",
    "file":"src/Foo.cs","added":80,"removed":3}
+  或 P1-1 post-commit hook 自动采集:
+  {"ts":"2026-06-26T10:00:00Z","tool":"auto","model":"unknown",
+   "file":"src/Foo.cs","added":80,"removed":3,"source":"post-commit-hook"}
 
 补全类工具 (Cursor Tab / Copilot 内联) 无法精确自报行数, 它们可只写一行
 标记本次会话用了该工具 (added/removed 省略或为 0), 此时等级降级处理:
@@ -32,6 +37,9 @@ collect_ai_usage.py — 自动采集 AI 代码使用情况, 输出 commit traile
 
     # 输出汇总 JSON (供 CI / 报表用)
     python collect_ai_usage.py --staged --json
+
+    # P1-1: post-commit hook 自动采集本次 commit 的 diff 行数
+    python collect_ai_usage.py --collect-commit
 """
 from __future__ import annotations
 
@@ -200,6 +208,7 @@ def classify(agg: dict) -> str:
       - 无证据 + 无工具标记 → none
       - 有精确行数 → 按比例
       - 仅补全类标记(无行数)→ used (程度未知)
+      - P1-1: 仅 auto 工具标记 → used (hook 自动采集，无具体工具信息)
     """
     if agg["total_lines"] == 0:
         return "none"
@@ -208,6 +217,12 @@ def classify(agg: dict) -> str:
         if agg["has_imprecise_tool"]:
             return "used"
         return "none"
+    
+    # P1-1: 如果只有 auto 工具（无具体 AI 工具），降级为 used
+    tools = agg.get("tools", [])
+    if tools == ["auto"] or (len(tools) == 1 and tools[0] == "auto"):
+        return "used"
+    
     ratio = agg["ratio"]
     for thresh, level in THRESHOLDS:
         if ratio > thresh:
@@ -236,7 +251,19 @@ def main() -> int:
     ap.add_argument("--evidence", default=EVIDENCE_PATH, help="证据文件路径")
     ap.add_argument("--trailer-only", action="store_true", help="仅输出 trailer 文本")
     ap.add_argument("--json", action="store_true", help="输出汇总 JSON")
+    # P1-1: post-commit hook 自动采集本次 commit 的 diff 行数
+    ap.add_argument("--collect-commit", action="store_true",
+                   help="采集本次 commit 的 diff 到证据文件 (post-commit hook 用)")
+    # pre-push fallback: 检查最新 commit 是否缺 trailer, 有则输出
+    ap.add_argument(
+        "--pre-push", action="store_true",
+        help="pre-push fallback: 检查最新 commit 是否缺 trailer, 有则输出"
+    )
     args = ap.parse_args()
+
+    # P1-1: 自动采集模式
+    if args.collect_commit:
+        return collect_commit_evidence(args.evidence)
 
     changed = diff_numstat(args.diff_base, args.staged)
     evidence = load_evidence(args.evidence)
@@ -252,6 +279,20 @@ def main() -> int:
         print(trailer)
         return 0
 
+    # pre-push fallback: 只输出有实质改动的 commit 的 trailer（避免无变更时也输出）
+    if args.pre_push:
+        # 检查最新 commit message 是否已有 AI-Usage trailer
+        try:
+            msg_out = run_git(["log", "-1", "--format=%B"], check=False)
+        except Exception:
+            return 0
+        if msg_out and re.search(r"(?im)^AI-Usage:", msg_out):
+            return 0  # 已有 trailer，无需补偿
+        # 无 trailer 且有真实改动 → 输出提示
+        if total_changed := sum(diff_numstat(None, False).values()):
+            print(trailer)
+        return 0
+
     # 默认: 人类可读摘要 + trailer
     print("[ai-usage] 自动采集结果")
     print(f"  AI 改动行 / 总改动行 = {agg['ai_lines']} / {agg['total_lines']}"
@@ -260,11 +301,62 @@ def main() -> int:
     print(f"  判定等级: {level}")
     if not evidence:
         print("  注意: 未找到证据文件, 等级按无 AI 证据处理。"
-              "AI agent 应在开发时写入 .governance/ai-evidence.jsonl。")
+              "AI agent 应在开发时写入 .governance/ai-evidence.jsonl。"
+              "或使用 post-commit hook 自动采集。")
     print()
     print("  建议 commit trailer:")
     for ln in trailer.splitlines():
         print(f"    {ln}")
+    return 0
+
+
+def collect_commit_evidence(evidence_path: str) -> int:
+    """
+    P1-1: post-commit hook 自动采集本次 commit 的 diff 行数。
+    从 HEAD~1 比对 HEAD，采集每个文件的新增/删除行数，写入证据文件。
+    source="post-commit-hook" 表示这条记录是 hook 自动采集的。
+    """
+    import datetime as dt
+    
+    # 获取本次 commit 改动的文件行数
+    changed = diff_numstat(None, staged=False)  # HEAD~1...HEAD
+    
+    if not changed:
+        sys.stderr.write("[ai-usage] P1-1: 本次 commit 无代码改动，无需采集。\n")
+        return 0
+    
+    # 确保目录存在
+    os.makedirs(os.path.dirname(evidence_path) or ".", exist_ok=True)
+    
+    # 读取现有证据（避免重复写入同一文件的记录）
+    existing = load_evidence(evidence_path)
+    existing_keys: set[tuple] = {
+        (rec.get("file"), rec.get("source"))
+        for rec in existing
+        if rec.get("source") == "post-commit-hook"
+    }
+    
+    ts = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+    
+    # 写入新证据
+    with open(evidence_path, "a", encoding="utf-8") as f:
+        for path, lines in sorted(changed.items()):
+            key = (path, "post-commit-hook")
+            if key in existing_keys:
+                continue  # 已存在同文件同来源的记录，跳过
+            
+            record = {
+                "ts": ts,
+                "tool": "auto",       # 自动采集，无法确定具体工具
+                "model": "unknown",   # 自动采集，无法确定模型
+                "file": path,
+                "added": lines,      # 这里的 lines 是 add+del 总数，作为近似值
+                "removed": 0,
+                "source": "post-commit-hook",
+            }
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    
+    print(f"[ai-usage] P1-1: 已自动采集 {len(changed)} 个文件的改动到 {evidence_path}")
     return 0
 
 
