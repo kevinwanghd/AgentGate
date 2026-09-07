@@ -66,6 +66,7 @@ governance:lessons-validate:
     - python -c "import yaml; print('pyyaml ok')"
   script:
     - python governance/scripts/validate_lessons.py --root .
+    - python governance/scripts/pending_lessons_schema.py
   allow_failure: false
 
 # ── 1. 风险扫描: 硬阻断 ──────────────────────────────────────────────────────

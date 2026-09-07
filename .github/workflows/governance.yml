@@ -30,6 +30,8 @@ jobs:
         run: python3 scripts/validate_yaml.py --ci
       - name: validate hard lessons
         run: python3 scripts/validate_lessons.py --root .
+      - name: validate pending lessons schema
+        run: python3 scripts/pending_lessons_schema.py
 
   # 风险扫描: 硬阻断 (命中风险模式且缺合法注解 → 拒合)
   risk-scan:
