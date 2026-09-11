@@ -1,2 +1,3 @@
 intent:
   enabled: false
+agent: codex
