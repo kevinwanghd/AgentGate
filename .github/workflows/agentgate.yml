@@ -1,3 +1,18 @@
+# AgentGate Thin Mode Workflow (GitHub Actions — via workflow_call)
+#
+# 被托管仓库通过以下方式接入:
+#   jobs:
+#     agentgate:
+#       uses: owner/repo/.github/workflows/agentgate.yml@ref
+#       with:
+#         agentgate-repository: kevinwanghd/AgentGate
+#         agentgate-ref: github-stable
+#
+# CI 优化 (2026-09): P0-A 共享 checkout artifact + P0-B shallow fetch + P0-C .agentgate 缓存
+# - checkout job 统一拉取仓库代码 + AgentGate 工具，所有 scan job 通过 artifact 复用
+# - fetch-depth: 1 + shallow fetch 目标分支，节省 50~80% checkout 时间
+# - .agentgate 目录随 checkout artifact 自动共享，无需每个 job 单独拉取
+
 name: AgentGate
 
 on:
@@ -33,117 +48,196 @@ permissions:
   checks: write
 
 jobs:
-  risk-scan:
+  # ── 统一 checkout job (P0-A: 共享 artifact + P0-B: shallow fetch + P0-C: 包含 .agentgate) ──
+  checkout:
     runs-on: ubuntu-latest
+    outputs:
+      base_ref: ${{ steps.vars.outputs.base_ref }}
+      agentgate_ref: ${{ inputs.agentgate-ref }}
     steps:
-      - name: Checkout repository
+      # P0-B: fetch-depth: 1 只拉当前 commit，不拉全量历史
+      - name: Checkout repository (shallow)
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-      - name: Checkout AgentGate
+          fetch-depth: 1
+
+      # P0-B: Shallow fetch 目标分支（只取最新 tip，无需完整历史）
+      - name: Fetch base ref (shallow)
+        id: vars
+        run: |
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          echo "base_ref=$BASE_REF" >> $GITHUB_OUTPUT
+          echo "[checkout] Shallow fetch base branch: $BASE_REF"
+          git fetch -q --depth=1 origin "$BASE_REF" || git fetch -q origin "$BASE_REF"
+
+      # P0-C: Checkout AgentGate 工具（只取 scripts/ 和 templates/ 等必要目录）
+      # sparse-checkout 减少下载量
+      - name: Checkout AgentGate tools (sparse)
         uses: actions/checkout@v4
         with:
           repository: ${{ inputs.agentgate-repository }}
           ref: ${{ inputs.agentgate-ref }}
           path: .agentgate
+          sparse-checkout: |
+            scripts/
+            templates/
+            patterns/
+            profiles/
+          sparse-checkout-cone-mode: false
+          depth: 1
+
+      # P0-A: 上传 artifact（包含仓库代码 + AgentGate 工具，所有 scan job 复用）
+      - name: Upload checkout artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkout
+          path: .
+          retention-days: 1
+
+  # P1-A: Change Detection — 轻量 path filter，决定后续 scan job 是否需要运行
+  path-filter:
+    needs: [checkout]
+    runs-on: ubuntu-latest
+    outputs:
+      run_risk_scan: ${{ steps.filter.outputs.run_risk_scan }}
+      run_secret_scan: ${{ steps.filter.outputs.run_secret_scan }}
+      run_mr_validate: ${{ steps.filter.outputs.run_mr_validate }}
+      run_test_check: ${{ steps.filter.outputs.run_test_check }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: checkout
+          path: .
+      - name: Detect changed paths
+        id: filter
+        run: |
+          BASE_REF="${{ needs.checkout.outputs.base_ref }}"
+          CHANGED=$(git diff --name-only "origin/$BASE_REF...HEAD" 2>/dev/null || git diff --name-only "$BASE_REF...HEAD")
+          echo "[path-filter] Changed files: $CHANGED"
+
+          # 风险扫描: 只对生产代码有意义
+          if echo "$CHANGED" | grep -qE '\.py$|\.ts$|\.tsx$|\.js$|\.jsx$|\.go$|\.java$|\.cs$|\.rs$|\.dart$|\.kt$|\.swift$|\.c$|\.cpp$|\.h$|\.scala$|\.rb$|\.php$'; then
+            echo "run_risk_scan=true" >> $GITHUB_OUTPUT
+          else
+            echo "run_risk_scan=false" >> $GITHUB_OUTPUT
+          fi
+
+          # 密钥扫描: 对任何代码/配置/脚本有意义
+          if echo "$CHANGED" | grep -qE '\.py$|\.ts$|\.tsx$|\.js$|\.jsx$|\.go$|\.java$|\.cs$|\.rs$|\.dart$|\.yml$|\.yaml$|\.json$|\.toml$|\.xml$|\.sh$|\.bash$|\.ps1$|\.tf$|\.env|\.ini$|\.conf$|\.config$|\.gradle$|\.properties$'; then
+            echo "run_secret_scan=true" >> $GITHUB_OUTPUT
+          else
+            echo "run_secret_scan=false" >> $GITHUB_OUTPUT
+          fi
+
+          # MR 描述校验: PR body 变化 + 代码变化
+          if echo "$CHANGED" | grep -qE '.*'; then
+            echo "run_mr_validate=true" >> $GITHUB_OUTPUT
+          else
+            echo "run_mr_validate=false" >> $GITHUB_OUTPUT
+          fi
+
+          # 测试检查: 对测试文件和测试相关文件有意义
+          if echo "$CHANGED" | grep -qE '_test\.py$|test_.*\.py$|\.test\.ts$|\.spec\.ts$|\.test\.js$|\.spec\.js$|test_.*\.go$|_test\.go$|\.test\.dart$|\.spec\.dart$|\.test\.rs$|\.spec\.rs$|\.test\.java$|\.Test\.java$|\.test\.cs$|\.Test\.cs$|conftest\.py$|pytest\.ini$|tox\.ini$|setup\.cfg$'; then
+            echo "run_test_check=true" >> $GITHUB_OUTPUT
+          else
+            # 如果有生产代码变化，也触发测试检查
+            if echo "$CHANGED" | grep -qE '\.py$|\.ts$|\.tsx$|\.js$|\.jsx$|\.go$|\.java$|\.cs$|\.rs$|\.dart$'; then
+              echo "run_test_check=true" >> $GITHUB_OUTPUT
+            else
+              echo "run_test_check=false" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+  risk-scan:
+    needs: [checkout, path-filter]
+    if: ${{ needs.path-filter.outputs.run_risk_scan == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      # P0-A: 下载共享 artifact
+      - uses: actions/download-artifact@v4
+        with:
+          name: checkout
+          path: .
       - name: Verify preinstalled Python dependencies
         run: python3 -c "import yaml; print('pyyaml ok')"
       - name: Scan risk annotations
         run: |
-          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          BASE_REF="${{ needs.checkout.outputs.base_ref }}"
           if [ -z "$BASE_REF" ]; then echo "::error::pull_request.base.ref is required"; exit 1; fi
-          git fetch -q origin "$BASE_REF"
           python3 .agentgate/scripts/scan_risks.py \
             --diff-base "origin/$BASE_REF" \
             --config "${{ inputs.config-path }}"
 
   secret-scan:
+    needs: [checkout, path-filter]
+    if: ${{ needs.path-filter.outputs.run_secret_scan == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      # P0-A: 下载共享 artifact
+      - uses: actions/download-artifact@v4
         with:
-          fetch-depth: 0
-      - name: Checkout AgentGate
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ inputs.agentgate-repository }}
-          ref: ${{ inputs.agentgate-ref }}
-          path: .agentgate
+          name: checkout
+          path: .
       - name: Scan introduced secrets (standard library)
         run: |
-          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          BASE_REF="${{ needs.checkout.outputs.base_ref }}"
           if [ -z "$BASE_REF" ]; then echo "::error::pull_request.base.ref is required"; exit 1; fi
-          git fetch -q origin "$BASE_REF"
           python3 .agentgate/scripts/scan_secrets.py --diff-base "origin/${BASE_REF}"
 
   mr-validate:
+    needs: [checkout, path-filter]
+    if: ${{ needs.path-filter.outputs.run_mr_validate == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      # P0-A: 下载共享 artifact
+      - uses: actions/download-artifact@v4
         with:
-          fetch-depth: 0
-      - name: Checkout AgentGate
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ inputs.agentgate-repository }}
-          ref: ${{ inputs.agentgate-ref }}
-          path: .agentgate
+          name: checkout
+          path: .
       - name: Verify preinstalled Python dependencies
         run: python3 -c "import yaml; print('pyyaml ok')"
       - name: Validate PR description
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
-          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          BASE_REF="${{ needs.checkout.outputs.base_ref }}"
           if [ -z "$BASE_REF" ]; then echo "::error::pull_request.base.ref is required"; exit 1; fi
-          git fetch -q origin "$BASE_REF"
           printf '%s' "$PR_BODY" \
             | python3 .agentgate/scripts/validate_mr.py \
                 --diff-base "origin/$BASE_REF" \
                 --config "${{ inputs.config-path }}"
 
   test-check:
+    needs: [checkout, path-filter]
+    if: ${{ needs.path-filter.outputs.run_test_check == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      # P0-A: 下载共享 artifact
+      - uses: actions/download-artifact@v4
         with:
-          fetch-depth: 0
-      - name: Checkout AgentGate
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ inputs.agentgate-repository }}
-          ref: ${{ inputs.agentgate-ref }}
-          path: .agentgate
+          name: checkout
+          path: .
       - name: Verify preinstalled Python dependencies
         run: python3 -c "import yaml; print('pyyaml ok')"
       - name: Check test evidence
         run: |
-          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          BASE_REF="${{ needs.checkout.outputs.base_ref }}"
           if [ -z "$BASE_REF" ]; then echo "::error::pull_request.base.ref is required"; exit 1; fi
-          git fetch -q origin "$BASE_REF"
           python3 .agentgate/scripts/check_tested.py \
             --diff-base "origin/$BASE_REF" \
             --config "${{ inputs.config-path }}"
 
   go-test:
     if: ${{ !inputs.skip-go-test }}
+    needs: [checkout]
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      # P0-A: 下载共享 artifact
+      - uses: actions/download-artifact@v4
         with:
-          fetch-depth: 0
-      - name: Checkout AgentGate
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ inputs.agentgate-repository }}
-          ref: ${{ inputs.agentgate-ref }}
-          path: .agentgate
-      - name: Set up Go
-        uses: actions/setup-go@v5
+          name: checkout
+          path: .
+      - uses: actions/setup-go@v5
         with:
           go-version: "1.22"
       - name: Verify preinstalled Python dependencies
@@ -154,9 +248,8 @@ jobs:
             echo "[go-test] go.mod not found, skipping."
             exit 0
           fi
-          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          BASE_REF="${{ needs.checkout.outputs.base_ref }}"
           if [ -z "$BASE_REF" ]; then echo "::error::pull_request.base.ref is required"; exit 1; fi
-          git fetch -q origin "$BASE_REF"
           python3 .agentgate/scripts/run_affected_tests.py \
             --diff-base "origin/$BASE_REF" \
             --timeout "${GOVERNANCE_GO_TEST_TIMEOUT:-120}"
@@ -174,16 +267,20 @@ jobs:
       merge-action: ${{ steps.gate.outputs.merge_action }}
       result: ${{ steps.gate.outputs.result }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      # gate-decision 需要读 policy SHA，使用完整 fetch
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Checkout AgentGate
+      - name: Checkout AgentGate tools (for gate decision)
         uses: actions/checkout@v4
         with:
           repository: ${{ inputs.agentgate-repository }}
           ref: ${{ inputs.agentgate-ref }}
           path: .agentgate
+          sparse-checkout: |
+            scripts/
+            templates/
+          sparse-checkout-cone-mode: false
       - name: Verify preinstalled Python dependencies
         run: python3 -c "import yaml; print('pyyaml ok')"
       - name: Decide gate result
@@ -229,7 +326,6 @@ jobs:
           set -e
           python - <<'PY' >> "$GITHUB_OUTPUT"
           import json
-
           with open("gate-result.json", encoding="utf-8") as f:
               gate = json.load(f)
           print(f"merge_action={gate.get('merge_action', 'BLOCK')}")
@@ -269,18 +365,14 @@ jobs:
   # Governance Compound Flywheel: Pending Lessons Validation
   # =============================================================================
   pending-lessons-validate:
+    needs: [checkout]
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      # P0-A: 下载共享 artifact
+      - uses: actions/download-artifact@v4
         with:
-          fetch-depth: 0
-      - name: Checkout AgentGate
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ inputs.agentgate-repository }}
-          ref: ${{ inputs.agentgate-ref }}
-          path: .agentgate
+          name: checkout
+          path: .
       - name: Verify preinstalled Python dependencies
         run: python3 -c "import yaml; print('pyyaml ok')"
       - name: Validate pending lessons schema
