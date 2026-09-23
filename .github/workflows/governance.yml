@@ -73,6 +73,13 @@ jobs:
         with:
           name: checkout
           path: .
+      - name: Verify checkout artifact
+        run: |
+          if [ ! -f ".git/HEAD" ]; then
+            echo "::error::Checkout artifact missing or empty. The 'checkout' job may have failed. Check Actions logs."
+            exit 1
+          fi
+          echo "[artifact] Checkout verified."
       - name: Detect changed paths
         id: filter
         run: |
@@ -144,6 +151,61 @@ jobs:
           # Rust
           echo "$CHANGED" | grep -qE '\.rs$|\.toml$' && echo "run_rust_test=true" >> $GITHUB_OUTPUT || echo "run_rust_test=false" >> $GITHUB_OUTPUT
 
+  # P1-B: 统一扫描 job — 运行 governance_scan_all.py 一次性执行 risk-scan + secret-scan + mr-validate
+  # 3 个 runner → 1 个 runner，减少约 40-80 秒启动开销
+  # 各子检查的详细结果实时打印，任意失败整体退出非 0，JSON 摘要在末尾
+  # 注意: 此 job 与独立的 risk-scan / secret-scan / mr-validate job 并存，
+  #       需要时可替换为 --skip 模式或在 PR body 里注释选择其一
+  scan-compound:
+    needs: [checkout, path-filter]
+    # 只在有生产代码/配置变化时运行（覆盖 risk-scan + secret-scan 的条件）
+    if: >-
+      ${{
+        needs.path-filter.outputs.run_risk_scan == 'true' ||
+        needs.path-filter.outputs.run_secret_scan == 'true'
+      }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: checkout
+          path: .
+      - name: Verify checkout artifact
+        run: |
+          if [ ! -f ".git/HEAD" ]; then
+            echo "::error::Checkout artifact missing or empty. Check Actions logs for the 'checkout' job."
+            exit 1
+          fi
+      - name: Verify preinstalled Python dependencies
+        run: python3 -c "import yaml; print('pyyaml ok')"
+      - name: Run compound governance scan
+        env:
+          PR_BODY: ${{ github.event.pull_request.body || '' }}
+        run: |
+          BASE_REF="${{ needs.checkout.outputs.base_ref }}"
+          if [ -z "$BASE_REF" ]; then
+            echo "::error::PR base.ref missing, refusing to scan"
+            exit 1
+          fi
+          # 准备 PR body 文件
+          PR_BODY_FILE="/tmp/pr_body.txt"
+          if [ -n "$PR_BODY" ]; then
+            printf '%s' "$PR_BODY" > "$PR_BODY_FILE"
+          else
+            echo "## 背景" > "$PR_BODY_FILE"
+            echo "请填写 PR 背景" >> "$PR_BODY_FILE"
+            echo "" >> "$PR_BODY_FILE"
+            echo "## 变更内容" >> "$PR_BODY_FILE"
+            echo "请填写变更内容" >> "$PR_BODY_FILE"
+          fi
+          python3 scripts/governance_scan_all.py \
+            --diff-base "origin/$BASE_REF" \
+            --config governance.config.yml \
+            --pr-body-file "$PR_BODY_FILE"
+          EXIT_CODE=$?
+          echo "[scan-compound] Overall exit: $EXIT_CODE"
+          exit $EXIT_CODE
+
   # YAML 配置语法检查: 最先运行，快速失败
   yaml-validate:
     needs: [checkout, path-filter]
@@ -154,6 +216,12 @@ jobs:
         with:
           name: checkout
           path: .
+      - name: Verify checkout artifact
+        run: |
+          if [ ! -f ".git/HEAD" ]; then
+            echo "::error::Checkout artifact missing or empty. Check Actions logs for the 'checkout' job."
+            exit 1
+          fi
       - name: Verify preinstalled Python dependencies
         run: python3 -c "import yaml; print('pyyaml ok')"
       - name: validate YAML config files
@@ -174,6 +242,12 @@ jobs:
         with:
           name: checkout
           path: .
+      - name: Verify checkout artifact
+        run: |
+          if [ ! -f ".git/HEAD" ]; then
+            echo "::error::Checkout artifact missing or empty. Check Actions logs for the 'checkout' job."
+            exit 1
+          fi
       - name: Verify preinstalled Python dependencies
         run: python3 -c "import yaml; print('pyyaml ok')"
       - name: scan risks
@@ -195,6 +269,12 @@ jobs:
         with:
           name: checkout
           path: .
+      - name: Verify checkout artifact
+        run: |
+          if [ ! -f ".git/HEAD" ]; then
+            echo "::error::Checkout artifact missing or empty. Check Actions logs for the 'checkout' job."
+            exit 1
+          fi
       - name: scan introduced secrets (standard library)
         run: |
           BASE_REF="${{ needs.checkout.outputs.base_ref }}"
@@ -212,6 +292,12 @@ jobs:
         with:
           name: checkout
           path: .
+      - name: Verify checkout artifact
+        run: |
+          if [ ! -f ".git/HEAD" ]; then
+            echo "::error::Checkout artifact missing or empty. Check Actions logs for the 'checkout' job."
+            exit 1
+          fi
       - name: Verify preinstalled Python dependencies
         run: python3 -c "import yaml; print('pyyaml ok')"
       - name: validate PR description
@@ -249,6 +335,12 @@ jobs:
         with:
           name: checkout
           path: .
+      - name: Verify checkout artifact
+        run: |
+          if [ ! -f ".git/HEAD" ]; then
+            echo "::error::Checkout artifact missing or empty. Check Actions logs for the 'checkout' job."
+            exit 1
+          fi
       - name: Verify preinstalled Python dependencies
         run: python3 -c "import yaml; print('pyyaml ok')"
       - name: generate test evidence via selftest
@@ -315,6 +407,12 @@ jobs:
         with:
           name: checkout
           path: .
+      - name: Verify checkout artifact
+        run: |
+          if [ ! -f ".git/HEAD" ]; then
+            echo "::error::Checkout artifact missing or empty. Check Actions logs for the 'checkout' job."
+            exit 1
+          fi
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -344,6 +442,12 @@ jobs:
         with:
           name: checkout
           path: .
+      - name: Verify checkout artifact
+        run: |
+          if [ ! -f ".git/HEAD" ]; then
+            echo "::error::Checkout artifact missing or empty. Check Actions logs for the 'checkout' job."
+            exit 1
+          fi
       - name: run python tests with evidence recording
         env:
           GOVERNANCE_SKIP_PYTHON_TEST: ${{ vars.GOVERNANCE_SKIP_PYTHON_TEST }}
@@ -397,6 +501,12 @@ jobs:
         with:
           name: checkout
           path: .
+      - name: Verify checkout artifact
+        run: |
+          if [ ! -f ".git/HEAD" ]; then
+            echo "::error::Checkout artifact missing or empty. Check Actions logs for the 'checkout' job."
+            exit 1
+          fi
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -433,6 +543,12 @@ jobs:
         with:
           name: checkout
           path: .
+      - name: Verify checkout artifact
+        run: |
+          if [ ! -f ".git/HEAD" ]; then
+            echo "::error::Checkout artifact missing or empty. Check Actions logs for the 'checkout' job."
+            exit 1
+          fi
       - uses: actions/setup-java@v4
         with:
           java-version: "21"
@@ -471,6 +587,12 @@ jobs:
         with:
           name: checkout
           path: .
+      - name: Verify checkout artifact
+        run: |
+          if [ ! -f ".git/HEAD" ]; then
+            echo "::error::Checkout artifact missing or empty. Check Actions logs for the 'checkout' job."
+            exit 1
+          fi
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0"
@@ -514,6 +636,12 @@ jobs:
         with:
           name: checkout
           path: .
+      - name: Verify checkout artifact
+        run: |
+          if [ ! -f ".git/HEAD" ]; then
+            echo "::error::Checkout artifact missing or empty. Check Actions logs for the 'checkout' job."
+            exit 1
+          fi
       - uses: dtolnay/rust-toolchain@stable
       - name: run rust tests
         env:
@@ -545,6 +673,12 @@ jobs:
         with:
           name: checkout
           path: .
+      - name: Verify checkout artifact
+        run: |
+          if [ ! -f ".git/HEAD" ]; then
+            echo "::error::Checkout artifact missing or empty. Check Actions logs for the 'checkout' job."
+            exit 1
+          fi
       - name: Verify preinstalled Python dependencies
         run: python3 -c "import yaml; print('pyyaml ok')"
       - name: run selftest
@@ -554,7 +688,7 @@ jobs:
   # 只有该 job 成功后，后续独立 Merge Bot 才能申请平台自动合并。
   # yaml-validate 是硬门禁，即使 path-filter 认为无需验证也必须跑（YAML 语法错误会导致其他扫描失效）。
   gate-decision:
-    needs: [yaml-validate, risk-scan, secret-scan, mr-validate, test-check, go-test, flutter-test, python-test, node-test, java-test, dotnet-test, rust-test, selftest]
+    needs: [yaml-validate, scan-compound, risk-scan, secret-scan, mr-validate, test-check, go-test, flutter-test, python-test, node-test, java-test, dotnet-test, rust-test, selftest]
     if: ${{ always() && github.event.pull_request.draft == false }}
     outputs:
       merge_action: ${{ steps.compute.outputs.merge_action }}

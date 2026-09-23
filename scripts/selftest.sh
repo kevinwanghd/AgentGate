@@ -918,6 +918,84 @@ PY
 )
 expect "无效 python3 后继续使用可运行 python" 0 $?
 
+# ============================================================
+echo
+echo "== governance_scan_all.py 统一入口回归 =="
+SCAN_ALL="${SCRIPT_DIR}/governance_scan_all.py"
+if [[ ! -f "$SCAN_ALL" ]]; then
+  echo "  ⊘ governance_scan_all.py 不存在, 跳过"
+else
+  ALL_SA=" governance_scan_all.py "
+
+  # [P1-B-1] 全合规: risk-scan + secret-scan + mr-validate 全部通过 → exit 0
+  SA1="$(mktemp -d)"
+  (
+    cd "$SA1" && git init -q && git config user.email t@t && git config user.name t && git branch -M main
+    echo "# 合规变更" > README.md
+    git add README.md && git commit -qm "chore: add readme"
+    # 合规 PR: 含 AI-Usage + 背景 + 变更内容
+    PR_BODY="## 背景\n\n添加 README\n\n## 变更内容\n\n- 新增 README.md\n\nAI-Usage: lightweight\n"
+    PR_FILE="$(mktemp)"
+    printf '%s' "$PR_BODY" > "$PR_FILE"
+    # 无风险代码 → risk-scan 通过；无密钥 → secret-scan 通过；合规 body → mr-validate 通过
+    python3 "$SCAN_ALL" \
+      --diff-base "HEAD~1" \
+      --config "${SOURCE_ROOT}/governance.config.yml" \
+      --pr-body-file "$PR_FILE" \
+      >/dev/null 2>&1
+  )
+  expect "P1-B 全合规 → exit 0" 0 $?
+
+  # [P1-B-2] risk-scan 失败: 引入无注解的硬风险代码 → exit 1
+  SA2="$(mktemp -d)"
+  (
+    cd "$SA2" && git init -q && git config user.email t@t && git config user.name t && git branch -M main
+    echo "x" > seed.txt && git add . && git commit -qm init
+    # 注入无注解硬风险
+    mkdir -p src
+    echo 'bool check(string userId){ return userId == "626786582b50ab8ec08b0fa0"; }' > src/Auth.cs
+    git add src/Auth.cs && git commit -qm "feat: auth"
+    python3 "$SCAN_ALL" \
+      --diff-base "HEAD~1" \
+      --config "${SOURCE_ROOT}/governance.config.yml" \
+      --pr-body-file /dev/null \
+      >/dev/null 2>&1
+  )
+  expect "P1-B risk-scan 失败 → exit 1" 1 $?
+
+  # [P1-B-3] secret-scan 失败: 提交包含密钥的变更 → exit 1
+  SA3="$(mktemp -d)"
+  (
+    cd "$SA3" && git init -q && git config user.email t@t && git config user.name t && git branch -M main
+    echo "x" > seed.txt && git add . && git commit -qm init
+    echo "API_KEY=sk-1234567890abcdef" > .env
+    git add .env && git commit -qm "chore: add env"
+    python3 "$SCAN_ALL" \
+      --diff-base "HEAD~1" \
+      --config "${SOURCE_ROOT}/governance.config.yml" \
+      --pr-body-file /dev/null \
+      >/dev/null 2>&1
+  )
+  expect "P1-B secret-scan 失败 → exit 1" 1 $?
+
+  # [P1-B-4] mr-validate 失败: PR body 缺少 AI-Usage → exit 1
+  SA4="$(mktemp -d)"
+  (
+    cd "$SA4" && git init -q && git config user.email t@t && git config user.name t && git branch -M main
+    echo "x" > seed.txt && git add . && git commit -qm init
+    echo "fix: typo" > a.txt && git add a.txt && git commit -qm "fix: typo"
+    # 空白 PR body → mr-validate 失败（无 AI-Usage）
+    PR_FILE="$(mktemp)"
+    printf '%s\n' "## 背景" "fix typo" > "$PR_FILE"
+    python3 "$SCAN_ALL" \
+      --diff-base "HEAD~1" \
+      --config "${SOURCE_ROOT}/governance.config.yml" \
+      --pr-body-file "$PR_FILE" \
+      >/dev/null 2>&1
+  )
+  expect "P1-B mr-validate 失败(缺AI-Usage) → exit 1" 1 $?
+fi
+
 echo "============================================"
 echo " 通过 $PASS / 失败 $FAIL"
 echo "============================================"
