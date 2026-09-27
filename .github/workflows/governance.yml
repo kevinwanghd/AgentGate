@@ -69,7 +69,12 @@ jobs:
             # 回退: 直接用 base ref 前缀尝试
             CHANGED=$(git diff --name-only "$BASE_REF...HEAD" 2>/dev/null || echo "")
           fi
-          echo "changed_files=$CHANGED" >> $GITHUB_OUTPUT
+          # 多行输出必须用 heredoc 语法，裸换行写入 GITHUB_OUTPUT 会报错
+          {
+            echo 'changed_files<<CHANGED_EOF'
+            echo "$CHANGED"
+            echo 'CHANGED_EOF'
+          } >> "$GITHUB_OUTPUT"
           echo "[path-filter] Changed files: $CHANGED"
 
           # ── YAML 验证: .yml / .yaml 文件变化时触发 ──────────────────
