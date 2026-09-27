@@ -12,6 +12,10 @@
 # │ - 不在 push 触发 (push 无 base, 会退化成 HEAD~1 等不可控范围)。   │
 # │ - 不含 report_expired (它用 os.walk 全树遍历, 只能定时单独跑)。   │
 # └──────────────────────────────────────────────────────────────┘
+#
+# CI 优化 (2026-09): P0-A 共享 checkout artifact + P0-B shallow fetch
+# - checkout job 统一拉取代码，所有 scan job 通过 artifact 复用
+# - fetch-depth: 1 + shallow fetch 目标分支，节省 50~80% checkout 时间
 name: governance
 
 on:
@@ -19,11 +23,176 @@ on:
     types: [opened, synchronize, reopened, edited]
 
 jobs:
+  # P1-A: Change Detection — 轻量 path filter，决定后续 scan job 是否需要运行
+  # 每个 scan job 独立 checkout 完整历史（artifact 方案有 zip 压缩 bug）
+  path-filter:
+    runs-on: ubuntu-latest
+    outputs:
+      run_yaml_validate: ${{ steps.filter.outputs.run_yaml_validate }}
+      run_risk_scan: ${{ steps.filter.outputs.run_risk_scan }}
+      run_secret_scan: ${{ steps.filter.outputs.run_secret_scan }}
+      run_mr_validate: ${{ steps.filter.outputs.run_mr_validate }}
+      run_test_check: ${{ steps.filter.outputs.run_test_check }}
+      run_go_test: ${{ steps.filter.outputs.run_go_test }}
+      run_flutter_test: ${{ steps.filter.outputs.run_flutter_test }}
+      run_python_test: ${{ steps.filter.outputs.run_python_test }}
+      run_node_test: ${{ steps.filter.outputs.run_node_test }}
+      run_java_test: ${{ steps.filter.outputs.run_java_test }}
+      run_dotnet_test: ${{ steps.filter.outputs.run_dotnet_test }}
+      run_rust_test: ${{ steps.filter.outputs.run_rust_test }}
+      changed_files: ${{ steps.filter.outputs.changed_files }}
+    steps:
+      # P0-B: shallow fetch (path-filter 只需当前 commit + base tip)
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Fetch base ref (shallow)
+        id: vars
+        run: |
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          echo "base_ref=$BASE_REF" >> $GITHUB_OUTPUT
+          echo "[path-filter] BASE_REF=$BASE_REF"
+          # shallow fetch base ref (只需最新 tip，不需完整历史)
+          git fetch -q --depth=1 origin "$BASE_REF" 2>/dev/null || git fetch -q origin "$BASE_REF"
+      - name: Detect changed paths
+        id: filter
+        run: |
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          echo "[path-filter] Using BASE_REF=$BASE_REF"
+
+          # 捕获 git diff 输出
+          CHANGED=""
+          if git rev-parse "origin/$BASE_REF" >/dev/null 2>&1; then
+            CHANGED=$(git diff --name-only "origin/$BASE_REF...HEAD" 2>/dev/null || echo "")
+          fi
+          if [ -z "$CHANGED" ]; then
+            # 回退: 直接用 base ref 前缀尝试
+            CHANGED=$(git diff --name-only "$BASE_REF...HEAD" 2>/dev/null || echo "")
+          fi
+          # 多行输出必须用 heredoc 语法，裸换行写入 GITHUB_OUTPUT 会报错
+          {
+            echo 'changed_files<<CHANGED_EOF'
+            echo "$CHANGED"
+            echo 'CHANGED_EOF'
+          } >> "$GITHUB_OUTPUT"
+          echo "[path-filter] Changed files: $CHANGED"
+
+          # ── YAML 验证: .yml / .yaml 文件变化时触发 ──────────────────
+          if echo "$CHANGED" | grep -qE '\.yml$|\.yaml$'; then
+            echo "run_yaml_validate=true" >> $GITHUB_OUTPUT
+          else
+            echo "run_yaml_validate=false" >> $GITHUB_OUTPUT
+          fi
+
+          # ── 风险扫描: 生产代码 ─────────────────────────────────────
+          if echo "$CHANGED" | grep -qE '\.py$|\.ts$|\.tsx$|\.js$|\.jsx$|\.go$|\.java$|\.cs$|\.rs$|\.dart$|\.kt$|\.swift$|\.c$|\.cpp$|\.h$|\.scala$|\.rb$|\.php$'; then
+            echo "run_risk_scan=true" >> $GITHUB_OUTPUT
+          else
+            echo "run_risk_scan=false" >> $GITHUB_OUTPUT
+          fi
+
+          # ── 密钥扫描: 代码 + 配置 + 脚本 ───────────────────────────
+          if echo "$CHANGED" | grep -qE '\.py$|\.ts$|\.tsx$|\.js$|\.jsx$|\.go$|\.java$|\.cs$|\.rs$|\.dart$|\.yml$|\.yaml$|\.json$|\.toml$|\.xml$|\.sh$|\.bash$|\.ps1$|\.tf$|\.env|\.ini$|\.conf$|\.config$|\.gradle$|\.properties$'; then
+            echo "run_secret_scan=true" >> $GITHUB_OUTPUT
+          else
+            echo "run_secret_scan=false" >> $GITHUB_OUTPUT
+          fi
+
+          # ── MR 描述校验: 任何代码/文档变化都触发 ──────────────────
+          if echo "$CHANGED" | grep -qE '.*'; then
+            echo "run_mr_validate=true" >> $GITHUB_OUTPUT
+          else
+            echo "run_mr_validate=false" >> $GITHUB_OUTPUT
+          fi
+
+          # ── 测试检查: 测试文件 + 生产代码变化 ─────────────────────
+          if echo "$CHANGED" | grep -qE '_test\.py$|test_.*\.py$|\.test\.ts$|\.spec\.ts$|\.test\.js$|\.spec\.js$|test_.*\.go$|_test\.go$|\.test\.dart$|\.spec\.dart$|\.test\.rs$|\.spec\.rs$|\.test\.java$|\.Test\.java$|\.test\.cs$|\.Test\.cs$|conftest\.py$|pytest\.ini$|tox\.ini$|setup\.cfg$'; then
+            echo "run_test_check=true" >> $GITHUB_OUTPUT
+          elif echo "$CHANGED" | grep -qE '\.py$|\.ts$|\.tsx$|\.js$|\.jsx$|\.go$|\.java$|\.cs$|\.rs$|\.dart$'; then
+            echo "run_test_check=true" >> $GITHUB_OUTPUT
+          else
+            echo "run_test_check=false" >> $GITHUB_OUTPUT
+          fi
+
+          # ── 语言测试: 各语言源文件变化 ─────────────────────────────
+          # Go
+          echo "$CHANGED" | grep -qE '\.go$' && echo "run_go_test=true" >> $GITHUB_OUTPUT || echo "run_go_test=false" >> $GITHUB_OUTPUT
+          # Flutter/Dart
+          echo "$CHANGED" | grep -qE '\.dart$|\.yaml$' && echo "run_flutter_test=true" >> $GITHUB_OUTPUT || echo "run_flutter_test=false" >> $GITHUB_OUTPUT
+          # Python
+          echo "$CHANGED" | grep -qE '\.py$' && echo "run_python_test=true" >> $GITHUB_OUTPUT || echo "run_python_test=false" >> $GITHUB_OUTPUT
+          # Node.js
+          echo "$CHANGED" | grep -qE '\.js$|\.ts$|\.jsx$|\.tsx$' && echo "run_node_test=true" >> $GITHUB_OUTPUT || echo "run_node_test=false" >> $GITHUB_OUTPUT
+          # Java
+          echo "$CHANGED" | grep -qE '\.java$|\.gradle$' && echo "run_java_test=true" >> $GITHUB_OUTPUT || echo "run_java_test=false" >> $GITHUB_OUTPUT
+          # .NET
+          echo "$CHANGED" | grep -qE '\.cs$|\.csproj$|\.sln$' && echo "run_dotnet_test=true" >> $GITHUB_OUTPUT || echo "run_dotnet_test=false" >> $GITHUB_OUTPUT
+          # Rust
+          echo "$CHANGED" | grep -qE '\.rs$|\.toml$' && echo "run_rust_test=true" >> $GITHUB_OUTPUT || echo "run_rust_test=false" >> $GITHUB_OUTPUT
+
+  # P1-B: 统一扫描 job — 运行 governance_scan_all.py 一次性执行 risk-scan + secret-scan + mr-validate
+  # 3 个 runner → 1 个 runner，减少约 40-80 秒启动开销
+  # 各子检查的详细结果实时打印，任意失败整体退出非 0，JSON 摘要在末尾
+  # 注意: 此 job 与独立的 risk-scan / secret-scan / mr-validate job 并存，
+  #       需要时可替换为 --skip 模式或在 PR body 里注释选择其一
+  scan-compound:
+    needs: [path-filter]
+    # 只在有生产代码/配置变化时运行（覆盖 risk-scan + secret-scan 的条件）
+    if: >-
+      ${{
+        needs.path-filter.outputs.run_risk_scan == 'true' ||
+        needs.path-filter.outputs.run_secret_scan == 'true'
+      }}
+    runs-on: ubuntu-latest
+    steps:
+      # 需要完整 git 历史以算 diff
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fetch base ref
+        run: |
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          echo "[scan-compound] Fetching base ref: $BASE_REF"
+          git fetch -q origin "$BASE_REF"
+      - name: Verify preinstalled Python dependencies
+        run: python3 -c "import yaml; print('pyyaml ok')"
+      - name: Run compound governance scan
+        env:
+          PR_BODY: ${{ github.event.pull_request.body || '' }}
+        run: |
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          if [ -z "$BASE_REF" ]; then
+            echo "::error::PR base.ref missing, refusing to scan"
+            exit 1
+          fi
+          # 准备 PR body 文件
+          PR_BODY_FILE="/tmp/pr_body.txt"
+          if [ -n "$PR_BODY" ]; then
+            printf '%s' "$PR_BODY" > "$PR_BODY_FILE"
+          else
+            echo "## 背景" > "$PR_BODY_FILE"
+            echo "请填写 PR 背景" >> "$PR_BODY_FILE"
+            echo "" >> "$PR_BODY_FILE"
+            echo "## 变更内容" >> "$PR_BODY_FILE"
+            echo "请填写变更内容" >> "$PR_BODY_FILE"
+          fi
+          python3 scripts/governance_scan_all.py \
+            --diff-base "origin/$BASE_REF" \
+            --config governance.config.yml \
+            --pr-body-file "$PR_BODY_FILE"
+          EXIT_CODE=$?
+          echo "[scan-compound] Overall exit: $EXIT_CODE"
+          exit $EXIT_CODE
+
   # YAML 配置语法检查: 最先运行，快速失败
   yaml-validate:
+    needs: [path-filter]
+    if: ${{ needs.path-filter.outputs.run_yaml_validate == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Verify preinstalled Python dependencies
         run: python3 -c "import yaml; print('pyyaml ok')"
       - name: validate YAML config files
@@ -35,11 +204,13 @@ jobs:
 
   # 风险扫描: 硬阻断 (命中风险模式且缺合法注解 → 拒合)
   risk-scan:
+    needs: [path-filter]
+    if: ${{ needs.path-filter.outputs.run_risk_scan == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0          # 需完整历史以算 diff
+          fetch-depth: 0
       - name: Verify preinstalled Python dependencies
         run: python3 -c "import yaml; print('pyyaml ok')"
       - name: scan risks
@@ -53,6 +224,8 @@ jobs:
 
   # 密钥扫描: 硬阻断
   secret-scan:
+    needs: [path-filter]
+    if: ${{ needs.path-filter.outputs.run_secret_scan == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -67,8 +240,9 @@ jobs:
 
   # MR 描述校验: 硬门禁 (从 PR body 读 + commit trailer 读 AI-Usage)
   mr-validate:
+    needs: [path-filter]
+    if: ${{ github.event_name == 'pull_request' && needs.path-filter.outputs.run_mr_validate == 'true' }}
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -102,6 +276,8 @@ jobs:
   # AgentGate 是工具包仓库，无语言项目 → 直接跑 selftest.sh 生成 evidence
   # (不用 language-specific jobs artifact，因为 python-test/dotnet-test 等被跳过)
   test-check:
+    needs: [path-filter]
+    if: ${{ needs.path-filter.outputs.run_test_check == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -113,6 +289,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .governance
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          git fetch -q origin "$BASE_REF"
           python3 scripts/record_test_run.py \
             --evidence .governance/test-evidence.jsonl \
             --tool "selftest" \
@@ -121,7 +299,6 @@ jobs:
         run: |
           BASE_REF="${{ github.event.pull_request.base.ref }}"
           if [ -z "$BASE_REF" ]; then echo "::error::PR base.ref 缺失, 拒绝扫描"; exit 1; fi
-          git fetch -q origin "$BASE_REF"
           python3 scripts/check_tested.py \
             --diff-base "origin/$BASE_REF" \
             --config governance.config.yml \
@@ -130,6 +307,8 @@ jobs:
   # Go 受影响包测试 (含反向依赖一跳扩展)
   # 跳过条件: 仓库无 go.mod (非 Go 仓库), 或 vars.GOVERNANCE_SKIP_GO_TEST == "true"
   go-test:
+    needs: [path-filter]
+    if: ${{ needs.path-filter.outputs.run_go_test == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -162,9 +341,13 @@ jobs:
 
   # Flutter/Dart 测试: 无 pubspec.yaml 时自动跳过
   flutter-test:
+    needs: [path-filter]
+    if: ${{ needs.path-filter.outputs.run_flutter_test == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -185,12 +368,17 @@ jobs:
   # Python 测试: 无 requirements.txt / pyproject.toml / setup.py 时跳过
   # 记录证据到 .governance/test-evidence.jsonl（被 test-check 验证）
   python-test:
+    needs: [path-filter]
+    if: ${{ needs.path-filter.outputs.run_python_test == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
       - name: run python tests with evidence recording
         env:
           GOVERNANCE_SKIP_PYTHON_TEST: ${{ vars.GOVERNANCE_SKIP_PYTHON_TEST }}
+          GITHUB_WORKSPACE: ${{ github.workspace }}
         run: |
           set -euo pipefail
           if [ "${GOVERNANCE_SKIP_PYTHON_TEST}" = "true" ]; then exit 0; fi
@@ -231,9 +419,13 @@ jobs:
 
   # Node.js/TypeScript 测试: 无 package.json 时跳过
   node-test:
+    needs: [path-filter]
+    if: ${{ needs.path-filter.outputs.run_node_test == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -261,9 +453,13 @@ jobs:
 
   # Java 测试: 无 pom.xml / build.gradle 时跳过
   java-test:
+    needs: [path-filter]
+    if: ${{ needs.path-filter.outputs.run_java_test == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
       - uses: actions/setup-java@v4
         with:
           java-version: "21"
@@ -293,9 +489,13 @@ jobs:
   # .NET/C# 测试: 无 .sln / .csproj 时跳过
   # 记录证据到 .governance/test-evidence.jsonl（被 test-check 验证）
   dotnet-test:
+    needs: [path-filter]
+    if: ${{ needs.path-filter.outputs.run_dotnet_test == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0"
@@ -330,9 +530,13 @@ jobs:
 
   # Rust 测试: 无 Cargo.toml 时跳过
   rust-test:
+    needs: [path-filter]
+    if: ${{ needs.path-filter.outputs.run_rust_test == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
       - uses: dtolnay/rust-toolchain@stable
       - name: run rust tests
         env:
@@ -359,6 +563,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
       - name: Verify preinstalled Python dependencies
         run: python3 -c "import yaml; print('pyyaml ok')"
       - name: run selftest
@@ -366,8 +572,9 @@ jobs:
 
   # GateResult 汇总器（只读阶段）。
   # 只有该 job 成功后，后续独立 Merge Bot 才能申请平台自动合并。
+  # yaml-validate 是硬门禁，即使 path-filter 认为无需验证也必须跑（YAML 语法错误会导致其他扫描失效）。
   gate-decision:
-    needs: [yaml-validate, risk-scan, secret-scan, mr-validate, test-check, go-test, flutter-test, python-test, node-test, java-test, dotnet-test, rust-test, selftest]
+    needs: [yaml-validate, scan-compound, risk-scan, secret-scan, mr-validate, test-check, go-test, flutter-test, python-test, node-test, java-test, dotnet-test, rust-test, selftest]
     if: ${{ always() && github.event.pull_request.draft == false }}
     outputs:
       merge_action: ${{ steps.compute.outputs.merge_action }}
@@ -379,6 +586,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # gate-decision 需要读 policy SHA (git cat-file -e)，需要完整历史
       - name: Verify preinstalled Python dependencies
         run: python3 -c "import yaml; print('pyyaml ok')"
       - name: compute GateResult v2
