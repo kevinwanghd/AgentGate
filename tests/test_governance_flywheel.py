@@ -265,6 +265,32 @@ class TestGovernanceMetrics(unittest.TestCase):
         rate = governance_metrics.calculate_confirmation_rate(pending)
         self.assertEqual(rate, 0.5)  # 2/4 = 0.5
 
+    def test_promoted_counts_as_confirmed(self):
+        """promoted 是确认的最终形态: 晋升后确认率不能下降。"""
+        import governance_metrics
+
+        pending = [
+            {"status": "confirmed"},
+            {"status": "promoted"},
+            {"status": "rejected"},
+            {"status": "pending"},
+        ]
+        self.assertEqual(governance_metrics.calculate_confirmation_rate(pending), 0.5)
+        # obsolescence: rejected / (confirmed + promoted + rejected) = 1/3
+        self.assertAlmostEqual(
+            governance_metrics.calculate_obsolescence_rate(pending), 1 / 3, places=4
+        )
+        # rule_hit_rate: reviewed (含 promoted) / total = 3/4
+        self.assertEqual(governance_metrics.calculate_rule_hit_rate(pending), 0.75)
+
+    def test_rule_hit_rate_has_threshold_color(self):
+        """rule_hit_rate 已配阈值, 着色不再恒为 N/A。"""
+        import governance_metrics
+
+        self.assertEqual(governance_metrics.get_status_color(0.8, "rule_hit_rate"), "GREEN")
+        self.assertEqual(governance_metrics.get_status_color(0.6, "rule_hit_rate"), "YELLOW")
+        self.assertEqual(governance_metrics.get_status_color(0.2, "rule_hit_rate"), "RED")
+
     def test_rejection_rate_calculation(self):
         """Rejection rate should be rejected / total."""
         import governance_metrics

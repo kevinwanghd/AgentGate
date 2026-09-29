@@ -137,20 +137,8 @@ def aggregate_dicts_by_fingerprint(pending_dicts: list[dict]) -> dict[str, Aggre
 
 
 def aggregate_by_fingerprint(pending_files: list[tuple[Path, dict]]) -> dict[str, AggregatedFingerprint]:
-    """Aggregate pending files by fingerprint."""
-    aggregations: dict[str, AggregatedFingerprint] = {}
-
-    for file, data in pending_files:
-        fp = data.get("fingerprint", "")
-        if not fp:
-            continue
-
-        if fp not in aggregations:
-            aggregations[fp] = AggregatedFingerprint(fp)
-
-        aggregations[fp].add(data)
-
-    return aggregations
+    """Aggregate pending files by fingerprint (路径仅用于展示, 聚合逻辑见 dicts 版)。"""
+    return aggregate_dicts_by_fingerprint([data for _, data in pending_files])
 
 
 def filter_by_status(
