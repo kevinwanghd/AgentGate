@@ -29,6 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **git 调用** — `scan_risks`/`check_tested` 使用 `core.quotepath=off`（非 ASCII 文件名不再被跳过），`scan_secrets` 加 `--no-color`。
 - **gitignore 条目** — hook 安装脚本只忽略 `.governance/*.jsonl`、`sessions/`、`reports/`，不再整目录忽略导致 `pending-lessons/` 无法入库；`enable-local.sh` 兼容 worktree / `core.hooksPath`。
 - **GitHub 调用模板** 增加按 PR 的 `concurrency` 取消旧运行。
+- **pending lessons 统一为 YAML** — `lessons_review` 改读写 YAML；`pending_lessons_schema.py` 改为委托 `validate_pending.py` 的兼容入口；删除无调用方的 `governance_mirror.py`、`governance_aggregate.py`。
+- **fingerprint v2** — 保留关键字与字面量占位符，不同结构的违规不再撞指纹。
+- **路径 glob 语义统一** — 7 处独立实现统一为 `governance_common.path_matches`（gitignore 风格、大小写敏感）；`**/auth/**` 现在也匹配根目录 `auth/`。
+- **profiles** — 头部 schema 统一；安装器不再写入 CI 不产出的 `flutter-analyze`/`bazel-test`。
+- **GitHub gate-decision** — 判定 `FAIL`/`ERROR` 时 job 失败（此前始终绿色），`WAITING_APPROVAL` 保持通过并提示。
 
 ---
 

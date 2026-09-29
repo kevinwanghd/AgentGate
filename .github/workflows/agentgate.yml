@@ -247,6 +247,14 @@ jobs:
           if [ "$DECISION_EXIT" -gt 1 ]; then
             exit "$DECISION_EXIT"
           fi
+          # FAIL/ERROR 必须显示为失败, 否则被设为必过检查时被阻断的 PR 仍是绿色;
+          # WAITING_APPROVAL 不是失败, 保持通过并提示需要人工审批。
+          GATE_RESULT="$(python -c 'import json; print(json.load(open("gate-result.json", encoding="utf-8")).get("result", "FAIL"))')"
+          case "$GATE_RESULT" in
+            PASS) ;;
+            WAITING_APPROVAL) echo "::notice::AgentGate: 等待人工审批 (critical 风险)" ;;
+            *) echo "::error::AgentGate gate result: $GATE_RESULT"; exit 1 ;;
+          esac
         env:
           RISK_SCAN: ${{ needs.risk-scan.result == 'success' && 'pass' || needs.risk-scan.result == 'skipped' && 'skip' || 'fail' }}
           SECRET_SCAN: ${{ needs.secret-scan.result == 'success' && 'pass' || needs.secret-scan.result == 'skipped' && 'skip' || 'fail' }}
