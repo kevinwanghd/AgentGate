@@ -43,7 +43,7 @@ import re
 import subprocess
 import sys
 
-from governance_common import ConfigError, load_config as load_shared_config
+from governance_common import ConfigError, load_config as load_shared_config, path_matches_any
 
 try:
     import yaml  # type: ignore
@@ -225,16 +225,7 @@ def find_ai_usage_in_commits(diff_base: str | None) -> tuple[bool, str | None]:
 # ============================================================
 # 大变更判定 (基于 git diff 统计)
 # ============================================================
-def _fnmatch_any(path: str, patterns: list[str]) -> bool:
-    import fnmatch
-    for pat in patterns:
-        # 目录前缀模式 "ci/" 视为 "ci/**"
-        if pat.endswith("/"):
-            if path.startswith(pat) or fnmatch.fnmatch(path, pat + "**"):
-                return True
-        elif fnmatch.fnmatch(path, pat):
-            return True
-    return False
+_fnmatch_any = path_matches_any  # 与其他治理脚本共用同一路径 glob 语义 ("ci/" 视为 "ci/**")
 
 
 def detect_large_change(cfg: dict, diff_base: str | None) -> tuple[bool, list[str]]:

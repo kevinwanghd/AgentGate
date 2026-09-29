@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from governance_common import ConfigError, _deep_merge, load_config
+from governance_common import ConfigError, _deep_merge, load_config, path_matches_any
 
 try:
     import yaml  # type: ignore
@@ -108,7 +108,7 @@ def load_policy_from_target_branch(target_ref: str, config_path: str) -> dict[st
 
 
 def _is_protected(path: str, patterns: list[str]) -> bool:
-    return any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
+    return path_matches_any(path, patterns)
 
 
 def _max_risk(left: str, right: str) -> str:

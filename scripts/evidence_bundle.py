@@ -132,7 +132,7 @@ def build_plan(args) -> dict[str, Any]:
         "policy_digest": args.policy_digest or file_digest(args.policy),
         "profile_digest": file_digest(args.profile),
         "risk": args.risk,
-        "changed_paths": changed_paths(args.target_ref, args.source_ref)
+        "changed_paths": changed_paths(target_sha, source_sha)
         if args.include_changed_paths else [],
         "checks": _checks_for_risk(profile, args.risk),
     }
@@ -155,6 +155,8 @@ def _load_check_results(path: str) -> list[dict[str, Any]]:
 
 
 def _normalize_check(item: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(item, dict):
+        raise RuntimeError(f"check result must be an object: {item!r}")
     check_id = str(item.get("id") or item.get("name") or "")
     if not check_id:
         raise RuntimeError(f"check missing id/name: {item}")
@@ -196,18 +198,18 @@ def build_bundle(args) -> dict[str, Any]:
 
 def verify_bundle(bundle: dict[str, Any], expected: dict[str, str]) -> list[str]:
     problems = []
-    strict_expectations = not expected or all(
-        expected.get(key) for key in ("source_sha", "target_sha", "merge_sha", "policy_digest", "profile_digest")
-    )
+    if not isinstance(bundle, dict):
+        return ["bundle_not_object"]
     if bundle.get("schema_version") != SCHEMA_VERSION:
         problems.append("schema_version_mismatch")
     for key in ("source_sha", "target_sha", "merge_sha", "policy_digest", "profile_digest"):
         if not bundle.get(key):
             problems.append(f"{key}_missing")
         expected_value = expected.get(key)
-        if strict_expectations and not expected_value:
+        # 期望值为空 (如 CI 变量未设置) 必须失败关闭, 不能跳过比对
+        if not expected_value:
             problems.append(f"{key}_expected_missing")
-        elif expected_value and bundle.get(key) != expected_value:
+        elif bundle.get(key) != expected_value:
             problems.append(f"{key}_mismatch")
     checks = bundle.get("checks")
     if not isinstance(checks, list) or not checks:

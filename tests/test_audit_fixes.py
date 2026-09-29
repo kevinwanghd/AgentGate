@@ -34,11 +34,13 @@ class LessonsReviewLookupTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
 
     def _write(self, name: str, data: dict) -> None:
-        (self.pending_dir / name).write_text(json.dumps(data), encoding="utf-8")
+        import yaml
+
+        (self.pending_dir / name).write_text(yaml.safe_dump(data), encoding="utf-8")
 
     def test_ambiguous_fingerprint_prefix_is_rejected(self) -> None:
-        self._write("a.json", {"id": "pl-1", "fingerprint": "abc111"})
-        self._write("b.json", {"id": "pl-2", "fingerprint": "abc222"})
+        self._write("a.yml", {"id": "pl-1", "fingerprint": "abc111"})
+        self._write("b.yml", {"id": "pl-2", "fingerprint": "abc222"})
         with redirect_stderr(io.StringIO()) as err:
             data, path = lessons_review._load_pending("abc")
         self.assertIsNone(data)
@@ -46,14 +48,14 @@ class LessonsReviewLookupTests(unittest.TestCase):
         self.assertIn("匹配到多条", err.getvalue())
 
     def test_unique_fingerprint_prefix_resolves(self) -> None:
-        self._write("a.json", {"id": "pl-1", "fingerprint": "abc111"})
-        self._write("b.json", {"id": "pl-2", "fingerprint": "def222"})
+        self._write("a.yml", {"id": "pl-1", "fingerprint": "abc111"})
+        self._write("b.yml", {"id": "pl-2", "fingerprint": "def222"})
         data, path = lessons_review._load_pending("abc")
         self.assertEqual(data["id"], "pl-1")
-        self.assertEqual(path.name, "a.json")
+        self.assertEqual(path.name, "a.yml")
 
     def test_unknown_status_does_not_crash_stats(self) -> None:
-        self._write("a.json", {"id": "pl-1", "fingerprint": "abc", "status": "Pending"})
+        self._write("a.yml", {"id": "pl-1", "fingerprint": "abc", "status": "Pending"})
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as err:
             rc = lessons_review.cmd_stats(mock.Mock())
         self.assertEqual(rc, 0)
@@ -100,6 +102,90 @@ class PendingWriterTests(unittest.TestCase):
         self.assertEqual(data["occurrence_count"], 3)
         self.assertEqual(data["repos_seen"], ["r1", "r2"])
 
+class PendingFormatRoundTripTests(unittest.TestCase):
+    """pending_writer 写出的 YAML 必须能被 lessons_review 审核并通过 CI schema 校验 (同一套格式)。"""
+
+    def test_writer_output_is_reviewable_and_schema_valid(self) -> None:
+        import pending_lessons_schema
+        import pending_writer
+
+        diff = "+++ b/src/db.py\n@@ -0,0 +1 @@\n+q = \"SELECT * FROM t WHERE id=\" + uid\n"
+        violation = {"file": "src/db.py", "line": 1, "type": "sql-string-concat", "desc": "SQL 拼接"}
+        with tempfile.TemporaryDirectory() as tmp:
+            pending_dir = Path(tmp)
+            with mock.patch.object(pending_writer, "_get_repo_name", return_value="repo"), \
+                    mock.patch.object(pending_writer, "_get_current_branch", return_value="feat"):
+                lesson = pending_writer.create_pending_lesson(violation, diff, "origin/main", pending_dir)
+            args = mock.Mock(fingerprint=lesson["fingerprint"][:12], classification="code-pattern",
+                             enforcement="soft", reviewer="bob", target="", suggested_regex="")
+            with mock.patch.object(lessons_review, "PENDING_DIR", pending_dir), redirect_stdout(io.StringIO()):
+                self.assertEqual(lessons_review.cmd_confirm(args), 0)
+                data, _ = lessons_review._load_pending(lesson["fingerprint"])
+            with redirect_stdout(io.StringIO()):
+                rc = pending_lessons_schema.main(["--path", str(pending_dir), "--strict"])
+        self.assertEqual(data["status"], "confirmed")
+        self.assertEqual(data["review"]["target_path"], "patterns/python.yml")
+        self.assertEqual(rc, 0)
+
+    def test_schema_cli_treats_missing_dir_as_normal(self) -> None:
+        import pending_lessons_schema
+
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(pending_lessons_schema.main(["--path", "no/such/dir", "--strict"]), 0)
+
+
+class FingerprintStructureTests(unittest.TestCase):
+    """指纹只抹平命名和字面量, 不能抹平代码结构, 否则无关违规被合并成一条 lesson。"""
+
+    def test_different_control_structures_do_not_collide(self) -> None:
+        import fingerprint
+
+        self.assertNotEqual(fingerprint.compute_fingerprint("t", "catch {}"),
+                            fingerprint.compute_fingerprint("t", "if {}"))
+
+    def test_literal_placeholders_survive_identifier_pass(self) -> None:
+        import fingerprint
+
+        self.assertEqual(fingerprint.normalize_code_for_fingerprint('x = "a" + 1'), "<VAR> = <STR> + <NUM>")
+
+    def test_renamed_variables_still_match(self) -> None:
+        import fingerprint
+
+        self.assertEqual(fingerprint.compute_fingerprint("t", "foo = bar(1)"),
+                         fingerprint.compute_fingerprint("t", "x = y(2)"))
+
+
+class PathMatchSemanticsTests(unittest.TestCase):
+    """所有治理脚本共用一套 glob 语义; 此前 fnmatch 版本让根目录 auth/ 漏判高风险。"""
+
+    def test_double_star_prefix_matches_repository_root(self) -> None:
+        from governance_common import path_matches
+
+        self.assertTrue(path_matches("auth/login.py", "**/auth/**"))
+        self.assertTrue(path_matches("svc/auth/login.py", "**/auth/**"))
+
+    def test_slashless_pattern_matches_any_segment(self) -> None:
+        from governance_common import path_matches
+
+        self.assertTrue(path_matches("docs/guide/a.md", "*.md"))
+        self.assertTrue(path_matches("config/secrets/app.yml", "*secret*"))
+
+    def test_single_star_does_not_cross_directories_and_is_case_sensitive(self) -> None:
+        from governance_common import path_matches
+
+        self.assertFalse(path_matches("src/a/b.py", "src/*.py"))
+        self.assertFalse(path_matches("Docs/a.txt", "docs/**"))
+        self.assertTrue(path_matches("ci/deploy.yml", "ci/"))
+
+    def test_root_level_auth_change_is_high_risk_in_gate(self) -> None:
+        cfg = json.loads(json.dumps(gate_decision.DEFAULT_CONFIG))
+        result = gate_decision.build_gate_result(
+            source_sha="h", target_sha="b", policy_sha="p", changed_paths=["auth/login.py"],
+            checks={}, config=cfg,
+        )
+        self.assertEqual(result["risk_level"], "high")
+
+
 class GatePolicyTests(unittest.TestCase):
     """PR 侧无法通过精简目标配置或伪造 evidence 来绕开门禁。"""
 
@@ -142,6 +228,23 @@ class InstallerCompletenessTests(unittest.TestCase):
         installed = set(re.findall(r'write_file "governance/scripts/([\w-]+\.(?:py|sh))"', installer))
         self.assertTrue(used)
         self.assertEqual(used - installed, set())
+
+    def test_profile_required_checks_are_produced_by_gitlab_gate(self) -> None:
+        ci = (ROOT / "ci" / "governance-ci.yml").read_text(encoding="utf-8")
+        installer = (ROOT / "install.sh").read_text(encoding="utf-8")
+        produced = set(re.findall(r'"([\w-]+)":\s*read_check_result', ci))
+        written = set(re.findall(r"- ([\w-]+)", "\n".join(re.findall(r"PROFILE_REQUIRED_YAML='([^']*)'", installer))))
+        self.assertTrue(written)
+        self.assertEqual(written - produced, set())
+
+    def test_all_profiles_share_one_header_schema(self) -> None:
+        import yaml
+
+        for path in (ROOT / "profiles").glob("*.yml"):
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+            self.assertIn(data.get("kind"), {"CoreProfile", "LanguageProfile"}, path.name)
+            self.assertEqual(data.get("name"), path.stem)
+            self.assertTrue(data.get("version"), path.name)
 
 
 if __name__ == "__main__":

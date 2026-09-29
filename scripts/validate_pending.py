@@ -149,8 +149,9 @@ def main(argv: list[str] | None = None) -> int:
     files = find_pending_files(root, [Path(p) for p in args.paths])
 
     if not files:
+        # 尚未产生 pending lessons 是正常状态, 不应让 CI 失败
         print("[validate-pending] no pending files found")
-        return 1
+        return 0
 
     errors: list[str] = []
     valid_count = 0

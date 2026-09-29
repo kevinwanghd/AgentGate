@@ -23,10 +23,15 @@ def _read(root: Path, rel: str) -> str:
 
 
 def _read_first(root: Path, *rels: str) -> str:
+    return _read_first_with_rel(root, *rels)[1]
+
+
+def _read_first_with_rel(root: Path, *rels: str) -> tuple[str, str]:
+    """返回 (实际读取的相对路径, 内容), 让错误信息指向真正被检查的文件。"""
     for rel in rels:
         path = root / rel
         if path.exists():
-            return path.read_text(encoding="utf-8")
+            return rel, path.read_text(encoding="utf-8")
     raise FileNotFoundError(", ".join(rels))
 
 
@@ -35,16 +40,16 @@ def _fail(errors: list[str], message: str) -> None:
 
 
 def check_gitlab_job_timeout_unsupported(root: Path, errors: list[str]) -> None:
-    template = _read_first(root, "ci/governance-ci.yml", "governance/ci-snippet.yml")
+    rel, template = _read_first_with_rel(root, "ci/governance-ci.yml", "governance/ci-snippet.yml")
     if re.search(r"(?m)^\s+timeout:", template):
-        _fail(errors, "gitlab_legacy.job_timeout_unsupported: ci/governance-ci.yml contains job-level timeout")
+        _fail(errors, f"gitlab_legacy.job_timeout_unsupported: {rel} contains job-level timeout")
 
 
 def check_gitlab_modern_schema_unsupported(root: Path, errors: list[str]) -> None:
-    template = _read_first(root, "ci/governance-ci.yml", "governance/ci-snippet.yml")
+    rel, template = _read_first_with_rel(root, "ci/governance-ci.yml", "governance/ci-snippet.yml")
     for needle in ("rules:", "needs:", "dotenv:"):
         if needle in template:
-            _fail(errors, f"gitlab_legacy.modern_schema_unsupported: ci/governance-ci.yml contains {needle}")
+            _fail(errors, f"gitlab_legacy.modern_schema_unsupported: {rel} contains {needle}")
 
 
 def check_gitlab_optional_language_image_pull(root: Path, errors: list[str]) -> None:
@@ -276,7 +281,12 @@ def _lesson_files(root: Path, explicit: list[str]) -> list[Path]:
 
 
 def validate_file(path: Path, root: Path, errors: list[str]) -> int:
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    # 单个文件读不了 / 语法坏不能抛 traceback 中断, 否则其余 lessons 不会被校验
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        _fail(errors, f"{path}: cannot load lesson file: {exc}")
+        return 0
     if not isinstance(data, dict):
         _fail(errors, f"{path}: lesson file must be a mapping")
         return 0
@@ -310,7 +320,10 @@ def validate_file(path: Path, root: Path, errors: list[str]) -> int:
             if check is None:
                 _fail(errors, f"{path}: hard lesson {lesson_id} has no executable check")
             else:
-                check(root, errors)
+                try:
+                    check(root, errors)
+                except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+                    _fail(errors, f"{path}: {lesson_id} check could not read its target: {exc}")
     return count
 
 

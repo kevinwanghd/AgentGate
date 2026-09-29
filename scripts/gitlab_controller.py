@@ -101,8 +101,14 @@ def _target_policy(args) -> tuple[str, str]:
     encoded = payload.get("content")
     if not isinstance(encoded, str):
         raise RuntimeError(f"GitLab policy file API response missing content: {policy_path}")
-    content = base64.b64decode(encoded).decode("utf-8", errors="replace")
-    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    try:
+        # GitLab 返回的 base64 可能按行折行, 先去掉空白再严格校验
+        raw = base64.b64decode("".join(encoded.split()), validate=True)
+    except ValueError as exc:
+        raise RuntimeError(f"GitLab policy file content 不是合法 base64: {policy_path}: {exc}") from exc
+    # 与 evidence_bundle.file_digest 一致: 对原始字节求摘要, 不经过有损解码
+    digest = hashlib.sha256(raw).hexdigest()
+    content = raw.decode("utf-8", errors="replace")
     return f"sha256:{digest}", content
 
 
@@ -260,16 +266,39 @@ def submit(args) -> int:
         _write_json(args.output, readiness)
         return 1
 
-    try:
-        cfg = create_mr.load_config(args.config)
-        description = create_mr.build_description(_create_mr_args(args), cfg)
-        title = create_mr.infer_title(_create_mr_args(args), args.target_branch)
-        rc = create_mr.submit_gitlab_api(title, description, args.target_branch, args)
-    except (RuntimeError, create_mr.ConfigError) as exc:
+    def _fail(name: str, message: str) -> int:
         readiness["status"] = "fail"
-        readiness["checks"].append(_check("merge_request_submit", "fail", str(exc)))
+        readiness["checks"].append(_check(name, "fail", message))
         _write_json(args.output, readiness)
         return 1
+
+    try:
+        cfg = create_mr.load_config(args.config)
+        mr_args = _create_mr_args(args)
+        # 与 create_mr.main 一致: 未给 --why 时按 --requirement-id / 分支名 / trailer 读 DeliverHQ 需求
+        if not mr_args.why:
+            dh = cfg.get("deliverhq_integration", {})
+            if dh.get("enabled"):
+                req_id = create_mr.resolve_requirement_id(args.requirement_id, args.target_branch)
+                if req_id:
+                    why, _note = create_mr.read_why_from_requirement(req_id, cfg)
+                    if why:
+                        mr_args.why = why
+                        mr_args.link = (mr_args.link or []) + [f"Requirement-ID: {req_id}"]
+        if not mr_args.why:
+            return _fail("merge_request_description", "无法确定背景: 请提供 --why 或可解析的 --requirement-id")
+        description = create_mr.build_description(mr_args, cfg)
+        title = create_mr.infer_title(mr_args, args.target_branch)
+        # 与 create_mr.main 一致: 提交前必须跑本地描述校验 / 风险扫描 / 测试
+        preflight_rc = create_mr.run_local_preflight(description, mr_args, cfg)
+        if preflight_rc != 0:
+            return _fail("local_preflight", f"本地 preflight 未通过 (exit {preflight_rc})")
+        rc = create_mr.submit_gitlab_api(title, description, args.target_branch, args)
+    except (RuntimeError, create_mr.ConfigError) as exc:
+        return _fail("merge_request_submit", str(exc))
+    except SystemExit as exc:
+        # create_mr.run_git 等在 git 失败时 sys.exit, 这里兜住以保证写出 JSON 结果
+        return _fail("merge_request_submit", f"子步骤异常退出 (exit {exc.code})")
 
     readiness["checks"].append(
         _check(
@@ -309,8 +338,11 @@ def main() -> int:
     submit_parser = sub.add_parser("submit", help="检查 P0 前置条件后创建/更新 MR")
     _add_gitlab_args(submit_parser)
     submit_parser.add_argument("--source-branch", help="源分支, 默认当前分支")
-    submit_parser.add_argument("--why", required=True, help="MR 背景")
-    submit_parser.add_argument("--requirement-id")
+    submit_parser.add_argument(
+        "--why",
+        help="MR 背景; 未提供时按 --requirement-id / 分支名从 DeliverHQ 需求文档读取",
+    )
+    submit_parser.add_argument("--requirement-id", help="需求编号, 如 CR-1234 (DeliverHQ 启用时用于读取背景)")
     submit_parser.add_argument("--what")
     submit_parser.add_argument("--tested")
     submit_parser.add_argument("--risks")

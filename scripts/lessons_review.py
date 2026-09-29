@@ -21,27 +21,58 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
-import json
 import sys
 from pathlib import Path
 from typing import Optional
+
+try:
+    import yaml  # type: ignore
+except ImportError:  # pragma: no cover
+    yaml = None
 
 PENDING_DIR = Path(__file__).parent.parent / ".governance" / "pending-lessons"
 STATUSES = {"pending", "confirmed", "rejected", "promoted"}
 CLASSIFICATIONS = {"code-pattern", "process-lesson"}
 ENFORCEMENTS = {"hard", "soft"}
+# pending lessons 统一为 YAML (见 .governance/pending-lessons/SCHEMA.md)
+PENDING_GLOBS = ("*.yml", "*.yaml")
+LANGUAGE_BY_EXT = {
+    ".py": "python", ".go": "go", ".cs": "csharp", ".java": "java", ".dart": "dart",
+    ".js": "javascript", ".jsx": "javascript", ".ts": "javascript", ".tsx": "javascript",
+}
+
+
+def _pending_files() -> list[Path]:
+    if not PENDING_DIR.exists():
+        return []
+    return sorted(p for pattern in PENDING_GLOBS for p in PENDING_DIR.glob(pattern))
+
+
+def _read_pending(path: Path) -> dict:
+    if yaml is None:
+        raise RuntimeError("PyYAML is required to read pending lessons")
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"{path.name}: pending lesson 根节点必须是 mapping")
+    return data
+
+
+def _context(data: dict) -> dict:
+    """failure_context 的只读视图: 补齐审核/应用需要但 YAML schema 中不直接存储的字段。"""
+    fc = dict(data.get("failure_context") or {})
+    fc.setdefault("code_snippet", fc.get("snippet", ""))
+    fc.setdefault("language", LANGUAGE_BY_EXT.get(Path(str(fc.get("file", ""))).suffix, "unknown"))
+    fc.setdefault("pattern_description", (data.get("evidence") or {}).get("scan_summary", ""))
+    return fc
 
 
 def _load_all_pending() -> list[tuple[dict, Path]]:
     """读取全部可解析的 pending 文件, 损坏文件跳过。"""
-    if not PENDING_DIR.exists():
-        return []
     results = []
-    for path in sorted(PENDING_DIR.glob("*.json")):
+    for path in _pending_files():
         try:
-            with open(path, encoding="utf-8") as f:
-                results.append((json.load(f), path))
-        except (OSError, ValueError):
+            results.append((_read_pending(path), path))
+        except (OSError, ValueError, yaml.YAMLError):
             pass
     return results
 
@@ -70,7 +101,7 @@ def _load_pending(fingerprint_or_id: str) -> tuple[Optional[dict], Optional[Path
 
 def _save_pending(data: dict, path: Path) -> None:
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+        yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False, default_flow_style=False)
 
 
 def cmd_list(args: argparse.Namespace) -> int:
@@ -79,7 +110,7 @@ def cmd_list(args: argparse.Namespace) -> int:
         print("[lessons-review] pending lessons 目录不存在")
         return 0
 
-    files = sorted(PENDING_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    files = sorted(_pending_files(), key=lambda p: p.stat().st_mtime, reverse=True)
     if not files:
         print("[lessons-review] 暂无 pending lessons")
         return 0
@@ -88,8 +119,7 @@ def cmd_list(args: argparse.Namespace) -> int:
     stats = {"pending": 0, "confirmed": 0, "rejected": 0, "promoted": 0}
     for path in files:
         try:
-            with open(path, encoding="utf-8") as f:
-                data = json.load(f)
+            data = _read_pending(path)
             status = data.get("status", "pending")
             if status not in STATUSES:
                 sys.stderr.write(f"[lessons-review] {path.name}: 未知 status '{status}'\n")
@@ -104,8 +134,7 @@ def cmd_list(args: argparse.Namespace) -> int:
 
     for i, path in enumerate(files, 1):
         try:
-            with open(path, encoding="utf-8") as f:
-                data = json.load(f)
+            data = _read_pending(path)
         except Exception:
             print(f"[{i}] {path.name} - 读取失败")
             continue
@@ -113,8 +142,8 @@ def cmd_list(args: argparse.Namespace) -> int:
         fp = data.get("fingerprint", "?")[:8]
         status = data.get("status", "pending")
         pattern = data.get("pattern_type", "?")
-        file_path = data.get("failure_context", {}).get("file", "?")
-        line = data.get("failure_context", {}).get("line", "?")
+        file_path = _context(data).get("file", "?")
+        line = _context(data).get("line", "?")
         repo = data.get("source_repo", "?")
         detected = data.get("detected_at", "?")[:10]
         occ = data.get("occurrence_count", 1)
@@ -153,7 +182,7 @@ def cmd_review(args: argparse.Namespace) -> int:
     print(f"发现次数: {data.get('occurrence_count', 1)}")
     print()
     print(f"--- 失败上下文 ---")
-    fc = data.get("failure_context", {})
+    fc = _context(data)
     print(f"文件: {fc.get('file')} (line {fc.get('line')})")
     print(f"语言: {fc.get('language')}")
     print(f"代码片段:")
@@ -276,7 +305,7 @@ def cmd_confirm(args: argparse.Namespace) -> int:
     reviewer = getattr(args, "reviewer", None) or "cli"
     target_path = args.target or ""
 
-    fc = data.get("failure_context", {})
+    fc = _context(data)
     if not target_path:
         if classification == "code-pattern":
             target_path = f"patterns/{fc.get('language', 'unknown')}.yml"
@@ -349,7 +378,7 @@ def cmd_apply(args: argparse.Namespace) -> int:
         target_path_str = review.get("target_path", "")
         enforcement = review.get("enforcement", "soft")
 
-        fc = data.get("failure_context", {})
+        fc = _context(data)
         pattern_type = data.get("pattern_type", "")
         desc = fc.get("pattern_description", "")
         code_snippet = fc.get("code_snippet", "")
@@ -479,7 +508,7 @@ def _apply_process_lesson(
 
     # 构建新 lesson（soft enforcement）
     fp = data.get("fingerprint", "")[:8]
-    fc = data.get("failure_context", {})
+    fc = _context(data)
     new_lesson = {
         "id": f"governance.{pattern_type.replace('-', '_')}_{fp}",
         "enforcement": enforcement,
@@ -506,7 +535,7 @@ def cmd_stats(args: argparse.Namespace) -> int:
         print("[lessons-review] pending lessons 目录不存在")
         return 0
 
-    files = list(PENDING_DIR.glob("*.json"))
+    files = _pending_files()
     if not files:
         print("[lessons-review] 暂无 pending lessons")
         return 0
@@ -521,8 +550,7 @@ def cmd_stats(args: argparse.Namespace) -> int:
 
     for path in files:
         try:
-            with open(path, encoding="utf-8") as f:
-                data = json.load(f)
+            data = _read_pending(path)
         except Exception:
             continue
 

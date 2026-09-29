@@ -36,10 +36,10 @@ WARN_DAYS_BEFORE = 30  # 提前 N 天预警
 
 _INLINE_RE = re.compile(
     r'risk:\s*([\w-]+)'
-    r'.*?reason:\s*"([^"]*)"'
-    r'.*?owner:\s*(@?[\w/.-]+)'
-    r'.*?reviewed:\s*(\d{4}-\d{2}-\d{2})',
-    re.IGNORECASE | re.DOTALL,
+    r'[^\n]*?reason:\s*"([^"\n]*)"'
+    r'[^\n]*?owner:\s*(@?[\w/.-]+)'
+    r'[^\n]*?reviewed:\s*(\d{4}-\d{2}-\d{2})',
+    re.IGNORECASE,
 )
 
 # 块注解: 两行之间合并扫描, 此处只抓 reviewed 日期
@@ -69,7 +69,8 @@ def load_max_age(config_path: str | None) -> int:
 def scan_file(path: str) -> list[dict]:
     """返回该文件里找到的所有注解记录。"""
     try:
-        text = open(path, encoding="utf-8", errors="replace").read()
+        with open(path, encoding="utf-8", errors="replace") as f:
+            text = f.read()
     except OSError:
         return []
 

@@ -291,11 +291,13 @@ case "$PROFILE" in
   *) err "无效的 --profile 值: $PROFILE (可选: core/flutter-mobile/dotnet-monorepo/go-bazel)"; exit 1 ;;
 esac
 
+# 只能写入 CI 真实产出的 check 名 (见 ci/governance-ci.yml gate-decision 的 checks),
+# 否则 gate 永远 required_check_missing, 自动合并失效。
 case "$PROFILE" in
   core) PROFILE_REQUIRED_YAML='' ;;
-  flutter-mobile) PROFILE_REQUIRED_YAML=$'      - flutter-analyze\n      - flutter-test' ;;
+  flutter-mobile) PROFILE_REQUIRED_YAML='      - flutter-test' ;;
   dotnet-monorepo) PROFILE_REQUIRED_YAML='      - dotnet-test' ;;
-  go-bazel) PROFILE_REQUIRED_YAML='      - bazel-test' ;;
+  go-bazel) PROFILE_REQUIRED_YAML='      - go-test' ;;
 esac
 
 case "$MODE" in
@@ -653,6 +655,7 @@ fetch_or_local "scripts/check_tested.py"    | write_file "governance/scripts/che
 fetch_or_local "scripts/gate_decision.py"   | write_file "governance/scripts/gate_decision.py"
 fetch_or_local "scripts/validate_lessons.py" | write_file "governance/scripts/validate_lessons.py"
 fetch_or_local "scripts/pending_lessons_schema.py" | write_file "governance/scripts/pending_lessons_schema.py"
+fetch_or_local "scripts/validate_pending.py"  | write_file "governance/scripts/validate_pending.py"
 fetch_or_local "scripts/check_job.py"       | write_file "governance/scripts/check_job.py"
 fetch_or_local "scripts/scan_secrets.py" | write_file "governance/scripts/scan_secrets.py"
 fetch_or_local "scripts/gitlab_controller.py" | write_file "governance/scripts/gitlab_controller.py"

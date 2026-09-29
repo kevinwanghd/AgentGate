@@ -24,7 +24,7 @@ import re
 import subprocess
 import sys
 
-from governance_common import ConfigError, load_config as load_shared_config
+from governance_common import ConfigError, load_config as load_shared_config, path_matches, reason_blacklist_hit
 
 # ---------- 可选依赖 pyyaml, 缺失时退化为内置默认 ----------
 try:
@@ -519,11 +519,9 @@ def _validate_annotation_fields(
             problems.append(f'reason 过于简单，仅重复风险类型名称 "{risk_type}"，请说明业务权衡或上下文')
     
     # reason 黑名单词 (P0-3: 硬阻断，不再只是警告)
-    low = reason.lower()
-    for bad in ra["reason_blacklist"]:
-        if bad.lower() in low:
-            problems.append(f'reason 含黑名单词 "{bad}"')
-            break
+    bad = reason_blacklist_hit(reason, ra["reason_blacklist"])
+    if bad:
+        problems.append(f'reason 含黑名单词 "{bad}"')
     # reason 最小语义验证 (P0-3: 防止无意义理由如"无"/"."/纯符号)
     stripped = reason.strip()
     if stripped:
@@ -681,25 +679,8 @@ def _today_iso() -> str:
 # 主流程
 # ============================================================
 def _path_matches(path: str, pattern: str) -> bool:
-    """glob 匹配, 支持 ** 跨目录 (fnmatch 原生不支持 **)。"""
-    import re as _re
-    # 逐段构造正则: ** → 任意(含/); * → 非/; ? → 单字符; 其余转义
-    out = []
-    i = 0
-    n = len(pattern)
-    while i < n:
-        c = pattern[i]
-        if pattern[i:i+3] == "**/":
-            out.append("(?:.*/)?"); i += 3
-        elif pattern[i:i+2] == "**":
-            out.append(".*"); i += 2
-        elif c == "*":
-            out.append("[^/]*"); i += 1
-        elif c == "?":
-            out.append("[^/]"); i += 1
-        else:
-            out.append(_re.escape(c)); i += 1
-    return _re.fullmatch("".join(out), path) is not None
+    """glob 匹配, 与其他治理脚本共用 governance_common.path_matches 语义。"""
+    return path_matches(path, pattern)
 
 
 def scan(diff_text: str, cfg: dict) -> list[dict]:
