@@ -1,5 +1,8 @@
 api_version: agentgate.io/profile/v1
-kind: go-bazel
+kind: LanguageProfile
+name: go-bazel
+version: 1.0.0
+
 languages: [go, bazel]
 source_extensions: [.go, .bzl, .proto]
 test_patterns: ["**/*_test.go", "**/test/**", "**/tests/**"]

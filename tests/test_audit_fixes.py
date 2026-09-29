@@ -229,6 +229,23 @@ class InstallerCompletenessTests(unittest.TestCase):
         self.assertTrue(used)
         self.assertEqual(used - installed, set())
 
+    def test_profile_required_checks_are_produced_by_gitlab_gate(self) -> None:
+        ci = (ROOT / "ci" / "governance-ci.yml").read_text(encoding="utf-8")
+        installer = (ROOT / "install.sh").read_text(encoding="utf-8")
+        produced = set(re.findall(r'"([\w-]+)":\s*read_check_result', ci))
+        written = set(re.findall(r"- ([\w-]+)", "\n".join(re.findall(r"PROFILE_REQUIRED_YAML='([^']*)'", installer))))
+        self.assertTrue(written)
+        self.assertEqual(written - produced, set())
+
+    def test_all_profiles_share_one_header_schema(self) -> None:
+        import yaml
+
+        for path in (ROOT / "profiles").glob("*.yml"):
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+            self.assertIn(data.get("kind"), {"CoreProfile", "LanguageProfile"}, path.name)
+            self.assertEqual(data.get("name"), path.stem)
+            self.assertTrue(data.get("version"), path.name)
+
 
 if __name__ == "__main__":
     unittest.main()
