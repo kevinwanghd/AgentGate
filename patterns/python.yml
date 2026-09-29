@@ -12,7 +12,8 @@ patterns:
 
   # 1. SQL 注入风险
   - type: sql-injection
-    regex: "(?:execute|executemany|raw)\\s*\\([^)]*[%+]|\\.format\\s*\\(|f[\"'].*\\{.*SELECT|INSERT|UPDATE|DELETE"
+    # SQL 关键字须位于字符串字面量内且带词边界; .format 仅在 SQL 字面量上调用时命中
+    regex: '(?:execute|executemany|raw)\s*\([^)]*[%+]|\bf["''](?=[^"'']*\b(?:SELECT|INSERT|UPDATE|DELETE)\b)[^"'']*\{|["''][^"'']*\b(?:SELECT|INSERT|UPDATE|DELETE)\b[^"'']*["'']\s*\.format\s*\('
     desc: "SQL 语句拼接存在注入风险，应使用参数化查询"
     exts: [".py"]
     mode: block
@@ -33,15 +34,17 @@ patterns:
 
   # 4. 异常吞没
   # ⚠️ warn: except: pass 在 Python 生态极其常见，误报率高，先观察
+  # 覆盖 bare except / except E as e / pass 在下一行; (?m) 使 $ 匹配行尾 (扫描窗口为多行)
   - type: swallowed-exception
-    regex: 'except\s+\w+:\s*(?:pass|\.\.\.)\s*(?:#|$)'
+    regex: '(?m)\bexcept\b[^:\n]*:\s*(?:pass|\.\.\.)[ \t]*(?:#.*)?$'
     desc: "异常被吞没，应至少记录日志或重新抛出"
     exts: [".py"]
     mode: warn
 
   # 5. eval/exec 动态执行
   - type: dangerous-eval
-    regex: '\b(?:eval|exec|compile|__import__)\s*\('
+    # 前面不能是 . 或单词字符: 只拦内建 compile(), 放过 re.compile( 等方法调用
+    regex: '(?<![.\w])(?:eval|exec|compile|__import__)\s*\('
     desc: "动态代码执行存在安全风险，应限制输入来源或使用 ast.literal_eval"
     exts: [".py"]
     mode: block

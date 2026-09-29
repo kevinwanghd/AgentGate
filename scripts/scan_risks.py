@@ -245,7 +245,8 @@ def _build_patterns() -> list[tuple[str, re.Pattern, str, frozenset, str]]:
         ),
         "硬编码 URL，生产环境可能需要动态配置",
         frozenset(),
-        "block",
+        # 命中任意语言的任意 URL 字面量, 误报高: 观察期 warn, 仓库可在 patterns/*.yml 升为 block
+        "warn",
     ))
 
     # 10. sensitive-log 不内置: 由 patterns/<lang>.yml 以 warn 模式按语言提供,
@@ -255,8 +256,10 @@ def _build_patterns() -> list[tuple[str, re.Pattern, str, frozenset, str]]:
     p.append((
         "sql-string-concat",
         re.compile(
-            r'(?i)(SELECT|INSERT|UPDATE|DELETE|FROM|WHERE)\s*["\']'
-            r'.*?["\'].*?\+|["\'].*?\+.*?["\'].*?(SELECT|INSERT|UPDATE|DELETE)',
+            # 字符串字面量内含完整 SQL 结构 (SELECT..FROM / INSERT INTO / UPDATE..SET / DELETE FROM),
+            # 且紧接 + 拼接; 单个关键字 ("Deleted" / "Select an item") 不算
+            r'(?i)["\'][^"\'\n]*\b(?:SELECT\b[^"\'\n]*\bFROM|INSERT\s+INTO|UPDATE\b[^"\'\n]*\bSET|DELETE\s+FROM)\b'
+            r'[^"\'\n]*["\']\s*\+',
         ),
         "SQL 语句使用字符串拼接，可能导致注入风险",
         frozenset({".cs", ".java", ".py", ".js", ".ts", ".php", ".rb"}),
@@ -280,8 +283,8 @@ def _build_patterns() -> list[tuple[str, re.Pattern, str, frozenset, str]]:
     p.append((
         "weak-crypto",
         re.compile(
-            r'(?i)(?<![a-zA-Z])(MD5|SHA1|des|rc4|ECB)(?![a-zA-Z])'
-            r'|(?<![a-zA-Z])(RC4)(?![a-zA-Z])',
+            # 边界含 _ 与数字: des_key / md5sum 这类标识符不是算法调用
+            r'(?i)(?<![A-Za-z0-9_])(MD5|SHA1|DES|RC4|ECB)(?![A-Za-z0-9_])',
         ),
         "使用弱加密算法，不适合安全敏感场景",
         frozenset(),
@@ -495,8 +498,8 @@ def _validate_annotation_fields(
     problems: list[str] = []
     ra = cfg["risk_annotations"]
 
-    # 类型必须已注册
-    if risk_type not in ra["registered_types"]:
+    # 类型必须已注册 (内置规则类型始终视为已注册, 避免仓库自定义列表时漏写导致注解无法使用)
+    if risk_type not in ra["registered_types"] and risk_type not in {p[0] for p in PATTERNS}:
         problems.append(f'风险类型 "{risk_type}" 未注册')
     # 类型应覆盖该行命中类型之一
     if risk_type not in expected_types:
@@ -688,6 +691,8 @@ def scan(diff_text: str, cfg: dict) -> list[dict]:
     violations: list[dict] = []
     parsed = parse_diff(diff_text)
     all_patterns = PATTERNS + build_custom_patterns(cfg)
+    # 模式显式声明的 exts (如 .json/.mjs) 扩展扫描范围; 这些额外扩展名只跑声明了它的模式
+    explicit_exts = {e.lower() for p in all_patterns for e in p[3]}
 
     # 缓存已读文件
     file_cache: dict[str, list[str] | None] = {}
@@ -695,7 +700,8 @@ def scan(diff_text: str, cfg: dict) -> list[dict]:
     exclude = cfg["risk_annotations"].get("scan_exclude_paths", []) or []
     for path, added in parsed.items():
         ext = os.path.splitext(path)[1].lower()
-        if ext not in SCAN_EXTENSIONS:
+        only_explicit = ext not in SCAN_EXTENSIONS
+        if only_explicit and ext not in explicit_exts:
             continue
         # 路径豁免: 生成/引入/第三方代码整文件跳过
         if any(_path_matches(path, pat) for pat in exclude):
@@ -715,6 +721,8 @@ def scan(diff_text: str, cfg: dict) -> list[dict]:
             for rtype, rx, desc, exts, pmode in all_patterns:
                 # 扩展名过滤: 模式限定了语言且当前文件不在其中则跳过
                 if exts and ext not in exts:
+                    continue
+                if only_explicit and not exts:
                     continue
                 # 测试文件: 只检查测试代码本身相关的模式 (如 skipped-test)
                 if is_test and rtype not in _TEST_FILE_PATTERNS:

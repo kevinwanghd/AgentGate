@@ -12,7 +12,7 @@ patterns:
 
   # 1. SQL 注入
   - type: sql-injection
-    regex: '(?:createQuery|createNativeQuery|prepareStatement|executeQuery|executeUpdate)\s*\([^)]*\+|String\.format\s*\([^)]*SELECT|INSERT|UPDATE|DELETE'
+    regex: '(?:createQuery|createNativeQuery|prepareStatement|executeQuery|executeUpdate)\s*\([^)]*\+|String\.format\s*\(\s*"[^"]*\b(?:SELECT|INSERT|UPDATE|DELETE)\b'
     desc: "SQL 语句拼接存在注入风险，应使用 PreparedStatement 或参数化查询"
     exts: [".java"]
     mode: block
@@ -26,7 +26,7 @@ patterns:
 
   # 3. 反序列化漏洞
   - type: unsafe-deserialization
-    regex: '\bnew\s+ObjectInputStream\s*\(|\\.readObject\s*\(\)'
+    regex: '\bnew\s+ObjectInputStream\s*\(|\.readObject\s*\(\)'
     desc: "反序列化不可信数据存在 RCE 风险，应验证来源或使用白名单"
     exts: [".java"]
     mode: block
