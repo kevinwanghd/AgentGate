@@ -1582,7 +1582,9 @@ class EvidenceBundleTests(unittest.TestCase):
             "checks": [{"id": "unit", "status": "pass"}],
         }
         problems = evidence_bundle.verify_bundle(bundle, {"source_sha": "other"})
-        self.assertEqual(["source_sha_mismatch"], problems)
+        self.assertIn("source_sha_mismatch", problems)
+        # 未提供的期望值必须失败关闭, 不能被跳过
+        self.assertIn("target_sha_expected_missing", problems)
 
 
 class RiskMergeDecisionTests(unittest.TestCase):

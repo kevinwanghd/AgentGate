@@ -38,7 +38,7 @@ import sys
 def run_git(args: list[str]) -> str:
     try:
         return subprocess.run(
-            ["git", *args], check=True, capture_output=True, text=True,
+            ["git", "-c", "core.quotepath=off", *args], check=True, capture_output=True, text=True,
             encoding="utf-8", errors="replace",
         ).stdout
     except FileNotFoundError:
@@ -112,22 +112,26 @@ def build_reverse_dep_map(module_root: str) -> dict[str, set[str]]:
     if out.returncode != 0:
         return {}
 
-    # go list -json 输出多个拼接的 JSON 对象, 逐个解析
+    # go list -json 输出多个拼接的 JSON 对象, 用 raw_decode 逐个解析
+    # (字符串里的花括号不会干扰, 不能靠数括号切分)
     reverse: dict[str, set[str]] = {}
-    buf = ""
-    depth = 0
-    for line in out.stdout.splitlines():
-        buf += line + "\n"
-        depth += line.count("{") - line.count("}")
-        if depth == 0 and buf.strip():
-            try:
-                pkg = json.loads(buf)
-                importer = pkg.get("ImportPath", "")
-                for dep in pkg.get("Imports", []):
-                    reverse.setdefault(dep, set()).add(importer)
-            except json.JSONDecodeError:
-                pass
-            buf = ""
+    decoder = json.JSONDecoder()
+    text = out.stdout
+    idx = 0
+    while True:
+        while idx < len(text) and text[idx].isspace():
+            idx += 1
+        if idx >= len(text):
+            break
+        try:
+            pkg, idx = decoder.raw_decode(text, idx)
+        except json.JSONDecodeError:
+            break
+        if not isinstance(pkg, dict):
+            continue
+        importer = pkg.get("ImportPath", "")
+        for dep in pkg.get("Imports", []) or []:
+            reverse.setdefault(dep, set()).add(importer)
     return reverse
 
 
@@ -150,7 +154,8 @@ def expand_with_importers(
 
     for pkg_dir in direct_dirs:
         # 推导 import path: module_name + "/" + 相对于 module_root 的路径
-        abs_dir = os.path.abspath(pkg_dir)
+        # (pkg_dir 已是相对 module_root 的路径, 不能相对 cwd 求绝对路径)
+        abs_dir = os.path.join(module_root, pkg_dir)
         try:
             rel = os.path.relpath(abs_dir, module_root).replace("\\", "/")
         except ValueError:
@@ -172,6 +177,29 @@ def expand_with_importers(
         print(f"[go-test] 反向依赖扩展: +{len(added)} 个 importer 包 ({', '.join(added[:5])}"
               f"{'...' if len(added) > 5 else ''})")
     return sorted(new_dirs)
+
+
+def rebase_to_module(dirs: list[str], module_root: str, repo_root: str) -> list[str]:
+    """git diff 路径相对仓库根; go test 在 module_root 下执行, 需改为相对 module_root。
+    不在该 module 内的目录丢弃。"""
+    rebased: set[str] = set()
+    root = os.path.realpath(module_root)
+    for pkg_dir in dirs:
+        abs_dir = os.path.realpath(os.path.join(repo_root, pkg_dir))
+        try:
+            rel = os.path.relpath(abs_dir, root).replace("\\", "/")
+        except ValueError:
+            continue
+        if rel == ".." or rel.startswith("../"):
+            continue
+        rebased.add(rel)
+    return sorted(rebased)
+
+
+def existing_packages(packages: list[str], module_root: str) -> list[str]:
+    """删除整个包后目录已不存在, go test ./pkg/... 会报错; 只保留仍存在的目录。
+    (删除的文件仍参与反向依赖扩展, 以便测试其 importer)"""
+    return [p for p in packages if os.path.isdir(os.path.join(module_root, p))]
 
 
 def run_tests(packages: list[str], timeout: int) -> int:
@@ -233,16 +261,22 @@ def main() -> int:
         print("[go-test] 无 .go 文件变更, 跳过。")
         return 0
 
-    if args.no_reverse_deps:
+    module_root = find_go_module_root()
+    if module_root:
+        repo_root = run_git(["rev-parse", "--show-toplevel"]).strip()
+        direct = rebase_to_module(direct, module_root, repo_root)
+        if not direct:
+            print("[go-test] 当前 Go module 内无 .go 文件变更, 跳过。")
+            return 0
+
+    if args.no_reverse_deps or not module_root:
         packages = direct
     else:
-        module_root = find_go_module_root()
-        if module_root:
-            reverse_map = build_reverse_dep_map(module_root)
-            packages = expand_with_importers(direct, module_root, reverse_map)
-        else:
-            packages = direct
+        reverse_map = build_reverse_dep_map(module_root)
+        packages = expand_with_importers(direct, module_root, reverse_map)
 
+    if module_root:
+        packages = existing_packages(packages, module_root)
     return run_tests(packages, args.timeout)
 
 
