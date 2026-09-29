@@ -130,59 +130,9 @@ jobs:
           # Rust
           echo "$CHANGED" | grep -qE '\.rs$|\.toml$' && echo "run_rust_test=true" >> $GITHUB_OUTPUT || echo "run_rust_test=false" >> $GITHUB_OUTPUT
 
-  # P1-B: 统一扫描 job — 运行 governance_scan_all.py 一次性执行 risk-scan + secret-scan + mr-validate
-  # 3 个 runner → 1 个 runner，减少约 40-80 秒启动开销
-  # 各子检查的详细结果实时打印，任意失败整体退出非 0，JSON 摘要在末尾
-  # 注意: 此 job 与独立的 risk-scan / secret-scan / mr-validate job 并存，
-  #       需要时可替换为 --skip 模式或在 PR body 里注释选择其一
-  scan-compound:
-    needs: [path-filter]
-    # 只在有生产代码/配置变化时运行（覆盖 risk-scan + secret-scan 的条件）
-    if: >-
-      ${{
-        needs.path-filter.outputs.run_risk_scan == 'true' ||
-        needs.path-filter.outputs.run_secret_scan == 'true'
-      }}
-    runs-on: ubuntu-latest
-    steps:
-      # 需要完整 git 历史以算 diff
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Fetch base ref
-        run: |
-          BASE_REF="${{ github.event.pull_request.base.ref }}"
-          echo "[scan-compound] Fetching base ref: $BASE_REF"
-          git fetch -q origin "$BASE_REF"
-      - name: Verify preinstalled Python dependencies
-        run: python3 -c "import yaml; print('pyyaml ok')"
-      - name: Run compound governance scan
-        env:
-          PR_BODY: ${{ github.event.pull_request.body || '' }}
-        run: |
-          BASE_REF="${{ github.event.pull_request.base.ref }}"
-          if [ -z "$BASE_REF" ]; then
-            echo "::error::PR base.ref missing, refusing to scan"
-            exit 1
-          fi
-          # 准备 PR body 文件
-          PR_BODY_FILE="/tmp/pr_body.txt"
-          if [ -n "$PR_BODY" ]; then
-            printf '%s' "$PR_BODY" > "$PR_BODY_FILE"
-          else
-            echo "## 背景" > "$PR_BODY_FILE"
-            echo "请填写 PR 背景" >> "$PR_BODY_FILE"
-            echo "" >> "$PR_BODY_FILE"
-            echo "## 变更内容" >> "$PR_BODY_FILE"
-            echo "请填写变更内容" >> "$PR_BODY_FILE"
-          fi
-          python3 scripts/governance_scan_all.py \
-            --diff-base "origin/$BASE_REF" \
-            --config governance.config.yml \
-            --pr-body-file "$PR_BODY_FILE"
-          EXIT_CODE=$?
-          echo "[scan-compound] Overall exit: $EXIT_CODE"
-          exit $EXIT_CODE
+  # (已移除 scan-compound: 它与 risk-scan/secret-scan/mr-validate 三个独立 job 完全重复,
+  #  每个 PR 把同样的扫描跑两遍; 分支保护要求的是独立 job 名, 故保留独立 job。
+  #  governance_scan_all.py 仍可用于本地一次性检查。)
 
   # YAML 配置语法检查: 最先运行，快速失败
   yaml-validate:
@@ -314,7 +264,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Detect Go module
+        id: gomod
+        run: |
+          if [ -f go.mod ]; then echo "present=true" >> "$GITHUB_OUTPUT";
+          else echo "present=false" >> "$GITHUB_OUTPUT"; fi
+      # 无 go.mod 的仓库不下载 Go 工具链
       - uses: actions/setup-go@v5
+        if: steps.gomod.outputs.present == 'true'
         with:
           go-version: "1.22"
       - name: Verify preinstalled Python dependencies
@@ -574,7 +531,7 @@ jobs:
   # 只有该 job 成功后，后续独立 Merge Bot 才能申请平台自动合并。
   # yaml-validate 是硬门禁，即使 path-filter 认为无需验证也必须跑（YAML 语法错误会导致其他扫描失效）。
   gate-decision:
-    needs: [yaml-validate, scan-compound, risk-scan, secret-scan, mr-validate, test-check, go-test, flutter-test, python-test, node-test, java-test, dotnet-test, rust-test, selftest]
+    needs: [yaml-validate, risk-scan, secret-scan, mr-validate, test-check, go-test, flutter-test, python-test, node-test, java-test, dotnet-test, rust-test, selftest]
     if: ${{ always() && github.event.pull_request.draft == false }}
     outputs:
       merge_action: ${{ steps.compute.outputs.merge_action }}
