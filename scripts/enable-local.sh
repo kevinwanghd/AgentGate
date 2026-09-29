@@ -66,7 +66,8 @@ fi
 cat > "$HOOK_FILE" <<HOOK
 #!/bin/sh
 # agentgate:local — 提交时自动写 AI-Usage / Tested trailer (中心化缓存脚本)
-PATH="/usr/local/bin:/usr/bin:/bin:\$PATH"
+AGENTGATE_ORIGINAL_PATH="\${PATH:-}"
+PATH="/usr/local/bin:/usr/bin:/bin:\$AGENTGATE_ORIGINAL_PATH"
 export PATH
 
 COMMIT_MSG_FILE="\$1"; COMMIT_SOURCE="\${2:-}"
@@ -78,7 +79,8 @@ case "\$COMMIT_SOURCE" in merge|squash) exit 0 ;; esac
 AG="${AGENTGATE_HOME}/scripts"
 PY=""
 for CANDIDATE in python python3; do
-  CANDIDATE_PATH="\$(command -v "\$CANDIDATE" 2>/dev/null || true)"
+  # 在用户原始 PATH 中找 python, 避免 /usr/bin 前置后选中 MSYS python
+  CANDIDATE_PATH="\$(PATH="\$AGENTGATE_ORIGINAL_PATH" command -v "\$CANDIDATE" 2>/dev/null || true)"
   if [ -n "\$CANDIDATE_PATH" ] && "\$CANDIDATE_PATH" -c 'raise SystemExit(0)' >/dev/null 2>&1; then
     PY="\$CANDIDATE_PATH"
     break
@@ -91,7 +93,10 @@ if [ -f "\$AG/collect_ai_usage.py" ] && ! grep -qi '^AI-Usage:' "\$COMMIT_MSG_FI
 fi
 if [ -f "\$AG/check_tested.py" ] && ! grep -qi '^Tested:' "\$COMMIT_MSG_FILE"; then
   T="\$("\$PY" "\$AG/check_tested.py" --emit-trailer 2>/dev/null || true)"
-  [ -n "\$T" ] && printf '%s\n' "\$T" >> "\$COMMIT_MSG_FILE"
+  # 只写 pass/fail: 写 Tested: none 会在 rebase/squash 时覆盖原有的 Tested: pass
+  case "\$T" in
+    *pass*|*fail*) printf '%s\n' "\$T" >> "\$COMMIT_MSG_FILE" ;;
+  esac
 fi
 HOOK
 chmod +x "$HOOK_FILE"

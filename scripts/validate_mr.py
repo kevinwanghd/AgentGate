@@ -235,7 +235,7 @@ def detect_large_change(cfg: dict, diff_base: str | None) -> tuple[bool, list[st
     try:
         base = diff_base or "HEAD~1"
         out = subprocess.run(
-            ["git", "diff", "--numstat", f"{base}...HEAD"],
+            ["git", "-c", "core.quotepath=off", "diff", "--numstat", "--no-renames", f"{base}...HEAD"],
             check=True, capture_output=True, text=True,
             encoding="utf-8", errors="replace",
         ).stdout
@@ -309,7 +309,7 @@ def _write_large_diff_summary(
     try:
         base = diff_base or "HEAD~1"
         out = subprocess.run(
-            ["git", "diff", "--numstat", f"{base}...HEAD"],
+            ["git", "-c", "core.quotepath=off", "diff", "--numstat", "--no-renames", f"{base}...HEAD"],
             check=True, capture_output=True, text=True,
             encoding="utf-8", errors="replace",
         ).stdout
@@ -473,7 +473,7 @@ def main() -> int:
         try:
             base = args.diff_base or "HEAD~1"
             ns = subprocess.run(
-                ["git", "diff", "--numstat", f"{base}...HEAD"],
+                ["git", "-c", "core.quotepath=off", "diff", "--numstat", "--no-renames", f"{base}...HEAD"],
                 check=True, capture_output=True, text=True,
                 encoding="utf-8", errors="replace",
             ).stdout
