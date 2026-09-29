@@ -248,23 +248,8 @@ def _build_patterns() -> list[tuple[str, re.Pattern, str, frozenset, str]]:
         "block",
     ))
 
-    # 10. sensitive-log: 敏感字段明文打印到日志
-    # 匹配常见敏感字段名后紧跟的日志打印
-    SENSITIVE_FIELD_PATTERN = (
-        r'password|passwd|pwd|secret|token|key|api[_-]?key|'
-        r'access[_-]?token|refresh[_-]?token|private[_-]?key|'
-        r'credit[_-]?card|card[_-]?no|cvv|ssn'
-    )
-    p.append((
-        "sensitive-log",
-        re.compile(
-            rf'(?i)(log|console\.(log|debug|info|warn)|Logger\.(Debug|Info|Warn|Error))'
-            rf'.*?["\']({SENSITIVE_FIELD_PATTERN})',
-        ),
-        "敏感字段可能明文打印到日志",
-        frozenset(),
-        "block",
-    ))
+    # 10. sensitive-log 不内置: 由 patterns/<lang>.yml 以 warn 模式按语言提供,
+    #     内置 block 版本会在所有语言上误伤 (#76)。
 
     # 11. sql-string-concat: SQL 字符串拼接（SQL 注入风险）
     p.append((
@@ -398,7 +383,7 @@ def load_config(path: str | None) -> dict:
 def run_git(args: list[str]) -> str:
     try:
         out = subprocess.run(
-            ["git", *args],
+            ["git", "-c", "core.quotepath=off", *args],
             check=True, capture_output=True, text=True,
             encoding="utf-8", errors="replace",
         )

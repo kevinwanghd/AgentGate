@@ -133,6 +133,12 @@ def calculate_rule_hit_rate(pending_files: list[dict]) -> float | str:
     return round(reviewed / total, 4)
 
 
+def _parse_ts(value: str) -> dt.datetime:
+    """解析 ISO 时间; 无时区视为 UTC, 保证带/不带时区的时间可相减。"""
+    parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=dt.timezone.utc)
+
+
 def calculate_review_latency(pending_files: list[dict]) -> float | str:
     """Calculate average review latency in days (detected_at to reviewed_at)."""
     latencies = []
@@ -142,14 +148,15 @@ def calculate_review_latency(pending_files: list[dict]) -> float | str:
             continue
 
         detected = p.get("detected_at", "")
-        reviewed = p.get("reviewed_at", "")
+        # lessons_review 把审核信息写在 review.* 下; 顶层字段为旧格式兼容
+        reviewed = (p.get("review") or {}).get("reviewed_at") or p.get("reviewed_at", "")
 
         if not detected or not reviewed:
             continue
 
         try:
-            d1 = dt.datetime.fromisoformat(detected.rstrip("Z"))
-            d2 = dt.datetime.fromisoformat(reviewed.rstrip("Z"))
+            d1 = _parse_ts(detected)
+            d2 = _parse_ts(reviewed)
             latency = (d2 - d1).total_seconds() / 86400  # days
             latencies.append(latency)
         except (ValueError, TypeError):

@@ -110,7 +110,7 @@ backup_if_exists() {
 write_file() {
   local rel="$1"; shift
   local abs="${TARGET_DIR}/${rel}"
-  mkdir -p "$(dirname "$abs")"
+  mkdir -p "${abs%/*}"  # 参数展开代替 dirname, Windows 上少一次 fork
   backup_if_exists "$abs"
   cat > "$abs"
   ok "写入 $rel"
@@ -169,7 +169,12 @@ fetch_or_local() {
 }
 
 sed_replacement_escape() {
-  printf '%s' "$1" | sed 's/[&|\\]/\\&/g'
+  # 纯 bash 转义 sed 替换串中的 \ & | (避免 Windows 上额外 fork sed)
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//&/\\&}"
+  s="${s//|/\\|}"
+  printf '%s' "$s"
 }
 
 is_public_image_ref() {
@@ -647,6 +652,8 @@ fetch_or_local "scripts/record_test_run.py" | write_file "governance/scripts/rec
 fetch_or_local "scripts/check_tested.py"    | write_file "governance/scripts/check_tested.py"
 fetch_or_local "scripts/gate_decision.py"   | write_file "governance/scripts/gate_decision.py"
 fetch_or_local "scripts/validate_lessons.py" | write_file "governance/scripts/validate_lessons.py"
+fetch_or_local "scripts/pending_lessons_schema.py" | write_file "governance/scripts/pending_lessons_schema.py"
+fetch_or_local "scripts/check_job.py"       | write_file "governance/scripts/check_job.py"
 fetch_or_local "scripts/scan_secrets.py" | write_file "governance/scripts/scan_secrets.py"
 fetch_or_local "scripts/gitlab_controller.py" | write_file "governance/scripts/gitlab_controller.py"
 fetch_or_local "scripts/gitlab_mr_compat.py" | write_file "governance/scripts/gitlab_mr_compat.py"

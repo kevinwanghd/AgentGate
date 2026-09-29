@@ -185,7 +185,7 @@ def load_config(path: str | None) -> dict:
 def run_git(args: list[str]) -> str:
     try:
         return subprocess.run(
-            ["git", *args], check=True, capture_output=True, text=True,
+            ["git", "-c", "core.quotepath=off", *args], check=True, capture_output=True, text=True,
             encoding="utf-8", errors="replace",
         ).stdout
     except FileNotFoundError:
@@ -576,17 +576,16 @@ def main() -> int:
     # 这是防止"直接跑 dotnet test / pytest"绕过 record_test_run.py 的护城河。
     # CI 的语言测试 jobs (python-test / dotnet-test 等) 通过 record_test_run.py 记录证据，
     # 如果 evidence 文件为空/不存在，说明测试没走 record_test_run.py，即绕过了治理。
+    # 按过滤后的 evidence 判断: 文件非空但全是其他 git 状态的旧记录, 同样视为无证据。
     if args.ci_mode and not evidence and (not trailer or not trailer.startswith("pass")):
-        # 读取 evidence 文件看是否真的为空
-        if not os.path.isfile(args.evidence) or os.path.getsize(args.evidence) == 0:
-            print(
-                "[check-tested] FAIL (CI 模式) — test-evidence.jsonl 为空或不存在，"
-                "说明测试未通过 record_test_run.py 记录。\n"
-                "修复: 语言测试必须通过 record_test_run.py 包装，例如:\n"
-                "  python record_test_run.py -- pytest ...\n"
-                "  python record_test_run.py -- dotnet test ...\n"
-            )
-            return 1
+        print(
+            "[check-tested] FAIL (CI 模式) — test-evidence.jsonl 为空、不存在或没有当前代码状态的记录，"
+            "说明测试未通过 record_test_run.py 记录。\n"
+            "修复: 语言测试必须通过 record_test_run.py 包装，例如:\n"
+            "  python record_test_run.py -- pytest ...\n"
+            "  python record_test_run.py -- dotnet test ...\n"
+        )
+        return 1
 
     hard_errors, violations = check(diff_text, evidence, cfg, trailer,
                                     status_map=locals().get("status_map"))

@@ -2,6 +2,7 @@
 .governance/sessions/
 .governance/reports/
 .governance/*.log
+.governance/*.jsonl
 # NOTE: .governance/pending-lessons/ IS versioned - these are governance candidates
 !.governance/pending-lessons/
 governance/reports/
