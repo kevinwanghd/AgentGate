@@ -134,6 +134,27 @@ class PendingFormatRoundTripTests(unittest.TestCase):
             self.assertEqual(pending_lessons_schema.main(["--path", "no/such/dir", "--strict"]), 0)
 
 
+class FingerprintStructureTests(unittest.TestCase):
+    """指纹只抹平命名和字面量, 不能抹平代码结构, 否则无关违规被合并成一条 lesson。"""
+
+    def test_different_control_structures_do_not_collide(self) -> None:
+        import fingerprint
+
+        self.assertNotEqual(fingerprint.compute_fingerprint("t", "catch {}"),
+                            fingerprint.compute_fingerprint("t", "if {}"))
+
+    def test_literal_placeholders_survive_identifier_pass(self) -> None:
+        import fingerprint
+
+        self.assertEqual(fingerprint.normalize_code_for_fingerprint('x = "a" + 1'), "<VAR> = <STR> + <NUM>")
+
+    def test_renamed_variables_still_match(self) -> None:
+        import fingerprint
+
+        self.assertEqual(fingerprint.compute_fingerprint("t", "foo = bar(1)"),
+                         fingerprint.compute_fingerprint("t", "x = y(2)"))
+
+
 class GatePolicyTests(unittest.TestCase):
     """PR 侧无法通过精简目标配置或伪造 evidence 来绕开门禁。"""
 
