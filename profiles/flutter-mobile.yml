@@ -56,25 +56,18 @@ checks:
       - apk
       - --debug
 
-  secret-scan:
-    type: secret-scan
-    command:
-      - gitleaks
-      - detect
-      - --redact
-      - --no-git
+# 注意: 不在此覆盖 secret-scan —— CI 统一由 scan_secrets.py 产出该 check
+# (与 go-bazel / dotnet-monorepo 一致); gitleaks 不在内部 CI 镜像中。
 
 plans:
   low:
     - dart-format
     - flutter-analyze
-    - secret-scan
 
   medium:
     - dart-format
     - flutter-analyze
     - flutter-test
-    - secret-scan
 
   high:
     - dart-format
@@ -82,7 +75,6 @@ plans:
     - flutter-test
     - flutter-coverage
     - android-debug-build
-    - secret-scan
 
   critical:
     - dart-format
@@ -90,7 +82,6 @@ plans:
     - flutter-test
     - flutter-coverage
     - android-debug-build
-    - secret-scan
 
 risk_paths:
   high:
