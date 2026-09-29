@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import copy
 import datetime as dt
+import functools
 import hashlib
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -138,3 +140,42 @@ def repository_state() -> str:
         else:
             digest.update(b"\0<deleted>")
     return digest.hexdigest()
+
+
+@functools.lru_cache(maxsize=1024)
+def _glob_regex(pattern: str) -> re.Pattern[str]:
+    """** → 任意层级 (``**/`` 可为空); * / ? 不跨 ``/``。"""
+    out = []
+    i = 0
+    while i < len(pattern):
+        if pattern.startswith("**/", i):
+            out.append("(?:.*/)?"); i += 3
+        elif pattern.startswith("**", i):
+            out.append(".*"); i += 2
+        elif pattern[i] == "*":
+            out.append("[^/]*"); i += 1
+        elif pattern[i] == "?":
+            out.append("[^/]"); i += 1
+        else:
+            out.append(re.escape(pattern[i])); i += 1
+    return re.compile("".join(out))
+
+
+def path_matches(path: str, pattern: str) -> bool:
+    """全部治理脚本共用的路径 glob 语义 (gitignore 风格, 大小写敏感, 与 Linux CI 一致):
+
+    - 以 ``/`` 结尾视为目录前缀: ``ci/`` 等价 ``ci/**``
+    - 不含 ``/`` 的模式匹配任意一级路径段: ``*.md`` 命中 ``docs/a.md``
+    - 含 ``/`` 的模式从仓库根锚定: ``**/auth/**`` 也命中根目录 ``auth/x.py``
+    """
+    path = path.replace("\\", "/")
+    if pattern.endswith("/"):
+        pattern += "**"
+    regex = _glob_regex(pattern)
+    if "/" not in pattern:
+        return any(regex.fullmatch(part) for part in path.split("/"))
+    return regex.fullmatch(path) is not None
+
+
+def path_matches_any(path: str, patterns: list[str]) -> bool:
+    return any(path_matches(path, pattern) for pattern in patterns)

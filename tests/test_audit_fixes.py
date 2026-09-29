@@ -155,6 +155,37 @@ class FingerprintStructureTests(unittest.TestCase):
                          fingerprint.compute_fingerprint("t", "x = y(2)"))
 
 
+class PathMatchSemanticsTests(unittest.TestCase):
+    """所有治理脚本共用一套 glob 语义; 此前 fnmatch 版本让根目录 auth/ 漏判高风险。"""
+
+    def test_double_star_prefix_matches_repository_root(self) -> None:
+        from governance_common import path_matches
+
+        self.assertTrue(path_matches("auth/login.py", "**/auth/**"))
+        self.assertTrue(path_matches("svc/auth/login.py", "**/auth/**"))
+
+    def test_slashless_pattern_matches_any_segment(self) -> None:
+        from governance_common import path_matches
+
+        self.assertTrue(path_matches("docs/guide/a.md", "*.md"))
+        self.assertTrue(path_matches("config/secrets/app.yml", "*secret*"))
+
+    def test_single_star_does_not_cross_directories_and_is_case_sensitive(self) -> None:
+        from governance_common import path_matches
+
+        self.assertFalse(path_matches("src/a/b.py", "src/*.py"))
+        self.assertFalse(path_matches("Docs/a.txt", "docs/**"))
+        self.assertTrue(path_matches("ci/deploy.yml", "ci/"))
+
+    def test_root_level_auth_change_is_high_risk_in_gate(self) -> None:
+        cfg = json.loads(json.dumps(gate_decision.DEFAULT_CONFIG))
+        result = gate_decision.build_gate_result(
+            source_sha="h", target_sha="b", policy_sha="p", changed_paths=["auth/login.py"],
+            checks={}, config=cfg,
+        )
+        self.assertEqual(result["risk_level"], "high")
+
+
 class GatePolicyTests(unittest.TestCase):
     """PR 侧无法通过精简目标配置或伪造 evidence 来绕开门禁。"""
 

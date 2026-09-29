@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import fnmatch
 import json
 import os
 from pathlib import Path
@@ -51,7 +50,7 @@ import urllib.parse
 import urllib.request
 import webbrowser
 
-from governance_common import ConfigError, load_config as load_shared_config, repository_state
+from governance_common import ConfigError, load_config as load_shared_config, path_matches_any, repository_state
 
 try:
     import yaml  # type: ignore
@@ -343,14 +342,7 @@ def read_why_from_requirement(req_id: str, cfg: dict) -> tuple[str | None, str]:
 # ============================================================
 # 段落生成
 # ============================================================
-def _fnmatch_any(path: str, patterns: list[str]) -> bool:
-    for pat in patterns:
-        if pat.endswith("/"):
-            if path.startswith(pat) or fnmatch.fnmatch(path, pat + "**"):
-                return True
-        elif fnmatch.fnmatch(path, pat):
-            return True
-    return False
+_fnmatch_any = path_matches_any  # 与其他治理脚本共用同一路径 glob 语义
 
 
 def gen_changes(rows: list[tuple[int, int, str]]) -> str:

@@ -34,14 +34,13 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
-import fnmatch
 import json
 import os
 import re
 import subprocess
 import sys
 
-from governance_common import ConfigError, load_config as load_shared_config, repository_state
+from governance_common import ConfigError, load_config as load_shared_config, path_matches_any, repository_state
 
 try:
     import yaml  # type: ignore
@@ -244,14 +243,7 @@ def is_test_file(path: str) -> bool:
     return bool(_TEST_PATH_RE.search(path))
 
 
-def _fnmatch_any(path: str, patterns: list[str]) -> bool:
-    for pat in patterns:
-        if pat.endswith("/"):
-            if path.startswith(pat) or fnmatch.fnmatch(path, pat + "**"):
-                return True
-        elif fnmatch.fnmatch(path, pat):
-            return True
-    return False
+_fnmatch_any = path_matches_any  # 与其他治理脚本共用同一路径 glob 语义
 
 
 # ============================================================

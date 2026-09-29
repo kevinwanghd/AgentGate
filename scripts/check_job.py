@@ -22,11 +22,16 @@ import sys
 from pathlib import PurePosixPath
 
 try:
-    from governance_common import ConfigError, load_config as load_shared_config
+    from governance_common import ConfigError, load_config as load_shared_config, path_matches_any
 except ImportError:
     # 独立运行时的 fallback
+    import fnmatch
+
     load_shared_config = None
     class ConfigError(Exception): pass
+
+    def path_matches_any(path: str, patterns: list[str]) -> bool:
+        return any(fnmatch.fnmatchcase(path, p + "**" if p.endswith("/") else p) for p in patterns)
 
 EVIDENCE_PATH = ".governance/test-evidence.jsonl"
 
@@ -201,16 +206,7 @@ def has_recent_test_record(evidence: list[dict], related_files: list[str]) -> bo
     return False
 
 
-def _fnmatch_any(path: str, patterns: list[str]) -> bool:
-    """fnmatch 支持 ** 前缀。"""
-    import fnmatch
-    for pat in patterns:
-        if pat.endswith("/"):
-            if path.startswith(pat) or fnmatch.fnmatch(path, pat + "**"):
-                return True
-        elif fnmatch.fnmatch(path, pat):
-            return True
-    return False
+_fnmatch_any = path_matches_any  # 与其他治理脚本共用同一路径 glob 语义
 
 
 def check(evidence_path: str = EVIDENCE_PATH) -> tuple[list[str], list[dict]]:

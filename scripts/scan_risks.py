@@ -24,7 +24,7 @@ import re
 import subprocess
 import sys
 
-from governance_common import ConfigError, load_config as load_shared_config
+from governance_common import ConfigError, load_config as load_shared_config, path_matches
 
 # ---------- 可选依赖 pyyaml, 缺失时退化为内置默认 ----------
 try:
@@ -681,25 +681,8 @@ def _today_iso() -> str:
 # 主流程
 # ============================================================
 def _path_matches(path: str, pattern: str) -> bool:
-    """glob 匹配, 支持 ** 跨目录 (fnmatch 原生不支持 **)。"""
-    import re as _re
-    # 逐段构造正则: ** → 任意(含/); * → 非/; ? → 单字符; 其余转义
-    out = []
-    i = 0
-    n = len(pattern)
-    while i < n:
-        c = pattern[i]
-        if pattern[i:i+3] == "**/":
-            out.append("(?:.*/)?"); i += 3
-        elif pattern[i:i+2] == "**":
-            out.append(".*"); i += 2
-        elif c == "*":
-            out.append("[^/]*"); i += 1
-        elif c == "?":
-            out.append("[^/]"); i += 1
-        else:
-            out.append(_re.escape(c)); i += 1
-    return _re.fullmatch("".join(out), path) is not None
+    """glob 匹配, 与其他治理脚本共用 governance_common.path_matches 语义。"""
+    return path_matches(path, pattern)
 
 
 def scan(diff_text: str, cfg: dict) -> list[dict]:
