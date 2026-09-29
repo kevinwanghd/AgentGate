@@ -129,6 +129,18 @@ class RecordTestRunTests(unittest.TestCase):
         self.assertIsNone(record["git_state"])
 
 
+class ScanAllEncodingTests(unittest.TestCase):
+    def test_summary_emoji_survives_gbk_redirected_stdout(self) -> None:
+        import os
+        import subprocess
+
+        code = "import governance_scan_all; print('\\u2705 risk_scan: pass')"
+        env = {**os.environ, "PYTHONIOENCODING": "gbk"}
+        proc = subprocess.run([sys.executable, "-c", code], cwd=ROOT / "scripts", env=env,
+                              capture_output=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode("utf-8", "replace"))
+
+
 class GitLabCiScriptTests(unittest.TestCase):
     """GitLab 以 set -e 执行 script: 裸 `cmd; EXIT_CODE=$?` 会在失败时直接退出, 结果文件写不出 fail。"""
 

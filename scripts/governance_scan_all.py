@@ -21,6 +21,11 @@ import os
 import subprocess
 import sys
 
+# 与 governance_common 一致: 汇总含 emoji, 中文 Windows 重定向输出时默认 GBK 会崩溃
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 
 def run(name: str, cmd: list[str], cwd: str | None = None, stdin=None) -> tuple[int, str, str]:
     """运行子命令，返回 (exit_code, stdout, stderr)。"""
