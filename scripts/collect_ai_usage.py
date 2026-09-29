@@ -105,12 +105,17 @@ def run_git(args: list[str], check: bool = True) -> str:
 
 def diff_numstat(diff_base: str | None, staged: bool) -> dict[str, int]:
     """返回 {文件: 改动行数(add+del)}, 只含源码文件。"""
+    # --no-renames: 重命名在 numstat 里是 "src/{a.py => b.py}", 扩展名解析失败会漏统计
     if staged:
-        out = run_git(["diff", "--cached", "--numstat"])
+        out = run_git(["diff", "--cached", "--numstat", "--no-renames"])
     elif diff_base:
-        out = run_git(["diff", "--numstat", f"{diff_base}...HEAD"])
+        out = run_git(["diff", "--numstat", "--no-renames", f"{diff_base}...HEAD"])
+    elif run_git(["rev-parse", "--verify", "-q", "HEAD~1"], check=False):
+        out = run_git(["diff", "--numstat", "--no-renames", "HEAD~1...HEAD"])
     else:
-        out = run_git(["diff", "--numstat", "HEAD~1...HEAD"])
+        # 根提交没有 HEAD~1: 用 diff-tree --root 对照空树; 连 HEAD 都没有时返回空, 不抛异常
+        out = run_git(["diff-tree", "--root", "-r", "--no-commit-id", "--numstat",
+                       "--no-renames", "HEAD"], check=False)
 
     result: dict[str, int] = {}
     for line in out.splitlines():
@@ -147,6 +152,16 @@ def load_evidence(path: str) -> list[dict]:
     return records
 
 
+def _normalize_path(path) -> str:
+    """证据 file 统一成 git 输出格式: 正斜杠, 去掉开头的 ./ (Windows agent 常写 src\\Foo.cs)。"""
+    if not path:
+        return ""
+    p = str(path).replace("\\", "/")
+    while p.startswith("./"):
+        p = p[2:]
+    return p
+
+
 def aggregate(evidence: list[dict], changed: dict[str, int]) -> dict:
     """
     汇总证据, 与本次实际 diff 对照。
@@ -159,23 +174,29 @@ def aggregate(evidence: list[dict], changed: dict[str, int]) -> dict:
     has_imprecise_tool = False  # 补全类工具: 有标记但无可信行数
 
     for rec in evidence:
-        f = rec.get("file")
+        f = _normalize_path(rec.get("file"))
         tool = rec.get("tool")
         model = rec.get("model")
+        added = rec.get("added")
+        removed = rec.get("removed")
+        imprecise = added is None and removed is None
+
+        # 只采信本次确实改动的文件; 无 file 字段的仅允许是补全类会话标记 (文档约定可省略 file)
+        if f:
+            if f not in changed:
+                continue
+        elif not imprecise:
+            continue
+
         if tool:
             tools.add(str(tool))
         if model:
             models.add(str(model))
 
-        added = rec.get("added")
-        removed = rec.get("removed")
-        # 无行数信息 = 补全类工具自报, 记标记但不计入比例
-        if added is None and removed is None:
+        # 无行数信息 = 补全类工具自报, 记标记但不计入比例;
+        # post-commit hook 记录的是整个 commit 的 diff 行数, 不是 AI 行数, 同样只当标记
+        if imprecise or rec.get("source") == "post-commit-hook":
             has_imprecise_tool = True
-            continue
-
-        # 只采信本次确实改动的源码文件
-        if not f or f not in changed:
             continue
         try:
             n = int(added or 0) + int(removed or 0)

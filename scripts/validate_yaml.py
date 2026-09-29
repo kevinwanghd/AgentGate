@@ -44,7 +44,8 @@ def validate_file(path):
     """验证单个 YAML 文件，返回 (ok, error_msg)"""
     try:
         with open(path, "r", encoding="utf-8") as f:
-            yaml.safe_load(f)
+            # 多文档 YAML (--- 分隔) 是合法语法, safe_load 会误报; 用 safe_load_all 并消费完生成器
+            list(yaml.safe_load_all(f))
         return (True, None)
     except yaml.YAMLError as e:
         return (False, str(e))
@@ -62,15 +63,17 @@ def main():
         paths = DEFAULT_PATHS
     
     # 只检查存在的路径
+    # CI 模式下什么都没检查却返回 0 会让门禁静默失效 (如在错误目录运行), 因此一律失败
     existing = [p for p in paths if Path(p).exists()]
     if not existing:
-        sys.stderr.write(f"[validate-yaml] 未找到任何 YAML 文件在: {', '.join(paths)}\n")
-        sys.exit(0 if ci_mode else 1)
-    
+        sys.stderr.write(f"[validate-yaml] 未找到任何 YAML 文件在: {', '.join(paths)}"
+                         f" (cwd={os.getcwd()})\n")
+        sys.exit(1)
+
     files = find_yaml_files(existing)
     if not files:
         sys.stderr.write("[validate-yaml] 未找到任何 .yml/.yaml 文件\n")
-        sys.exit(0 if ci_mode else 1)
+        sys.exit(1)
     
     print(f"[validate-yaml] 检查 {len(files)} 个 YAML 文件...")
     
