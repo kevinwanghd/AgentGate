@@ -34,11 +34,13 @@ class LessonsReviewLookupTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
 
     def _write(self, name: str, data: dict) -> None:
-        (self.pending_dir / name).write_text(json.dumps(data), encoding="utf-8")
+        import yaml
+
+        (self.pending_dir / name).write_text(yaml.safe_dump(data), encoding="utf-8")
 
     def test_ambiguous_fingerprint_prefix_is_rejected(self) -> None:
-        self._write("a.json", {"id": "pl-1", "fingerprint": "abc111"})
-        self._write("b.json", {"id": "pl-2", "fingerprint": "abc222"})
+        self._write("a.yml", {"id": "pl-1", "fingerprint": "abc111"})
+        self._write("b.yml", {"id": "pl-2", "fingerprint": "abc222"})
         with redirect_stderr(io.StringIO()) as err:
             data, path = lessons_review._load_pending("abc")
         self.assertIsNone(data)
@@ -46,14 +48,14 @@ class LessonsReviewLookupTests(unittest.TestCase):
         self.assertIn("匹配到多条", err.getvalue())
 
     def test_unique_fingerprint_prefix_resolves(self) -> None:
-        self._write("a.json", {"id": "pl-1", "fingerprint": "abc111"})
-        self._write("b.json", {"id": "pl-2", "fingerprint": "def222"})
+        self._write("a.yml", {"id": "pl-1", "fingerprint": "abc111"})
+        self._write("b.yml", {"id": "pl-2", "fingerprint": "def222"})
         data, path = lessons_review._load_pending("abc")
         self.assertEqual(data["id"], "pl-1")
-        self.assertEqual(path.name, "a.json")
+        self.assertEqual(path.name, "a.yml")
 
     def test_unknown_status_does_not_crash_stats(self) -> None:
-        self._write("a.json", {"id": "pl-1", "fingerprint": "abc", "status": "Pending"})
+        self._write("a.yml", {"id": "pl-1", "fingerprint": "abc", "status": "Pending"})
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as err:
             rc = lessons_review.cmd_stats(mock.Mock())
         self.assertEqual(rc, 0)
@@ -99,6 +101,38 @@ class PendingWriterTests(unittest.TestCase):
             data = yaml.safe_load(path.read_text(encoding="utf-8"))
         self.assertEqual(data["occurrence_count"], 3)
         self.assertEqual(data["repos_seen"], ["r1", "r2"])
+
+class PendingFormatRoundTripTests(unittest.TestCase):
+    """pending_writer 写出的 YAML 必须能被 lessons_review 审核并通过 CI schema 校验 (同一套格式)。"""
+
+    def test_writer_output_is_reviewable_and_schema_valid(self) -> None:
+        import pending_lessons_schema
+        import pending_writer
+
+        diff = "+++ b/src/db.py\n@@ -0,0 +1 @@\n+q = \"SELECT * FROM t WHERE id=\" + uid\n"
+        violation = {"file": "src/db.py", "line": 1, "type": "sql-string-concat", "desc": "SQL 拼接"}
+        with tempfile.TemporaryDirectory() as tmp:
+            pending_dir = Path(tmp)
+            with mock.patch.object(pending_writer, "_get_repo_name", return_value="repo"), \
+                    mock.patch.object(pending_writer, "_get_current_branch", return_value="feat"):
+                lesson = pending_writer.create_pending_lesson(violation, diff, "origin/main", pending_dir)
+            args = mock.Mock(fingerprint=lesson["fingerprint"][:12], classification="code-pattern",
+                             enforcement="soft", reviewer="bob", target="", suggested_regex="")
+            with mock.patch.object(lessons_review, "PENDING_DIR", pending_dir), redirect_stdout(io.StringIO()):
+                self.assertEqual(lessons_review.cmd_confirm(args), 0)
+                data, _ = lessons_review._load_pending(lesson["fingerprint"])
+            with redirect_stdout(io.StringIO()):
+                rc = pending_lessons_schema.main(["--path", str(pending_dir), "--strict"])
+        self.assertEqual(data["status"], "confirmed")
+        self.assertEqual(data["review"]["target_path"], "patterns/python.yml")
+        self.assertEqual(rc, 0)
+
+    def test_schema_cli_treats_missing_dir_as_normal(self) -> None:
+        import pending_lessons_schema
+
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(pending_lessons_schema.main(["--path", "no/such/dir", "--strict"]), 0)
+
 
 class GatePolicyTests(unittest.TestCase):
     """PR 侧无法通过精简目标配置或伪造 evidence 来绕开门禁。"""

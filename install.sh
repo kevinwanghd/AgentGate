@@ -653,6 +653,7 @@ fetch_or_local "scripts/check_tested.py"    | write_file "governance/scripts/che
 fetch_or_local "scripts/gate_decision.py"   | write_file "governance/scripts/gate_decision.py"
 fetch_or_local "scripts/validate_lessons.py" | write_file "governance/scripts/validate_lessons.py"
 fetch_or_local "scripts/pending_lessons_schema.py" | write_file "governance/scripts/pending_lessons_schema.py"
+fetch_or_local "scripts/validate_pending.py"  | write_file "governance/scripts/validate_pending.py"
 fetch_or_local "scripts/check_job.py"       | write_file "governance/scripts/check_job.py"
 fetch_or_local "scripts/scan_secrets.py" | write_file "governance/scripts/scan_secrets.py"
 fetch_or_local "scripts/gitlab_controller.py" | write_file "governance/scripts/gitlab_controller.py"
