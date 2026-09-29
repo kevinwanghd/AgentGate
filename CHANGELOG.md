@@ -18,6 +18,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **描述证据标注真实性** — 结果文件写入 `actual_mr_verified` 和描述摘要，区分“真实 MR 已验证”与“仅分支清单已验证”。
 - **GitLab CI 镜像改为 internal-only 策略** — 治理和语言测试 job 全部通过 `GOVERNANCE_*_IMAGE` 变量选择镜像，默认不引用 Docker Hub、MCR、GHCR 等公网运行时镜像；安装器新增 `--ci-*-image` 参数用于写入业务仓库内部预构建镜像。
 
+### Fixed
+
+- **GitHub gate 改从目标分支读取策略** — 此前读 PR 工作区的 `governance.config.yml`，PR 可改写自身被评判的策略；目标分支无配置时使用内置默认值。
+- **目标分支策略合并默认值** — 配置缺 `protected_paths` 等字段时不再使保护失效；required checks 不再回退到 PR 侧 evidence 自带的 check 名。
+- **`check_tested --ci-mode` 旧证据绕过** — evidence 文件非空但无当前代码状态记录时同样硬阻断。
+- **删除残留的内置 `sensitive-log` block 规则** — #76 未实际移除，导致全语言误伤；该规则由 `patterns/<lang>.yml` 以 warn 模式提供。
+- **安装器补齐 `check_job.py`、`pending_lessons_schema.py`** — GitLab CI 引用但未安装，导致 `governance:lessons-validate` 失败。
+- **pending lessons 飞轮** — `pending_writer` import 即 TypeError 与出现次数丢失；指标/聚合改读 `review.*`（并兼容混合时区）；`lessons_review` 前缀歧义时拒绝操作、未知 status 不再崩溃。
+- **git 调用** — `scan_risks`/`check_tested` 使用 `core.quotepath=off`（非 ASCII 文件名不再被跳过），`scan_secrets` 加 `--no-color`。
+- **gitignore 条目** — hook 安装脚本只忽略 `.governance/*.jsonl`、`sessions/`、`reports/`，不再整目录忽略导致 `pending-lessons/` 无法入库；`enable-local.sh` 兼容 worktree / `core.hooksPath`。
+- **GitHub 调用模板** 增加按 PR 的 `concurrency` 取消旧运行。
+
 ---
 
 ## [1.3.0] - 2026-07-22

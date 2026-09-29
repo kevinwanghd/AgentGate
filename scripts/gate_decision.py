@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from governance_common import ConfigError, load_config
+from governance_common import ConfigError, _deep_merge, load_config
 
 try:
     import yaml  # type: ignore
@@ -103,7 +103,8 @@ def load_policy_from_target_branch(target_ref: str, config_path: str) -> dict[st
     policy = yaml.safe_load(result.stdout) or {}
     if not isinstance(policy, dict):
         raise ConfigError("target policy must be a mapping")
-    return policy
+    # 与 load_config 一致合并默认值: 目标分支配置缺字段时不能让 protected_paths 等保护失效
+    return _deep_merge(DEFAULT_CONFIG, policy)
 
 
 def _is_protected(path: str, patterns: list[str]) -> bool:
@@ -156,7 +157,8 @@ def _required_checks_for_risk(auto: dict[str, Any], risk_level: str, checks: dic
         if isinstance(plan, list):
             return [str(item) for item in plan]
     required = [str(item) for item in auto.get("required_checks", [])]
-    return required or sorted(checks)
+    # 不回退到 evidence 自带的 check 名: evidence 由 PR 侧产出, 空 checks 会让门禁形同虚设
+    return required or list(DEFAULT_CONFIG["auto_merge"]["required_checks_by_risk"][risk_level])
 
 
 def build_gate_result(

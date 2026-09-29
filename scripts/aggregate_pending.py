@@ -69,12 +69,14 @@ class AggregatedFingerprint:
             self.pattern_type = data.get("pattern_type")
 
         # Track the most recent review decision
-        reviewed_at = data.get("reviewed_at", "")
+        # lessons_review 把审核信息写在 review.* 下; 顶层字段为旧格式兼容
+        review = data.get("review") or {}
+        reviewed_at = review.get("reviewed_at") or data.get("reviewed_at", "")
         if reviewed_at:
             if self.latest_reviewed_at is None or reviewed_at > self.latest_reviewed_at:
                 self.latest_reviewed_at = reviewed_at
                 self.latest_decision = data.get("status")
-                self.latest_reviewer = data.get("reviewer")
+                self.latest_reviewer = review.get("reviewer") or data.get("reviewer")
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON output."""

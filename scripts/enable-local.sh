@@ -52,7 +52,8 @@ ok "AgentGate 脚本就绪 ($AGENTGATE_HOME/scripts)"
 # --- 2. 安装提交 hook (复用 AgentGate 的 install-hooks.sh) ---
 # install-hooks.sh 默认假设脚本在 <repo>/governance/scripts; 中心化形态下脚本
 # 不在本仓库, 所以这里直接装一个指向缓存目录的 hook。
-HOOK_DIR="${REPO_ROOT}/.git/hooks"
+# 用 git 解析 hooks 目录: 兼容 worktree (.git 是文件) 与 core.hooksPath
+HOOK_DIR="$(git rev-parse --git-path hooks)"
 HOOK_FILE="${HOOK_DIR}/prepare-commit-msg"
 PREVIOUS_HOOK="${HOOK_FILE}.agentgate-previous"
 mkdir -p "$HOOK_DIR"
@@ -97,11 +98,14 @@ chmod +x "$HOOK_FILE"
 ok "已安装提交 hook: $HOOK_FILE"
 
 # --- 3. 把证据文件加入 .gitignore ---
+# 只忽略会话产物; .governance/pending-lessons/ 需要入库, 不能整目录忽略
 GI="${REPO_ROOT}/.gitignore"
-if ! grep -q "^\.governance/" "$GI" 2>/dev/null; then
-  { echo ""; echo "# AgentGate: 会话产物, 不入库"; echo ".governance/"; } >> "$GI"
-  ok "已把 .governance/ 加入 .gitignore"
-fi
+for ENTRY in ".governance/*.jsonl" ".governance/sessions/" ".governance/reports/"; do
+  if ! grep -qxF "$ENTRY" "$GI" 2>/dev/null; then
+    { echo ""; echo "# AgentGate: 会话产物, 不入库"; echo "$ENTRY"; } >> "$GI"
+    ok "已把 $ENTRY 加入 .gitignore"
+  fi
+done
 
 # --- 完成提示 ---
 cat <<EOF

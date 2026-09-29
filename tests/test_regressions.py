@@ -3129,7 +3129,7 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
             )
 
             subprocess.run(
-                [bash, "-l", (ROOT / "install.sh").as_posix(), target.as_posix(), "--agents", "codex"],
+                [bash, (ROOT / "install.sh").as_posix(), target.as_posix(), "--agents", "codex"],
                 check=True,
                 capture_output=True,
                 text=True,
@@ -3168,7 +3168,7 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
             agents.write_text(original, encoding="utf-8")
 
             subprocess.run(
-                [bash, "-l", (ROOT / "install.sh").as_posix(), target.as_posix(), "--agents", "codex"],
+                [bash, (ROOT / "install.sh").as_posix(), target.as_posix(), "--agents", "codex"],
                 check=True,
                 capture_output=True,
                 text=True,
@@ -3219,7 +3219,6 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
             subprocess.run(
                 [
                     bash,
-                    "-l",
                     (ROOT / "install.sh").as_posix(),
                     target.as_posix(),
                     "--agents",
@@ -3252,7 +3251,7 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory)
             subprocess.run(
-                [bash, "-l", (ROOT / "install.sh").as_posix(), target.as_posix(), "--agents", "none"],
+                [bash, (ROOT / "install.sh").as_posix(), target.as_posix(), "--agents", "none"],
                 check=True,
                 capture_output=True,
                 text=True,

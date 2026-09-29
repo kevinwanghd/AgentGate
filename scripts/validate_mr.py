@@ -238,7 +238,7 @@ def _fnmatch_any(path: str, patterns: list[str]) -> bool:
 
 
 def detect_large_change(cfg: dict, diff_base: str | None) -> tuple[bool, list[str]]:
-    """返回 (是否大变更, 触发原因列表)。无 git 时返回 (False, [])。"""
+    """返回 (是否大变更, 触发原因列表)。git 不可用或 diff 失败时 fail-closed 视为大变更。"""
     lc = cfg["large_change"]
     reasons: list[str] = []
     try:
@@ -313,7 +313,6 @@ def _write_large_diff_summary(
     if not summary_path:
         return
     import collections
-    import fnmatch as _fnmatch
 
     dir_totals: dict[str, int] = collections.defaultdict(int)
     try:
@@ -328,7 +327,7 @@ def _write_large_diff_summary(
             if len(parts) != 3:
                 continue
             add_s, del_s, path = parts
-            if any(_fnmatch.fnmatch(path, p) for p in excluded):
+            if _fnmatch_any(path, excluded):  # 与 detect_large_change 同一匹配规则
                 continue
             try:
                 lines = int(add_s) + int(del_s)
@@ -488,12 +487,11 @@ def main() -> int:
                 encoding="utf-8", errors="replace",
             ).stdout
             excluded = lc.get("excluded_paths", [])
-            import fnmatch as _fn
             for ln in ns.splitlines():
                 pts = ln.split("\t")
                 if len(pts) == 3:
                     try:
-                        if not any(_fn.fnmatch(pts[2], p) for p in excluded):
+                        if not _fnmatch_any(pts[2], excluded):
                             total_lines += int(pts[0]) + int(pts[1])
                     except ValueError:
                         pass

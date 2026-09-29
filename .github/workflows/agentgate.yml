@@ -195,7 +195,16 @@ jobs:
           SOURCE_SHA="${{ github.event.pull_request.head.sha }}"
           TARGET_SHA="$(git rev-parse "origin/$BASE_REF")"
           CONFIG_PATH="${{ inputs.config-path }}"
-          POLICY_SHA="$(git rev-parse "${SOURCE_SHA}:${CONFIG_PATH}" 2>/dev/null || echo "$SOURCE_SHA")"
+          # 策略必须来自目标分支 (与 GitLab 一致), 不能读 PR 工作区, 否则 PR 可改写自己的门禁策略。
+          # 目标分支尚无配置 (首次接入) 时使用内置默认值。
+          if git cat-file -e "${TARGET_SHA}:${CONFIG_PATH}" 2>/dev/null; then
+            POLICY_SHA="$(git rev-parse "${TARGET_SHA}:${CONFIG_PATH}")"
+            POLICY_ARGS=(--target-ref "$TARGET_SHA")
+          else
+            POLICY_SHA="$TARGET_SHA"
+            printf '{}\n' > "$RUNNER_TEMP/agentgate-default-policy.yml"
+            POLICY_ARGS=(--config "$RUNNER_TEMP/agentgate-default-policy.yml")
+          fi
           export SOURCE_SHA TARGET_SHA POLICY_SHA
           python - <<'PY' > gate-evidence.json
           import json
@@ -223,7 +232,7 @@ jobs:
             --target-sha "$TARGET_SHA" \
             --policy-sha "$POLICY_SHA" \
             --diff-base "origin/$BASE_REF" \
-            --config "$CONFIG_PATH" \
+            "${POLICY_ARGS[@]}" \
             --output gate-result.json
           DECISION_EXIT=$?
           set -e
@@ -288,10 +297,10 @@ jobs:
           # Validate pending lessons if directory exists and has files
           if [ -d ".governance/pending-lessons" ] && [ -n "$(ls -A .governance/pending-lessons/*.yml 2>/dev/null)" ]; then
             python3 .agentgate/scripts/validate_pending.py --root .
-            echo "pending-validate=pass" >> $GITHUB_OUTPUT
+            echo "pending-validate=pass" >> "$GITHUB_OUTPUT"
           else
             echo "No pending lessons to validate (this is normal)"
-            echo "pending-validate=skip" >> $GITHUB_OUTPUT
+            echo "pending-validate=skip" >> "$GITHUB_OUTPUT"
           fi
         id: validate
       - name: Run governance metrics (informational)

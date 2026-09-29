@@ -135,15 +135,18 @@ PREPUSH
 chmod +x "$PRE_PUSH_FILE"
 
 # 确保证据文件被 gitignore (会话产物, 不入库)
+# 只忽略会话产物; .governance/pending-lessons/ 需要入库, 不能整目录忽略
 GITIGNORE="${REPO_ROOT}/.gitignore"
-if ! grep -q "^\.governance/" "$GITIGNORE" 2>/dev/null; then
-  {
-    echo ""
-    echo "# governance: AI 使用 / 测试运行证据 (会话产物, 不入库)"
-    echo ".governance/"
-  } >> "$GITIGNORE"
-  echo "[hooks] 已把 .governance/ 加入 .gitignore"
-fi
+for ENTRY in ".governance/*.jsonl" ".governance/sessions/" ".governance/reports/"; do
+  if ! grep -qxF "$ENTRY" "$GITIGNORE" 2>/dev/null; then
+    {
+      echo ""
+      echo "# governance: AI 使用 / 测试运行证据 (会话产物, 不入库)"
+      echo "$ENTRY"
+    } >> "$GITIGNORE"
+    echo "[hooks] 已把 $ENTRY 加入 .gitignore"
+  fi
+done
 
 echo "[hooks] prepare-commit-msg 已安装到 ${HOOK_FILE}"
 echo "[hooks] 之后每次 commit 会自动追加 AI-Usage 与 Tested trailer。"

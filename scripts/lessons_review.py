@@ -32,30 +32,38 @@ CLASSIFICATIONS = {"code-pattern", "process-lesson"}
 ENFORCEMENTS = {"hard", "soft"}
 
 
-def _load_pending(fingerprint_or_id: str) -> tuple[Optional[dict], Optional[Path]]:
-    """按 fingerprint 或 id 查找 pending 文件。"""
+def _load_all_pending() -> list[tuple[dict, Path]]:
+    """读取全部可解析的 pending 文件, 损坏文件跳过。"""
     if not PENDING_DIR.exists():
-        return None, None
-
-    # 精确匹配 id
-    for path in PENDING_DIR.glob("*.json"):
+        return []
+    results = []
+    for path in sorted(PENDING_DIR.glob("*.json")):
         try:
             with open(path, encoding="utf-8") as f:
-                data = json.load(f)
-            if data.get("id", "").endswith(fingerprint_or_id):
-                return data, path
-        except Exception:
+                results.append((json.load(f), path))
+        except (OSError, ValueError):
             pass
+    return results
 
-    # 模糊匹配 fingerprint
-    for path in PENDING_DIR.glob("*.json"):
-        try:
-            with open(path, encoding="utf-8") as f:
-                data = json.load(f)
-            if fingerprint_or_id in data.get("fingerprint", ""):
-                return data, path
-        except Exception:
-            pass
+
+def _load_pending(fingerprint_or_id: str) -> tuple[Optional[dict], Optional[Path]]:
+    """按 fingerprint 或 id 查找 pending 文件; 命中多条时报错, 避免误审核。"""
+    entries = _load_all_pending()
+
+    # 先匹配 id 后缀, 再模糊匹配 fingerprint
+    for match in (
+        lambda d: d.get("id", "").endswith(fingerprint_or_id),
+        lambda d: fingerprint_or_id in d.get("fingerprint", ""),
+    ):
+        hits = [(d, p) for d, p in entries if match(d)]
+        if len(hits) == 1:
+            return hits[0]
+        if len(hits) > 1:
+            names = ", ".join(p.name for _, p in hits)
+            sys.stderr.write(
+                f"[lessons-review] '{fingerprint_or_id}' 匹配到多条 ({names}), 请提供更长的 fingerprint/id\n"
+            )
+            return None, None
 
     return None, None
 
@@ -82,7 +90,11 @@ def cmd_list(args: argparse.Namespace) -> int:
         try:
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
-            stats[data.get("status", "pending")] += 1
+            status = data.get("status", "pending")
+            if status not in STATUSES:
+                sys.stderr.write(f"[lessons-review] {path.name}: 未知 status '{status}'\n")
+                continue
+            stats[status] += 1
         except Exception:
             stats["pending"] += 1
 
@@ -323,16 +335,7 @@ def cmd_apply(args: argparse.Namespace) -> int:
         print("[lessons-review] pending lessons 目录不存在")
         return 0
 
-    files = list(PENDING_DIR.glob("*.json"))
-    confirmed = []
-    for path in files:
-        try:
-            with open(path, encoding="utf-8") as f:
-                data = json.load(f)
-            if data.get("status") == "confirmed":
-                confirmed.append((data, path))
-        except Exception:
-            pass
+    confirmed = [(d, p) for d, p in _load_all_pending() if d.get("status") == "confirmed"]
 
     if not confirmed:
         print("[lessons-review] 暂无 confirmed lessons 需要应用")
@@ -528,7 +531,10 @@ def cmd_stats(args: argparse.Namespace) -> int:
         ptype = data.get("pattern_type", "unknown")
         occ = data.get("occurrence_count", 1)
 
-        stats[status] += 1
+        if status not in STATUSES:
+            sys.stderr.write(f"[lessons-review] {path.name}: 未知 status '{status}', 已跳过状态统计\n")
+        else:
+            stats[status] += 1
         stats["total_occurrences"] += occ
         stats["by_repo"][repo] = stats["by_repo"].get(repo, 0) + 1
         stats["by_type"][ptype] = stats["by_type"].get(ptype, 0) + 1

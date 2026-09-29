@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import fingerprint as fp_module
 
 
-PENDING_DIR = ".governance" / "pending-lessons"
+PENDING_DIR = Path(".governance") / "pending-lessons"
 
 
 def _now_iso() -> str:
@@ -168,10 +168,10 @@ def create_pending_lesson(
     filename = fp_module.fingerprint_file_name(risk_type, snippet)
     file_path_out = pending_dir / filename
 
-    # Add occurrence tracking for this first detection
-    pending_data["_occurrence_count"] = 1
-    pending_data["_first_detection"] = pending_data["detected_at"]
-    pending_data["_repos_seen"] = [pending_data["source_repo"]]
+    # Add occurrence tracking for this first detection (persisted, used by merge)
+    pending_data["occurrence_count"] = 1
+    pending_data["first_detected"] = pending_data["detected_at"]
+    pending_data["repos_seen"] = [pending_data["source_repo"]]
 
     # Write YAML (without internal fields)
     _write_pending_yaml(file_path_out, pending_data)
@@ -278,15 +278,15 @@ def _merge_pending(existing_path: Path, new_violation: dict, diff_baseline: str)
     existing = yaml.safe_load(existing_path.read_text(encoding="utf-8"))
 
     # Update occurrence tracking
-    existing["_occurrence_count"] = existing.get("_occurrence_count", 1) + 1
+    existing["occurrence_count"] = existing.get("occurrence_count", 1) + 1
     existing["detected_at"] = _now_iso()
 
     # Track new repo if not seen before
     new_repo = _get_repo_name()
-    repos = existing.get("_repos_seen", [])
+    repos = existing.get("repos_seen", [])
     if new_repo not in repos:
         repos.append(new_repo)
-        existing["_repos_seen"] = repos
+        existing["repos_seen"] = repos
 
     # If fingerprint is same but we have more evidence, keep the latest
     # (fingerprint already matches, so no need to update)
