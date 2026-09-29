@@ -179,3 +179,19 @@ def path_matches(path: str, pattern: str) -> bool:
 
 def path_matches_any(path: str, patterns: list[str]) -> bool:
     return any(path_matches(path, pattern) for pattern in patterns)
+
+
+def reason_blacklist_hit(reason: str, blacklist: list[str]) -> str | None:
+    """返回 reason 命中的第一个黑名单词。
+
+    ASCII 词按词边界匹配 (``temp`` 不误伤 ``template``, ``wip`` 不误伤 ``wipe``);
+    中文词没有词边界, 仍按子串匹配。忽略大小写。
+    """
+    for bad in blacklist:
+        word = str(bad)
+        if word.isascii():
+            if re.search(rf"(?<![A-Za-z0-9_]){re.escape(word)}(?![A-Za-z0-9_])", reason, re.IGNORECASE):
+                return word
+        elif word.lower() in reason.lower():
+            return word
+    return None

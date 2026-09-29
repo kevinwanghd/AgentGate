@@ -40,7 +40,13 @@ import re
 import subprocess
 import sys
 
-from governance_common import ConfigError, load_config as load_shared_config, path_matches_any, repository_state
+from governance_common import (
+    ConfigError,
+    load_config as load_shared_config,
+    path_matches_any,
+    reason_blacklist_hit,
+    repository_state,
+)
 
 try:
     import yaml  # type: ignore
@@ -153,9 +159,10 @@ PROD_EXTENSIONS = {
 # 测试文件判定: 路径或文件名带这些标志（收紧，避免误匹配 latest.py/contest.py）
 _TEST_PATH_RE = re.compile(
     r'(^|/)(tests?|spec|__tests__)/'  # test/, spec/, __tests__/ 目录下
-    r'|(\.tests?|\.spec|_test|test_)\.[a-z]+$'  # 文件名含测试标志
+    r'|(\.tests?|\.spec|_test)\.[a-z]+$'  # 文件名含测试标志
+    r'|(^|/)test_[^/]*$'  # test_foo.py
     r'|_tests?\.[a-z]+$'  # _test.py / _tests.py
-    r'|Tests?\.[a-z]+$',  # FooTest.cs / FooTests.cs
+    r'|(?-i:Tests?)\.[a-z]+$',  # FooTest.cs / FooTests.cs (区分大小写, 避免 latest.py 误判)
     re.IGNORECASE,
 )
 
@@ -336,23 +343,28 @@ def _read_lines(path: str) -> list[str] | None:
 
 
 def has_untested_annotation(path: str, cfg: dict) -> tuple[bool, str]:
-    """整文件搜 risk:untested 注解, 校验字段。返回 (是否合法豁免, 说明)。"""
+    """整文件搜 risk:untested 注解, 任一注解合法即豁免; 否则返回第一条的失败原因。"""
     lines = _read_lines(path)
     if lines is None:
         return (False, "无法读取文件")
     text = "\n".join(lines)
-    m = _UNTESTED_INLINE_RE.search(text)
-    if not m:
-        return (False, "无 risk:untested 注解")
+    first_problem = None
+    for m in _UNTESTED_INLINE_RE.finditer(text):
+        ok, why = _validate_untested(m, cfg["testing"])
+        if ok:
+            return (True, why)
+        first_problem = first_problem or why
+    return (False, first_problem or "无 risk:untested 注解")
+
+
+def _validate_untested(m: re.Match, tc: dict) -> tuple[bool, str]:
     reason = m.group("reason")
     reviewed = m.group("reviewed")
-    tc = cfg["testing"]
     if len(reason.strip()) < MIN_REASON_LEN:
         return (False, f"untested reason 过短 (<{MIN_REASON_LEN}字)")
-    low = reason.lower()
-    for bad in tc.get("reason_blacklist", []):
-        if bad.lower() in low:
-            return (False, f'untested reason 含黑名单词 "{bad}"')
+    bad = reason_blacklist_hit(reason, tc.get("reason_blacklist", []))
+    if bad:
+        return (False, f'untested reason 含黑名单词 "{bad}"')
     try:
         rev = dt.date.fromisoformat(reviewed)
         age = (dt.date.today() - rev).days

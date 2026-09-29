@@ -24,7 +24,7 @@ import re
 import subprocess
 import sys
 
-from governance_common import ConfigError, load_config as load_shared_config, path_matches
+from governance_common import ConfigError, load_config as load_shared_config, path_matches, reason_blacklist_hit
 
 # ---------- 可选依赖 pyyaml, 缺失时退化为内置默认 ----------
 try:
@@ -519,11 +519,9 @@ def _validate_annotation_fields(
             problems.append(f'reason 过于简单，仅重复风险类型名称 "{risk_type}"，请说明业务权衡或上下文')
     
     # reason 黑名单词 (P0-3: 硬阻断，不再只是警告)
-    low = reason.lower()
-    for bad in ra["reason_blacklist"]:
-        if bad.lower() in low:
-            problems.append(f'reason 含黑名单词 "{bad}"')
-            break
+    bad = reason_blacklist_hit(reason, ra["reason_blacklist"])
+    if bad:
+        problems.append(f'reason 含黑名单词 "{bad}"')
     # reason 最小语义验证 (P0-3: 防止无意义理由如"无"/"."/纯符号)
     stripped = reason.strip()
     if stripped:

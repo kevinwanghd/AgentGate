@@ -24,8 +24,9 @@ _PATTERNS = (
     (
         "credential-assignment",
         re.compile(
-            r"(?i)(?:^|[\s;({])(?:api[_-]?key|client[_-]?secret|password|passwd|private[_-]?key|secret|token)"
-            r"\s*[:=]\s*[\"'][^\"'\r\n]{12,}[\"']"
+            # 前缀允许 . [ 引号: 覆盖 self.token = "..." / cfg["password"] = "..."
+            r"(?i)(?:^|[\s;({.\[\"'])(?:api[_-]?key|client[_-]?secret|password|passwd|private[_-]?key|secret|token)"
+            r"[\"']?\]?\s*[:=]\s*[\"'][^\"'\r\n]{12,}[\"']"
         ),
     ),
 )

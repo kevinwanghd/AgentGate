@@ -98,6 +98,16 @@ git config user.email t@t; git config user.name t
 FALLBACK_PATH="${WORK}/fallback-bin"
 mkdir -p "$FALLBACK_PATH"
 ln -s "$(command -v git)" "${FALLBACK_PATH}/git"
+# Windows (Git Bash): ln -s 实为复制且无 .exe 后缀, 原生 Python 找不到、git 也缺 DLL;
+# 改用 git 自身所在目录 (只要其中没有 gh/glab, 仍满足"无 CLI token 工具"的前提)。
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    GIT_BIN_DIR="$(dirname "$(command -v git)")"
+    if ! ls "$GIT_BIN_DIR"/gh "$GIT_BIN_DIR"/gh.exe "$GIT_BIN_DIR"/glab "$GIT_BIN_DIR"/glab.exe >/dev/null 2>&1; then
+      FALLBACK_PATH="$GIT_BIN_DIR"
+    fi
+    ;;
+esac
 
 # 断言: 期望退出码
 expect() {

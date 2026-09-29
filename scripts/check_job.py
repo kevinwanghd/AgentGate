@@ -22,12 +22,18 @@ import sys
 from pathlib import PurePosixPath
 
 try:
-    from governance_common import ConfigError, load_config as load_shared_config, path_matches_any
+    from governance_common import (
+        ConfigError,
+        load_config as load_shared_config,
+        path_matches_any,
+        repository_state,
+    )
 except ImportError:
     # 独立运行时的 fallback
     import fnmatch
 
     load_shared_config = None
+    repository_state = None
     class ConfigError(Exception): pass
 
     def path_matches_any(path: str, patterns: list[str]) -> bool:
@@ -62,9 +68,10 @@ PROD_EXTENSIONS = {
 # 测试文件判定（与 check_tested.py 保持一致）
 _TEST_PATH_RE = re.compile(
     r'(^|/)(tests?|spec|__tests__)/'
-    r'|(\.tests?|\.spec|_test|test_)\.[a-z]+$'
+    r'|(\.tests?|\.spec|_test)\.[a-z]+$'
+    r'|(^|/)test_[^/]*$'  # test_foo.py
     r'|_tests?\.[a-z]+$'
-    r'|Tests?\.[a-z]+$',
+    r'|(?-i:Tests?)\.[a-z]+$',
     re.IGNORECASE,
 )
 
@@ -78,7 +85,7 @@ def load_config(path: str | None) -> dict:
 def run_git(args: list[str]) -> str:
     try:
         return subprocess.run(
-            ["git", *args], check=True, capture_output=True, text=True,
+            ["git", "-c", "core.quotepath=off", *args], check=True, capture_output=True, text=True,
             encoding="utf-8", errors="replace",
         ).stdout
     except FileNotFoundError:
@@ -89,18 +96,25 @@ def run_git(args: list[str]) -> str:
         sys.exit(2)
 
 
-def get_staged_files() -> list[str]:
-    """获取 staged 状态的文件列表（已暂存待提交的改动）。"""
-    out = run_git(["diff", "--cached", "--name-status", "-M", "--no-color"])
+def get_changed_files(diff_base: str | None = None) -> list[str]:
+    """新增/修改的文件。CI 无 staged 改动, 传 diff_base 时按 base...HEAD 取 MR diff。"""
+    if diff_base:
+        out = run_git(["diff", "--name-status", "-M", "--no-color", f"{diff_base}...HEAD"])
+    else:
+        out = run_git(["diff", "--cached", "--name-status", "-M", "--no-color"])
     files = []
     for line in out.splitlines():
         parts = line.split("\t")
         if len(parts) >= 2:
-            # 忽略删除(R/D)和重命名(R)，只关心新增(A)和修改(M)
+            # 只关心新增(A)和修改(M)
             status = parts[0][0] if parts[0] else ""
             if status in ("A", "M"):
                 files.append(parts[-1])
     return files
+
+
+def get_staged_files() -> list[str]:
+    return get_changed_files(None)
 
 
 def is_prod_file(path: str) -> bool:
@@ -123,7 +137,6 @@ def find_test_candidates(prod_file: str) -> list[str]:
     """
     p = PurePosixPath(prod_file)
     stem = p.stem  # 文件名不含扩展名
-    parent = str(p.parent)
     
     candidates = []
     
@@ -148,9 +161,8 @@ def find_test_candidates(prod_file: str) -> list[str]:
             f"{test_dir}/{stem}Tests{p.suffix}",
         ])
         
-        # src/Foo.cs -> test/Foo.test.cs（镜像目录结构）
-        if parent:
-            candidates.append(f"{test_dir}/{p.name}")
+        # src/Foo.cs -> test/Foo.cs（镜像目录结构）
+        candidates.append(f"{test_dir}/{p.name}")
     
     return candidates
 
@@ -209,19 +221,34 @@ def has_recent_test_record(evidence: list[dict], related_files: list[str]) -> bo
 _fnmatch_any = path_matches_any  # 与其他治理脚本共用同一路径 glob 语义
 
 
-def check(evidence_path: str = EVIDENCE_PATH) -> tuple[list[str], list[dict]]:
+def _current_evidence(evidence: list[dict]) -> list[dict]:
+    """只保留当前代码状态的记录; 几周前通过的旧运行不能证明本次改动已测试。"""
+    if repository_state is None:
+        return evidence
+    try:
+        state = repository_state()
+    except RuntimeError:
+        return evidence
+    return [rec for rec in evidence if rec.get("git_state") == state]
+
+
+def check(
+    evidence_path: str = EVIDENCE_PATH,
+    diff_base: str | None = None,
+    config_path: str | None = None,
+) -> tuple[list[str], list[dict]]:
     """
-    检查 staged 改动中是否有生产代码绕过测试。
+    检查改动中是否有生产代码绕过测试 (无 diff_base 时看 staged 改动)。
     返回 (errors, violations)
     - errors: 硬阻断错误（如 evidence 显示失败）
     - violations: 缺少测试记录的文件列表
     """
     errors: list[str] = []
     violations: list[dict] = []
-    
+
     # 1. 加载测试证据
-    evidence = load_evidence(evidence_path)
-    
+    evidence = _current_evidence(load_evidence(evidence_path))
+
     # 2. 检查是否有失败的测试记录（无条件硬拦）
     latest: dict[str, dict] = {}
     for rec in evidence:
@@ -229,22 +256,36 @@ def check(evidence_path: str = EVIDENCE_PATH) -> tuple[list[str], list[dict]]:
         prev = latest.get(cmd)
         if prev is None or str(rec.get("ts", "")) >= str(prev.get("ts", "")):
             latest[cmd] = rec
-    
+
     for rec in latest.values():
         failed = rec.get("failed")
+        exit_code = rec.get("exit_code")
         if isinstance(failed, int) and failed != 0:
             label = "未知失败(退出码非0)" if failed < 0 else f"{failed} 个用例失败"
             errors.append(f"测试运行记录显示失败: {label} — cmd: {rec.get('cmd', '?')}")
-    
-    # 3. 获取 staged 改动文件
-    staged_files = get_staged_files()
-    prod_files = [f for f in staged_files if is_prod_file(f)]
-    
+        elif isinstance(exit_code, int) and exit_code != 0:
+            errors.append(f"测试运行记录显示失败: 退出码 {exit_code} — cmd: {rec.get('cmd', '?')}")
+
+    # 3. 获取改动文件
+    changed_files = get_changed_files(diff_base)
+    prod_files = [f for f in changed_files if is_prod_file(f)]
+
     if not prod_files:
         return errors, []
-    
+
+    # CI 中本地证据 (gitignore) 不存在: 与 check_tested 一致, 以 commit 的 Tested: trailer 为准
+    if not evidence and diff_base:
+        from check_tested import read_tested_trailer
+
+        trailer = read_tested_trailer(diff_base)
+        if trailer and trailer.startswith("fail"):
+            errors.append("commit 的 Tested: trailer 显示测试失败")
+            return errors, []
+        if trailer and trailer.startswith("pass"):
+            return errors, []
+
     # 4. 配置加载
-    cfg = load_config(None)
+    cfg = load_config(config_path)
     exclude = cfg["testing"].get("exclude_paths", [])
     
     for prod_file in prod_files:
@@ -272,15 +313,18 @@ def check(evidence_path: str = EVIDENCE_PATH) -> tuple[list[str], list[dict]]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="检测测试绕过行为 (CI 专用)")
     parser.add_argument("--config", help="governance.config.yml 路径")
+    parser.add_argument("--diff-base", help="CI 用: 按 base...HEAD 检查 MR 改动 (默认检查 staged 改动)")
     parser.add_argument("--evidence", default=EVIDENCE_PATH, help="测试证据文件")
-    parser.add_argument("--enforcement", default="hard", choices=["hard", "soft"],
-                       help="强制模式")
+    parser.add_argument("--enforcement", default=None, choices=["hard", "soft"],
+                       help="强制模式 (默认读配置 testing.enforcement)")
     args = parser.parse_args()
-    
-    # 使用局部变量传递给 check()，避免 global 声明问题
-    evidence_path = args.evidence
-    
-    errors, violations = check(evidence_path)
+
+    try:
+        errors, violations = check(args.evidence, args.diff_base, args.config)
+        enforcement = args.enforcement or load_config(args.config)["testing"].get("enforcement", "hard")
+    except ConfigError as exc:
+        sys.stderr.write(f"[check-job] 配置错误: {exc}\n")
+        return 2
     
     # 硬阻断：失败测试记录
     if errors:
@@ -303,7 +347,7 @@ def main() -> int:
             print(f"    对应测试: {tests}")
         print()
     
-    if args.enforcement == "soft":
+    if enforcement == "soft":
         print("[check-job] soft 模式，仅警告不阻断。")
         return 0
     
