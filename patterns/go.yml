@@ -23,9 +23,8 @@
 #   mode: block  — 高精度规则，误报极低，命中阻断 CI
 #   mode: warn   — 观察期规则，误报较高，仅在 Job Summary 显示，不阻断 CI
 #
-# Tier 1 (block):  hardcoded-secret | sql-injection | command-injection | go-tls-skip-verify
+# Tier 1 (block):  go-sql-concat | go-hardcoded-secret | go-cmd-inject | go-tls-skip-verify | go-ssrf | go-panic-in-handler | go-weak-random
 # Tier 2 (warn):  swallowed-error | context-background | sensitive-log
-# Tier 1 (block):  go-sql-concat | go-cmd-inject | go-ssrf | go-panic-in-handler | go-weak-random
 
 patterns:
 

@@ -78,15 +78,18 @@ DEFAULT_CONFIG: dict[str, Any] = {
 
 
 def _changed_paths(diff_base: str, head: str) -> list[str]:
+    # quotepath=off + -z: 非 ASCII 路径不被转义成 "\350..." 而逃过 protected_paths;
+    # --no-renames: 把受保护文件移走时旧路径 (删除) 也要参与判定
     result = subprocess.run(
-        ["git", "diff", "--name-only", f"{diff_base}...{head}", "--"],
+        ["git", "-c", "core.quotepath=off", "diff", "--name-only", "-z", "--no-renames",
+         f"{diff_base}...{head}", "--"],
         check=True,
         capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",
     )
-    return [line.replace("\\", "/") for line in result.stdout.splitlines() if line.strip()]
+    return [path.replace("\\", "/") for path in result.stdout.split("\0") if path.strip()]
 
 
 def load_policy_from_target_branch(target_ref: str, config_path: str) -> dict[str, Any]:

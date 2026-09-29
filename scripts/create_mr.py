@@ -52,12 +52,6 @@ import webbrowser
 
 from governance_common import ConfigError, load_config as load_shared_config, path_matches_any, repository_state
 
-try:
-    import yaml  # type: ignore
-    _HAS_YAML = True
-except Exception:  # pragma: no cover
-    _HAS_YAML = False
-
 
 EVIDENCE_PATH = ".governance/test-evidence.jsonl"
 DEFAULT_DESCRIPTION_MANIFEST = ".agentgate/mr-description.md"
@@ -79,9 +73,10 @@ DEFAULT_CONFIG = {
     },
     "large_change": {
         "line_threshold": 500,
-        "excluded_paths": ["*.lock", "*.Designer.cs", "migrations/**", "**/*.generated.*"],
-        "sensitive_paths": ["ci/", "CODEOWNERS", "charts*/", "*secret*", ".gitlab-ci.yml"],
-        "schema_paths": ["*.sql", "migrations/**", "*.proto"],
+        # 含 "/" 的模式从仓库根锚定; 目录类默认值用 **/ 前缀以命中任意层级 (如 services/api/migrations/)
+        "excluded_paths": ["*.lock", "*.Designer.cs", "**/migrations/**", "**/*.generated.*"],
+        "sensitive_paths": ["ci/", "CODEOWNERS", "**/charts*/", "*secret*", ".gitlab-ci.yml"],
+        "schema_paths": ["*.sql", "**/migrations/**", "*.proto"],
     },
     "deliverhq_integration": {
         "enabled": False,
@@ -144,14 +139,20 @@ def current_branch() -> str:
 
 
 def numstat(base: str) -> list[tuple[int, int, str]]:
-    """返回 [(added, removed, path), ...]。二进制文件行数记为 0。"""
-    out = run_git(["diff", "--numstat", f"{base}...HEAD"])
+    """返回 [(added, removed, path), ...]。二进制文件行数记为 0。
+
+    -z 输出原始路径 (非 ASCII 不被转义加引号), --no-renames 让重命名拆成
+    删除+新增两条, 避免 ``old => new`` 形态导致敏感/schema 路径匹配失效。
+    """
+    raw = run_git_bytes(["-c", "core.quotepath=off", "diff", "--numstat", "-z",
+                         "--no-renames", f"{base}...HEAD"])
     rows = []
-    for line in out.splitlines():
-        parts = line.split("\t")
-        if len(parts) != 3:
+    for item in raw.split(b"\0"):
+        parts = item.decode("utf-8", errors="replace").split("\t", 2)
+        if len(parts) != 3 or not parts[2]:
             continue
         a, d, p = parts
+        p = norm_path(p)
         try:
             rows.append((int(a), int(d), p))
         except ValueError:
@@ -200,11 +201,13 @@ def require_clean_bound_manifest_worktree(manifest_path: str) -> None:
 
 
 def changed_paths(base: str, manifest_path: str | None = None) -> list[str]:
-    out = run_git(["diff", "--name-only", f"{base}...HEAD"])
+    # -z: 原始路径不转义; --no-renames: 结果不受本机 diff.renames 配置影响, 且包含重命名旧路径
+    raw = run_git_bytes(["-c", "core.quotepath=off", "diff", "--name-only", "-z",
+                         "--no-renames", f"{base}...HEAD"])
     manifest_norm = norm_path(manifest_path) if manifest_path else None
     paths = []
-    for line in out.splitlines():
-        path = norm_path(line.strip())
+    for item in raw.split(b"\0"):
+        path = norm_path(item.decode("utf-8", errors="replace"))
         if not path:
             continue
         if manifest_norm and path == manifest_norm:
@@ -214,9 +217,10 @@ def changed_paths(base: str, manifest_path: str | None = None) -> list[str]:
 
 
 def diff_fingerprint(base: str, manifest_path: str | None = None) -> str:
-    args = ["diff", "--binary", "--full-index", f"{base}...HEAD", "--", "."]
+    # ":/" 与 ":(top,...)" 以仓库根为准, 在子目录运行也对整个 diff 取指纹
+    args = ["diff", "--binary", "--full-index", f"{base}...HEAD", "--", ":/"]
     if manifest_path:
-        args.append(f":(exclude){norm_path(manifest_path)}")
+        args.append(f":(top,exclude){norm_path(manifest_path)}")
     payload = run_git_bytes(args)
     return hashlib.sha256(payload).hexdigest()
 
@@ -224,11 +228,6 @@ def diff_fingerprint(base: str, manifest_path: str | None = None) -> str:
 def commit_subjects(base: str) -> list[str]:
     out = run_git(["log", f"{base}..HEAD", "--format=%s"])
     return [l for l in out.splitlines() if l.strip()]
-
-
-def latest_commit_body(base: str) -> str:
-    out = run_git(["log", f"{base}..HEAD", "--format=%B", "-1"], check=False)
-    return out
 
 
 # ============================================================
@@ -695,7 +694,19 @@ def run_preflight_tests(args, cfg: dict) -> int:
         return 2
     if cmd and cmd[0] in {"python", "python3"}:
         cmd[0] = sys.executable
-    rc = subprocess.run(cmd, text=True).returncode
+    elif cmd:
+        # Windows 上 npm/yarn 等是 .cmd 包装, 不经 shell 时须按 PATHEXT 解析成完整路径
+        resolved = shutil.which(cmd[0])
+        if resolved:
+            cmd[0] = resolved
+    if not cmd:
+        sys.stderr.write("[create-mr] 测试命令为空。\n")
+        return 2
+    try:
+        rc = subprocess.run(cmd, text=True).returncode
+    except OSError as exc:
+        sys.stderr.write(f"[create-mr] 无法执行测试命令 {cmd[0]!r}: {exc}\n")
+        return 2
     if rc != 0:
         sys.stderr.write("[create-mr] 本地测试未通过，拒绝创建 MR。请修复后重跑。\n")
     return rc
@@ -785,26 +796,37 @@ def _gitlab_token_from_env() -> str | None:
     return None
 
 
-def _require_gitlab_api_args(args) -> tuple[str, str, str]:
-    # 优先级: 命令行参数 > 环境变量 > governance.config.yml 的 create_mr 块
+def _create_mr_config(args) -> dict:
     try:
         cfg_data = load_config(getattr(args, "config", None))
-        cfg_create_mr = cfg_data.get("create_mr", {}) if isinstance(cfg_data, dict) else {}
+        return cfg_data.get("create_mr", {}) if isinstance(cfg_data, dict) else {}
     except Exception:
-        cfg_create_mr = {}
+        return {}
 
-    base_url = (
-        args.gitlab_url
+
+def _gitlab_url_setting(args, cfg_create_mr: dict) -> str | None:
+    # 优先级: 命令行参数 > 环境变量 > governance.config.yml 的 create_mr 块
+    return (
+        getattr(args, "gitlab_url", None)
         or os.environ.get("AGENTGATE_GITLAB_URL")
         or os.environ.get("CI_SERVER_URL")
         or cfg_create_mr.get("gitlab_url")
     )
-    project_id = (
-        args.gitlab_project_id
+
+
+def _gitlab_project_setting(args, cfg_create_mr: dict) -> str | None:
+    return (
+        getattr(args, "gitlab_project_id", None)
         or os.environ.get("AGENTGATE_GITLAB_PROJECT_ID")
         or os.environ.get("CI_PROJECT_ID")
         or cfg_create_mr.get("gitlab_project_id")
     )
+
+
+def _require_gitlab_api_args(args) -> tuple[str, str, str]:
+    cfg_create_mr = _create_mr_config(args)
+    base_url = _gitlab_url_setting(args, cfg_create_mr)
+    project_id = _gitlab_project_setting(args, cfg_create_mr)
     token = args.gitlab_token or _gitlab_token_from_env()
 
     missing = []
@@ -907,6 +929,40 @@ def _gitlab_project_web_path(project_id: str) -> str:
     return urllib.parse.unquote(str(project_id)).strip("/")
 
 
+# 预填 URL 过长会被 GitLab/反向代理拒绝 (414); 超过此长度时不在 URL 里带描述正文
+MAX_PREFILL_URL_LENGTH = 8000
+
+
+def _project_path_from_remote(remote_url: str | None, gitlab_url: str) -> str | None:
+    """从 origin remote 推导 namespace/project (仅当 remote 与 gitlab_url 同主机)。"""
+    if not remote_url or _remote_host(remote_url) != _remote_host(gitlab_url):
+        return None
+    parsed = urllib.parse.urlparse(remote_url)
+    if parsed.scheme and parsed.hostname:
+        path = parsed.path
+    else:
+        path = remote_url.split(":", 1)[1] if ":" in remote_url else ""
+    path = path.strip("/")
+    if path.endswith(".git"):
+        path = path[:-4]
+    return path or None
+
+
+def _gitlab_web_project_path(args, gitlab_url: str, cfg_create_mr: dict) -> str | None:
+    """浏览器 URL 需要 namespace/project 路径; 纯数字 project id 无法拼出有效页面。"""
+    candidates = [
+        getattr(args, "gitlab_project_id", None),
+        os.environ.get("AGENTGATE_GITLAB_PROJECT_ID"),
+        os.environ.get("CI_PROJECT_PATH"),
+        os.environ.get("CI_PROJECT_ID"),
+        cfg_create_mr.get("gitlab_project_id"),
+    ]
+    for value in candidates:
+        if value and not re.fullmatch(r"\d+", str(value).strip()):
+            return _gitlab_project_web_path(str(value))
+    return _project_path_from_remote(_origin_remote_url(), gitlab_url)
+
+
 def build_gitlab_new_mr_url(
     gitlab_url: str,
     project_id: str,
@@ -933,16 +989,10 @@ def open_gitlab_mr_fallback(
     args,
     reason: str | None = None,
 ) -> int:
-    gitlab_url = (
-        getattr(args, "gitlab_url", None)
-        or os.environ.get("AGENTGATE_GITLAB_URL")
-        or os.environ.get("CI_SERVER_URL")
-    )
+    cfg_create_mr = _create_mr_config(args)
+    gitlab_url = _gitlab_url_setting(args, cfg_create_mr)
     project_id = (
-        getattr(args, "gitlab_project_id", None)
-        or os.environ.get("AGENTGATE_GITLAB_PROJECT_ID")
-        or os.environ.get("CI_PROJECT_PATH")
-        or os.environ.get("CI_PROJECT_ID")
+        _gitlab_web_project_path(args, gitlab_url, cfg_create_mr) if gitlab_url else None
     )
     if not gitlab_url or not project_id:
         if reason:
@@ -966,6 +1016,15 @@ def open_gitlab_mr_fallback(
         title,
         description,
     )
+    if len(mr_url) > MAX_PREFILL_URL_LENGTH:
+        # 描述太长, URL 只预填分支和标题, 正文打印到 stdout 供手工粘贴
+        mr_url = build_gitlab_new_mr_url(
+            gitlab_url, str(project_id), source, args.target_branch, title, "",
+        )
+        sys.stderr.write(
+            "[create-mr] MR 描述过长, 预填 URL 不含描述正文; 请从下方输出手工粘贴描述。\n"
+        )
+        print(description)
     if reason:
         sys.stderr.write(f"[create-mr] {reason}\n")
     sys.stderr.write("[create-mr] 已输出/打开预填 MR 页面。\n")
@@ -1044,22 +1103,28 @@ def detect_cli(remote_url: str | None = None) -> str | None:
 
 
 def submit_mr(title: str, description: str, target: str, cli: str) -> int:
-    # 用临时文件传 description, 避免 shell 转义问题
+    # gh 用临时文件传 description, 避免 shell 转义和命令行长度问题;
+    # glab mr create 没有描述文件参数, 只能内联 --description (Windows 命令行上限约 32K)
     desc_file = None
     try:
-        with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False,
-                                         encoding="utf-8") as tf:
-            tf.write(description)
-            desc_file = tf.name
         if cli == "glab":
             cmd = ["glab", "mr", "create", "--title", title,
                    "--description", description,
                    "--target-branch", target, "--yes"]
         else:  # gh
+            with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False,
+                                             encoding="utf-8") as tf:
+                tf.write(description)
+                desc_file = tf.name
             cmd = ["gh", "pr", "create", "--title", title,
                    "--body-file", desc_file, "--base", target]
         sys.stderr.write(f"[create-mr] 提交: {cli} ...\n")
-        r = subprocess.run(cmd, text=True)
+        try:
+            r = subprocess.run(cmd, text=True)
+        except OSError as exc:
+            # 例如 Windows 上描述过长触发 WinError 206; 返回非 0 让调用方走手工/浏览器回退
+            sys.stderr.write(f"[create-mr] 无法执行 {cli} (描述可能超出命令行长度上限): {exc}\n")
+            return 1
         return r.returncode
     finally:
         if desc_file:
@@ -1112,6 +1177,57 @@ def validate_submitted_cli_description(cli: str, args) -> int:
     return 0
 
 
+def default_target_branch() -> str:
+    """远端默认分支 (origin/HEAD), 取不到时回退 master。"""
+    try:
+        r = subprocess.run(
+            ["git", "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+            capture_output=True, text=True, check=False,
+        )
+    except OSError:
+        return "master"
+    ref = (r.stdout or "").strip() if r.returncode == 0 else ""
+    if ref.startswith("origin/") and len(ref) > len("origin/"):
+        return ref[len("origin/"):]
+    return "master"
+
+
+def edit_description(description: str) -> str | None:
+    """打开编辑器修改描述; 编辑器不可用或非 0 退出时返回 None。"""
+    default_editor = "notepad" if os.name == "nt" else "vi"
+    editor = os.environ.get("EDITOR") or default_editor
+    try:
+        # 支持 EDITOR="code --wait" 这类带参数的写法
+        editor_cmd = shlex.split(editor, posix=(os.name != "nt"))
+    except ValueError as exc:
+        sys.stderr.write(f"[create-mr] EDITOR 解析失败: {exc}\n")
+        return None
+    if not editor_cmd:
+        editor_cmd = [default_editor]
+    resolved = shutil.which(editor_cmd[0])
+    if resolved:
+        editor_cmd[0] = resolved
+    with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False,
+                                     encoding="utf-8") as tf:
+        tf.write(description)
+        path = tf.name
+    try:
+        subprocess.run([*editor_cmd, path], check=True)
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        sys.stderr.write(
+            f"[create-mr] 编辑器 {editor!r} 执行失败: {exc}; 请设置 EDITOR (如 \"code --wait\") 后重试。\n"
+        )
+        return None
+    finally:
+        # 即使编辑器崩溃或被强制终止，也要清理临时文件
+        try:
+            os.unlink(path)
+        except OSError:
+            pass  # 文件可能已被编辑器删除或无权限
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="自动生成并提交 MR")
     ap.add_argument("--why", help="## 背景: 为什么做这个变更 (AI 从任务上下文提取)")
@@ -1122,7 +1238,8 @@ def main() -> int:
     ap.add_argument("--excludes", help="## 不包含的内容")
     ap.add_argument("--link", action="append", help="## 关联项, 可多次 (Issue/REQ-xxx)")
     ap.add_argument("--title", help="MR 标题 (默认取最新 commit subject)")
-    ap.add_argument("--target-branch", default="master", help="目标分支")
+    ap.add_argument("--target-branch", default=None,
+                    help="目标分支 (默认取 origin/HEAD 指向的远端默认分支, 取不到时用 master)")
     ap.add_argument("--config", help="governance.config.yml 路径")
     ap.add_argument("--evidence", default=EVIDENCE_PATH, help="测试证据文件")
     ap.add_argument("--meta-style", choices=["details", "section", "comment"],
@@ -1171,6 +1288,8 @@ def main() -> int:
     ap.add_argument("--preflight-test-command",
                     help="创建 MR 前运行的测试命令；默认读取 create_mr.preflight_test_command")
     args = ap.parse_args()
+    if not args.target_branch:
+        args.target_branch = default_target_branch()
 
     if args.gitlab_preflight:
         return gitlab_api_preflight(args)
@@ -1225,26 +1344,22 @@ def main() -> int:
     title = infer_title(args, args.target_branch)
 
     if args.interactive:
-        editor = os.environ.get("EDITOR", "vi")
-        with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False,
-                                         encoding="utf-8") as tf:
-            tf.write(description)
-            path = tf.name
-        try:
-            subprocess.run([editor, path], check=True)
-            with open(path, encoding="utf-8") as f:
-                description = f.read()
-        finally:
-            # 即使编辑器崩溃或被强制终止，也要清理临时文件
-            try:
-                os.unlink(path)
-            except OSError:
-                pass  # 文件可能已被编辑器删除或无权限
+        edited = edit_description(description)
+        if edited is None:
+            return 1
+        description = edited
 
     if not args.dry_run:
         rc = run_local_preflight(description, args, cfg)
         if rc != 0:
             return rc
+
+    if args.prepare and args.dry_run:
+        # dry-run 跳过了本地校验, 不能落盘成看起来已校验的绑定清单
+        print(f"# [DRY-RUN] 未写入 MR 描述清单: {args.manifest_path}")
+        print(f"# 标题: {title}\n# 目标分支: {args.target_branch}\n")
+        print(description)
+        return 0
 
     if args.prepare:
         try:
@@ -1274,6 +1389,23 @@ def main() -> int:
     return _submit_with_fallback(title, description, args)
 
 
+def print_github_manual_fallback(title: str, description: str, args) -> int:
+    """gh 提交失败时给出 GitHub 专属的手工创建指引 (不输出 GitLab 预填页)。"""
+    sys.stderr.write("[create-mr] gh submit failed; 请手工创建 GitHub PR。\n")
+    sys.stderr.write(
+        f"[create-mr] 可将下方正文保存为文件后运行: gh pr create --base {args.target_branch} "
+        "--title \"<标题>\" --body-file <文件>，或在 GitHub 网页粘贴正文。\n"
+    )
+    sys.stderr.write("[create-mr] 如果 PR 已存在，请用 gh pr edit --body-file 更新描述。\n")
+    sys.stderr.write(
+        "[create-mr] 复制来源: .agentgate/mr-description.md 的正文；"
+        "不要复制第一行 agentgate-pr-bind 注释。\n\n"
+    )
+    print(f"Title: {title}\n")
+    print(description)
+    return 1
+
+
 def _submit_with_fallback(title: str, description: str, args) -> int:
     """Submit an MR, then fall back to a prefilled GitLab browser page."""
     if getattr(args, "gitlab_api", False):
@@ -1291,16 +1423,10 @@ def _submit_with_fallback(title: str, description: str, args) -> int:
         getattr(args, "gitlab_token", None)
         or _gitlab_token_from_env()
     )
-    gitlab_url = (
-        getattr(args, "gitlab_url", None)
-        or os.environ.get("AGENTGATE_GITLAB_URL")
-        or os.environ.get("CI_SERVER_URL")
-    )
-    project_id = (
-        getattr(args, "gitlab_project_id", None)
-        or os.environ.get("AGENTGATE_GITLAB_PROJECT_ID")
-        or os.environ.get("CI_PROJECT_ID")
-    )
+    # 与 _require_gitlab_api_args 同一来源 (参数 > 环境变量 > config create_mr 块)
+    cfg_create_mr = _create_mr_config(args)
+    gitlab_url = _gitlab_url_setting(args, cfg_create_mr)
+    project_id = _gitlab_project_setting(args, cfg_create_mr)
     if token and gitlab_url and project_id:
         sys.stderr.write("[create-mr] Detected GitLab API credentials; submitting via API.\n")
         rc = submit_gitlab_api(title, description, args.target_branch, args)
@@ -1318,6 +1444,8 @@ def _submit_with_fallback(title: str, description: str, args) -> int:
         rc = submit_mr(title, description, args.target_branch, cli)
         if rc == 0:
             return validate_submitted_cli_description(cli, args)
+        if cli == "gh":
+            return print_github_manual_fallback(title, description, args)
         return open_gitlab_mr_fallback(
             title,
             description,

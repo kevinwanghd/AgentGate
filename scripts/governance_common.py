@@ -110,16 +110,17 @@ def repository_state() -> str:
             ["git", "rev-parse", "HEAD"], check=True, capture_output=True, text=True,
             encoding="utf-8", errors="replace",
         ).stdout.strip()
+        # quotepath=off + -z: 非 ASCII 文件名不被转义, 否则读不到文件, 内容变化不影响状态指纹
         changed = subprocess.run(
-            ["git", "diff", "HEAD", "--name-only", "--no-ext-diff", "--"],
+            ["git", "-c", "core.quotepath=off", "diff", "HEAD", "--name-only", "-z", "--no-ext-diff", "--"],
             check=True, capture_output=True, text=True,
             encoding="utf-8", errors="replace",
-        ).stdout.splitlines()
+        ).stdout.split("\0")
         untracked = subprocess.run(
-            ["git", "ls-files", "--others", "--exclude-standard"],
+            ["git", "-c", "core.quotepath=off", "ls-files", "-z", "--others", "--exclude-standard"],
             check=True, capture_output=True, text=True,
             encoding="utf-8", errors="replace",
-        ).stdout.splitlines()
+        ).stdout.split("\0")
     except (FileNotFoundError, subprocess.CalledProcessError) as exc:
         raise RuntimeError("无法计算测试证据对应的 Git 状态") from exc
 
@@ -128,7 +129,7 @@ def repository_state() -> str:
     session_prefixes = (".governance/", ".governance\\")
     relevant = {
         name for name in changed + untracked
-        if not name.startswith(session_prefixes)
+        if name and not name.startswith(session_prefixes)
     }
     for name in sorted(relevant):
         digest.update(b"\0")

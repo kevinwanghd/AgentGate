@@ -35,7 +35,7 @@ patterns:
 
   # 4. SQL 注入 (sqflite)
   - type: sql-injection
-    regex: 'rawQuery\s*\([^)]*\$\{|\\.rawInsert\s*\([^)]*\$\{|\\.rawUpdate\s*\([^)]*\$\{'
+    regex: 'rawQuery\s*\([^)]*\$\{|\.rawInsert\s*\([^)]*\$\{|\.rawUpdate\s*\([^)]*\$\{'
     desc: "SQL 语句拼接存在注入风险，应使用参数化查询"
     exts: [".dart"]
     mode: block
