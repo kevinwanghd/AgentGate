@@ -41,7 +41,13 @@ THRESHOLDS = {
     "rejection_rate": {"green": 0.3, "yellow": 0.5},      # Lower is better
     "obsolescence_rate": {"green": 0.3, "yellow": 0.5},   # Lower is better
     "duplicate_fingerprint_rate": {"green": 0.1, "yellow": 0.2},  # Lower is better
+    "rule_hit_rate": {"green": 0.7, "yellow": 0.5},       # Higher is better
 }
+
+# 状态生命周期: pending -> confirmed/rejected; confirmed 晋升为 hard lesson 后 -> promoted。
+# promoted 是确认的最终形态, 「确认类」指标必须计入, 否则晋升越多确认率反而越低。
+CONFIRMED_STATUSES = ("confirmed", "promoted")
+REVIEWED_STATUSES = ("confirmed", "rejected", "promoted")
 
 
 def load_pending_files(root: Path) -> list[dict]:
@@ -73,14 +79,12 @@ def aggregate_by_fingerprint(pending_files: list[dict]) -> dict[str, list[dict]]
 
 
 def calculate_confirmation_rate(pending_files: list[dict]) -> float | str:
-    """Calculate confirmation rate: confirmed / (confirmed + rejected + pending)."""
+    """Calculate confirmation rate: (confirmed + promoted) / total."""
     total = len(pending_files)
     if total == 0:
         return "N/A"
 
-    confirmed = sum(1 for p in pending_files if p.get("status") == "confirmed")
-    # For confirmation rate, we consider all non-rejected as potentially confirmable
-    # Or just confirmed / total
+    confirmed = sum(1 for p in pending_files if p.get("status") in CONFIRMED_STATUSES)
     return round(confirmed / total, 4)
 
 
@@ -96,12 +100,12 @@ def calculate_rejection_rate(pending_files: list[dict]) -> float | str:
 
 def calculate_obsolescence_rate(pending_files: list[dict]) -> float | str:
     """
-    Calculate obsolescence rate: rejected / (confirmed + rejected).
+    Calculate obsolescence rate: rejected / (confirmed + promoted + rejected).
     
     This is the废弃率 as specified in the requirements.
     When denominator is zero, returns "N/A".
     """
-    confirmed = sum(1 for p in pending_files if p.get("status") == "confirmed")
+    confirmed = sum(1 for p in pending_files if p.get("status") in CONFIRMED_STATUSES)
     rejected = sum(1 for p in pending_files if p.get("status") == "rejected")
 
     denominator = confirmed + rejected
@@ -129,7 +133,7 @@ def calculate_rule_hit_rate(pending_files: list[dict]) -> float | str:
     if total == 0:
         return "N/A"
 
-    reviewed = sum(1 for p in pending_files if p.get("status") in ("confirmed", "rejected"))
+    reviewed = sum(1 for p in pending_files if p.get("status") in REVIEWED_STATUSES)
     return round(reviewed / total, 4)
 
 
@@ -144,7 +148,7 @@ def calculate_review_latency(pending_files: list[dict]) -> float | str:
     latencies = []
 
     for p in pending_files:
-        if p.get("status") not in ("confirmed", "rejected"):
+        if p.get("status") not in REVIEWED_STATUSES:
             continue
 
         detected = p.get("detected_at", "")

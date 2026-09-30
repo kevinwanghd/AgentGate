@@ -1527,8 +1527,9 @@ class EvidenceBundleTests(unittest.TestCase):
         self.assertEqual("merge-sha", plan["merge_sha"])
         self.assertTrue(plan["policy_digest"].startswith("sha256:"))
         self.assertTrue(plan["profile_digest"].startswith("sha256:"))
+        # profile 不再用 gitleaks 覆盖 secret-scan (CI 统一由 scan_secrets.py 产出)
         self.assertEqual(
-            ["dart-format", "flutter-analyze", "flutter-test", "secret-scan"],
+            ["dart-format", "flutter-analyze", "flutter-test"],
             [item["id"] for item in plan["checks"]],
         )
 

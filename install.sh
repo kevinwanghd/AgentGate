@@ -253,7 +253,11 @@ _detect_gitlab_project_id() {
     "${gitlab_url}/api/v4/projects?search=${repo_name}&per_page=10" 2>/dev/null || true)"
   [[ -z "$result" ]] && return
   remote_path="$(git -C "${TARGET_DIR}" remote get-url origin 2>/dev/null | sed 's|.*://[^/]*/||;s|\.git$||' || true)"
-  printf '%s' "$result" | python3 -c \
+  # Windows Git Bash 常只有 python: 与 enable-local.sh 保持同一优先级
+  local py
+  py="$(command -v python || command -v python3 || true)"
+  [[ -z "$py" ]] && return
+  printf '%s' "$result" | "$py" -c \
     "import sys,json; d=json.load(sys.stdin); r=sys.argv[1].lower(); [print(p['id']) or exit() for p in d if p.get('path_with_namespace','').lower()==r]" \
     "$remote_path" 2>/dev/null || true
 }
@@ -756,7 +760,7 @@ cat <<EOF
   2. 把 governance/ci-snippet.yml include 进 .gitlab-ci.yml:
        include:
          - local: '/governance/ci-snippet.yml'
-  3. 验证脚本可用 (需 python3 + pyyaml + git):
+  3. 验证脚本可用 (需 python(或 python3) + pyyaml + git):
        bash governance/scripts/selftest.sh
   4. 阅读规范: docs/governance/mr-spec.md
   5. v1 软模式将在 ${SOFT_DEADLINE} 到期, 届时未填字段会阻断合并。

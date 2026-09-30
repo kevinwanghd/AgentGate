@@ -71,6 +71,21 @@ else
 fi
 echo ""
 
+# ==================== 前置检查: 版本号一致 (仅 AgentGate 仓库自身) ====================
+if [[ -f "${REPO_ROOT}/install.sh" && -f "${REPO_ROOT}/pyproject.toml" ]]; then
+  echo "== 版本号一致性检查 =="
+  SH_VER="$(sed -n 's/^VERSION="v\{0,1\}\([^"]*\)"$/\1/p' "${REPO_ROOT}/install.sh" | head -1)"
+  PY_VER="$(sed -n 's/^version = "\([^"]*\)"$/\1/p' "${REPO_ROOT}/pyproject.toml" | head -1)"
+  if [[ -n "$SH_VER" && "$SH_VER" == "$PY_VER" ]]; then
+    echo "  ✓ install.sh 与 pyproject.toml 版本一致 ($PY_VER)"
+    PASS=$((PASS+1))
+  else
+    echo "  ✗ 版本不一致: install.sh=$SH_VER pyproject.toml=$PY_VER"
+    FAIL=$((FAIL+1))
+  fi
+  echo ""
+fi
+
 # ==================== 前置检查: lessons 必须有可执行硬约束 ====================
 echo "== Lessons 硬约束检查 =="
 VALIDATE_LESSONS="${SCRIPT_DIR}/validate_lessons.py"
