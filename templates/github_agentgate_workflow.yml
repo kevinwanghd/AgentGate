@@ -4,8 +4,10 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, edited]
 
+# auto-merge 任务需要 contents: write（enablePullRequestAutoMerge）；
+# 可复用工作流的 GITHUB_TOKEN 权限不得超过 caller 此处声明的上限
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
   checks: write
 
