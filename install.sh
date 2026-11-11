@@ -89,6 +89,12 @@ SOURCE_BASE="${GOVERNANCE_SOURCE:-}"
 VERSION="v1.3.0"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 
+# GitHub thin 模式: 门禁脚本由中央仓库在 CI 运行时 checkout, 本地不复制 governance/scripts。
+IS_GITHUB_THIN="false"
+if [[ "$PLATFORM" == "github" && "$MODE" == "thin" ]]; then
+  IS_GITHUB_THIN="true"
+fi
+
 # 90 天 soft_deadline 默认值
 SOFT_DEADLINE="$(date -u -d "+90 days" +%Y-%m-%d 2>/dev/null || date -u -v+90d +%Y-%m-%d)"
 
@@ -253,16 +259,22 @@ _detect_gitlab_project_id() {
     "$remote_path" 2>/dev/null || true
 }
 
-DETECTED_GITLAB_URL="$(_detect_gitlab_url || true)"
-DETECTED_PROJECT_ID="$(_detect_gitlab_project_id "${DETECTED_GITLAB_URL}" || true)"
-
-if [[ -n "$DETECTED_GITLAB_URL" && -n "$DETECTED_PROJECT_ID" ]]; then
-  ok "自动探测到 GitLab: ${DETECTED_GITLAB_URL}，project id: ${DETECTED_PROJECT_ID}"
-elif [[ -n "$DETECTED_GITLAB_URL" ]]; then
-  warn "探测到 GitLab URL: ${DETECTED_GITLAB_URL}，但无法自动查 project id（缺少 AGENTGATE_GITLAB_TOKEN）"
-  warn "安装完成后请在 governance.config.yml 中手动填写 create_mr.gitlab_project_id"
+if [[ "$IS_GITHUB_THIN" == "true" ]]; then
+  DETECTED_GITLAB_URL=""
+  DETECTED_PROJECT_ID=""
+  log "GitHub thin 模式: 跳过 GitLab 探测（PR 走 gh，不使用 create_mr）"
 else
-  warn "无法自动探测 GitLab URL，安装完成后请手动填写 governance.config.yml 的 create_mr 块"
+  DETECTED_GITLAB_URL="$(_detect_gitlab_url || true)"
+  DETECTED_PROJECT_ID="$(_detect_gitlab_project_id "${DETECTED_GITLAB_URL}" || true)"
+
+  if [[ -n "$DETECTED_GITLAB_URL" && -n "$DETECTED_PROJECT_ID" ]]; then
+    ok "自动探测到 GitLab: ${DETECTED_GITLAB_URL}，project id: ${DETECTED_PROJECT_ID}"
+  elif [[ -n "$DETECTED_GITLAB_URL" ]]; then
+    warn "探测到 GitLab URL: ${DETECTED_GITLAB_URL}，但无法自动查 project id（缺少 AGENTGATE_GITLAB_TOKEN）"
+    warn "安装完成后请在 governance.config.yml 中手动填写 create_mr.gitlab_project_id"
+  else
+    warn "无法自动探测 GitLab URL，安装完成后请手动填写 governance.config.yml 的 create_mr 块"
+  fi
 fi
 
 # ---------- 自动检测 SOURCE_DIR ----------
@@ -350,8 +362,14 @@ case "$AGENTS" in
 esac
 
 # Claude Code / Kiro
+# GitHub thin 模式下本仓库没有 governance/scripts/*.py, 使用平台准确的指令模板,
+# 避免把 GitLab MR 流程和不存在的本地脚本写进业务仓库。
+CLAUDE_INSTRUCTIONS_SOURCE="agent-instructions/CLAUDE.md"
+if [[ "$IS_GITHUB_THIN" == "true" ]]; then
+  CLAUDE_INSTRUCTIONS_SOURCE="agent-instructions/CLAUDE-github-thin.md"
+fi
 if [[ "$AGENTS" == "all" || "$AGENTS" == "claude" ]]; then
-  append_governance_section "CLAUDE.md" "agent-instructions/CLAUDE.md"
+  append_governance_section "CLAUDE.md" "$CLAUDE_INSTRUCTIONS_SOURCE"
 fi
 
 # GitHub Copilot
@@ -377,10 +395,45 @@ fi
 # ---------- 3. governance.config.yml ----------
 log "生成 governance.config.yml"
 CONFIG_PATH="${TARGET_DIR}/governance.config.yml"
+
+# GitHub thin 不写 GitLab 专属配置块 (create_mr / GitLab CI 镜像), 避免误导 agent 走 GitLab 流程。
+if [[ "$IS_GITHUB_THIN" == "true" ]]; then
+  CI_CONFIG_BLOCK='# GitHub thin 模式由 GitHub Actions 默认 runner 执行, 不使用 GitLab CI 镜像变量。'
+  CREATE_MR_CONFIG_BLOCK='# GitHub thin 模式使用 gh pr create 创建 PR, 不需要 GitLab create_mr 配置。'
+  DELIVERHQ_BACKGROUND_COMMENT='  # 从需求文档自动读取"背景"，AI 无需手传 --why'
+else
+  DELIVERHQ_BACKGROUND_COMMENT='  # create_mr.py 据此从需求文档自动读"背景", AI 无需手传 --why'
+  CI_CONFIG_BLOCK="$(cat <<EOF2
+ci:
+  image_policy: ${CI_IMAGE_POLICY}
+  # AgentGate 生成的 GitLab job 不主动拉公网镜像；所有镜像必须来自内部预构建镜像或 CI 变量。
+  images:
+    python: "${CI_PY_IMAGE}"
+    go: "${CI_GO_IMAGE}"
+    flutter: "${CI_FLUTTER_IMAGE}"
+    python_test: "${CI_PYTHON_TEST_IMAGE}"
+    node: "${CI_NODE_IMAGE}"
+    java: "${CI_JAVA_IMAGE}"
+    dotnet: "${CI_DOTNET_IMAGE}"
+    rust: "${CI_RUST_IMAGE}"
+EOF2
+)"
+  CREATE_MR_CONFIG_BLOCK="$(cat <<EOF2
+create_mr:
+  gitlab_url: "${DETECTED_GITLAB_URL}"
+  gitlab_project_id: "${DETECTED_PROJECT_ID}"
+  # AI agent 创建 MR 时直连 GitLab API，不依赖 glab/gh CLI
+  # 个人 token 放本机环境变量 AGENTGATE_GITLAB_TOKEN（不要提交进仓库）
+EOF2
+)"
+fi
+
 if [[ -e "$CONFIG_PATH" ]]; then
   warn "governance.config.yml 已存在, 跳过生成 (如需重置, 先手动删除)"
   # 若已存在但缺少 create_mr 块，自动追加（不覆盖用户已有配置）
-  if ! grep -q "^create_mr:" "$CONFIG_PATH"; then
+  if [[ "$IS_GITHUB_THIN" == "true" ]]; then
+    log "GitHub thin 模式: 不在已有 governance.config.yml 追加 create_mr 块"
+  elif ! grep -q "^create_mr:" "$CONFIG_PATH"; then
     if [[ -n "$DETECTED_GITLAB_URL" && -n "$DETECTED_PROJECT_ID" ]]; then
       cat >> "$CONFIG_PATH" <<CEOF
 
@@ -470,18 +523,7 @@ large_change:
     - "migrations/**"
     - "*.proto"
 
-ci:
-  image_policy: ${CI_IMAGE_POLICY}
-  # AgentGate 生成的 GitLab job 不主动拉公网镜像；所有镜像必须来自内部预构建镜像或 CI 变量。
-  images:
-    python: "${CI_PY_IMAGE}"
-    go: "${CI_GO_IMAGE}"
-    flutter: "${CI_FLUTTER_IMAGE}"
-    python_test: "${CI_PYTHON_TEST_IMAGE}"
-    node: "${CI_NODE_IMAGE}"
-    java: "${CI_JAVA_IMAGE}"
-    dotnet: "${CI_DOTNET_IMAGE}"
-    rust: "${CI_RUST_IMAGE}"
+${CI_CONFIG_BLOCK}
 
 auto_merge:
   enabled: true
@@ -582,7 +624,7 @@ deliverhq_integration:
     - "docs/requirements/"
     - "DeliverHQ/change-requests/"
   evidence_summary: "DeliverHQ/evidence-summary.json"
-  # create_mr.py 据此从需求文档自动读"背景", AI 无需手传 --why
+${DELIVERHQ_BACKGROUND_COMMENT}
   requirement_doc_patterns:
     - "requirement.md"
     - "spec.md"
@@ -594,11 +636,7 @@ deliverhq_integration:
     - "需求描述"
     - "目标"
 
-create_mr:
-  gitlab_url: "${DETECTED_GITLAB_URL}"
-  gitlab_project_id: "${DETECTED_PROJECT_ID}"
-  # AI agent 创建 MR 时直连 GitLab API，不依赖 glab/gh CLI
-  # 个人 token 放本机环境变量 AGENTGATE_GITLAB_TOKEN（不要提交进仓库）
+${CREATE_MR_CONFIG_BLOCK}
 EOF
   ok "写入 governance.config.yml"
 fi
@@ -610,6 +648,9 @@ if [[ "$PLATFORM" == "github" && "$MODE" == "thin" ]]; then
         -e "s#__AGENTGATE_REPO__#${AGENTGATE_REPO}#g" \
         -e "s#__AGENTGATE_REF__#${AGENTGATE_REF}#g" \
     | write_file ".github/workflows/agentgate.yml"
+
+  # thin 模式不复制 scripts, 但 lessons 目录仍需存在, 供 AI 指令和后续 lessons 积累使用。
+  create_repository_lessons_file
 
   cat <<EOF
 
@@ -623,12 +664,16 @@ Installed files:
   docs/governance/mr-spec.md
   docs/governance/risk-types.md
   governance.config.yml
+  governance/lessons/repository.yml
+  AI agent instructions (按 --agents 选择; GitHub thin 专用模板)
 
 This repository now calls:
   ${AGENTGATE_REPO}/.github/workflows/agentgate.yml@${AGENTGATE_REF}
 
 AgentGate scripts are not copied into this repository. Updating ${AGENTGATE_REF}
 in the central AgentGate repository updates all GitHub repositories that call it.
+
+Create pull requests with 'gh pr create'; GitLab MR flow does not apply here.
 
 GitLab repositories are not affected by this GitHub thin entrypoint.
 
