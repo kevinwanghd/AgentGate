@@ -3461,6 +3461,110 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
         self.assertIn("internal-only", installer)
 
 
+class GitHubThinInstallerInstructionTests(unittest.TestCase):
+    """GitHub thin 安装必须给出 GitHub 准确的 AI 指令和 config, 不照搬 GitLab 流程。"""
+
+    @staticmethod
+    def _bash() -> str:
+        bash = os.environ.get("AGENTGATE_BASH")
+        git_bash = Path(r"C:\Program Files\Git\bin\bash.exe")
+        if not bash and git_bash.exists():
+            bash = str(git_bash)
+        return bash or shutil.which("bash") or ""
+
+    def _install(self, target: Path, *args: str) -> None:
+        bash = self._bash()
+        if not bash:
+            self.skipTest("bash is required for install.sh integration coverage")
+        subprocess.run(
+            [bash, "-l", (ROOT / "install.sh").as_posix(), target.as_posix(), *args],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+
+    def test_github_thin_install_uses_github_instructions_and_config(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            self._install(
+                target,
+                "--platform", "github",
+                "--mode", "thin",
+                "--agents", "claude",
+                "--agentgate-repo", "kevinwanghd/AgentGate",
+                "--agentgate-ref", "github-stable",
+            )
+
+            instructions = (target / "CLAUDE.md").read_text(encoding="utf-8")
+            self.assertIn("GitHub thin 模式", instructions)
+            self.assertIn("gh pr create", instructions)
+            self.assertIn(
+                "kevinwanghd/AgentGate/.github/workflows/agentgate.yml@github-stable",
+                instructions,
+            )
+            for gate_job in ("risk-scan", "secret-scan", "mr-validate", "test-check", "gate-decision"):
+                self.assertIn(gate_job, instructions)
+            self.assertIn("AI-Usage", instructions)
+            self.assertIn("不要", instructions)
+            self.assertIn("create_mr.py", instructions)  # 仅以"不要用"的反面提示出现
+            # thin 不存在本地脚本/GitLab MR 流程, 指令不能要求调用它们。
+            for forbidden in (
+                "python governance/scripts/",
+                "AGENTGATE_GITLAB_TOKEN",
+                "record_test_run.py",
+                ".gitlab/merge_request_templates/",
+            ):
+                self.assertNotIn(forbidden, instructions)
+            self.assertNotIn("python governance/scripts/create_mr.py", instructions)
+            self.assertNotIn("python governance/scripts/agentgate.py", instructions)
+
+            config = (target / "governance.config.yml").read_text(encoding="utf-8")
+            self.assertIn("auto_merge:", config)
+            self.assertIn("required_checks:", config)
+            self.assertNotIn("create_mr:", config)
+            self.assertNotIn("gitlab_url", config)
+            self.assertNotIn("myhuaweicloud", config)
+            self.assertNotIn("ci:\n  image_policy", config)
+
+            lessons = (target / "governance" / "lessons" / "repository.yml").read_text(encoding="utf-8")
+            self.assertIn("scope: repository", lessons)
+            self.assertFalse((target / "governance" / "scripts").exists())
+
+            workflow = (target / ".github" / "workflows" / "agentgate.yml").read_text(encoding="utf-8")
+            self.assertIn("kevinwanghd/AgentGate/.github/workflows/agentgate.yml@github-stable", workflow)
+
+    def test_github_thin_does_not_append_create_mr_to_existing_config(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            (target / "governance.config.yml").write_text(
+                "version: v1\nmetadata:\n  enforcement: hard\n",
+                encoding="utf-8",
+            )
+            self._install(
+                target,
+                "--platform", "github",
+                "--mode", "thin",
+                "--agents", "none",
+            )
+            config = (target / "governance.config.yml").read_text(encoding="utf-8")
+            self.assertNotIn("create_mr:", config)
+            self.assertNotIn("gitlab_url", config)
+            self.assertTrue((target / "governance" / "lessons" / "repository.yml").exists())
+
+    def test_gitlab_install_still_uses_gitlab_instructions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            self._install(target, "--agents", "claude")
+            instructions = (target / "CLAUDE.md").read_text(encoding="utf-8")
+            config = (target / "governance.config.yml").read_text(encoding="utf-8")
+            self.assertIn("create_mr.py", instructions)
+            self.assertIn("AGENTGATE_GITLAB_TOKEN", instructions)
+            self.assertIn("create_mr:", config)
+            self.assertIn("gitlab_url", config)
+
+
 class CheckTestedLogicInversionTests(unittest.TestCase):
     """G1: accept_tested_trailer=false 不应凭"碰了测试文件"无条件豁免生产代码。"""
 
