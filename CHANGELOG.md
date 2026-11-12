@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+### Fixed
+
+- **auto-merge 静默失效（GitHub 已知行为）** — gate-decision 带 `if: always()` 时，下游 job `if` 里的 `needs.*.outputs` 在依赖完成**前**求值（恒为空），auto-merge 从 gate 引入 `always()` 起从未真正触发过（诊断 PR 实测复现）。`governance.yml`/`agentgate.yml` 的 auto-merge 改为 `if` 只判静态条件（draft/fork/inputs），GateResult 判定移入 step 内（env + shell 检查）；并新增硬 lesson + validate_lessons/pytest 双重回归防线，禁止任何 job `if` 引用 `always()` 依赖的 outputs。
+
 - **`check_test_removal`/`pending_writer` 的裸 `+++` 前缀过滤** — 内容以 `--`/`++` 开头的行曾被误排除/漏计，统一改为精确文件头匹配（与 #88 的 scan_risks/scan_secrets 修复同一模式）。
 - **`pending_writer` 使用已废弃的 `datetime.utcnow()`** — 改为 timezone-aware 的 `datetime.now(timezone.utc)`。
 - **默认 preflight 测试命令失效** — 补 `tests/__init__.py`，`python -m unittest tests.test_regressions...` 可正常导入（此前 create_mr 默认预检在本地必失败，需 pytest 覆盖）。

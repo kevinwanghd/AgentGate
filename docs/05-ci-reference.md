@@ -167,7 +167,7 @@
    - 文件里有合法 `// risk:untested reason:"..." owner:@ reviewed:` 注解
 3. **硬规则**：测试记录里有失败用例（`Tested: fail`）→ 任何模式下都拒合，注解也豁免不了。
 
-**痕迹从哪来**：开发时用 `record_test_run.py` 包装测试命令，结果记到 `.governance/test-evidence.jsonl`（gitignore）。CI 看不到这个文件，所以提交 hook 把结果汇总成 commit 的 `Tested:` trailer，CI 读 trailer（该 job 设 `GIT_DEPTH: "1000"`）。
+**痕迹从哪来**：开发时用 `record_test_run.py` 包装测试命令，结果记到 `.governance/test-evidence.jsonl`（gitignore）。CI 里的语言测试 job（python-test / dotnet-test 等）同样用 `record_test_run.py` 包装测试并把该文件作为 artifact 传给 test-check——**这是 CI 判定的主路径，不依赖 trailer**。commit 的 `Tested:` trailer 只是开发侧声明：**默认不接受**（`accept_tested_trailer: false`，install.sh 生成值与代码内默认一致——trailer 是 commit message 自由文本，伪造成本一行）；确需信任 trailer 的仓库须在 `governance.config.yml` 显式写 `testing.accept_tested_trailer: true`。
 
 ```bash
 # 开发时跑测试留痕
