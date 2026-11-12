@@ -307,6 +307,41 @@ def check_audit_evidence_semantics_covers_field(root: Path, errors: list[str]) -
         )
 
 
+def check_audit_needs_outputs_not_in_job_if(root: Path, errors: list[str]) -> None:
+    """job if 里不能引用 needs.*.outputs: always() 依赖完成前求值恒为空 (auto-merge 静默失效)。"""
+    import yaml as _yaml
+
+    for rel in (".github/workflows/governance.yml", ".github/workflows/agentgate.yml"):
+        path = root / rel
+        if not path.exists():
+            continue
+        try:
+            data = _yaml.safe_load(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            _fail(errors, f"audit_2026_11.needs_outputs_not_in_job_if: {rel} 无法解析: {exc}")
+            continue
+        jobs = data.get("jobs") or {}
+        # always() 依赖 job 完成前, 下游 if 里的 needs outputs 恒为空
+        always_jobs = {
+            jid for jid, job in jobs.items()
+            if isinstance(job, dict) and "always(" in str(job.get("if") or "")
+        }
+        import re as _re
+
+        for job_id, job in jobs.items():
+            if not isinstance(job, dict):
+                continue
+            cond = str(job.get("if") or "")
+            if "outputs" in cond and "needs." in cond:
+                for dep in _re.findall(r"needs\.([\w-]+)\.outputs", cond):
+                    if dep in always_jobs:
+                        _fail(
+                            errors,
+                            f"audit_2026_11.needs_outputs_not_in_job_if: {rel} job {job_id} 的 if "
+                            f"引用了 always() 依赖 {dep} 的 outputs (求值时恒为空)",
+                        )
+
+
 LESSON_CHECKS: dict[str, Callable[[Path, list[str]], None]] = {
     "gitlab_legacy.job_timeout_unsupported": check_gitlab_job_timeout_unsupported,
     "gitlab_legacy.modern_schema_unsupported": check_gitlab_modern_schema_unsupported,
@@ -321,6 +356,7 @@ LESSON_CHECKS: dict[str, Callable[[Path, list[str]], None]] = {
     "audit_2026_11.required_checks_cannot_be_path_filtered": check_audit_required_checks_not_path_filtered,
     "audit_2026_11.diff_parser_plus_prefix": check_audit_diff_parser_plus_prefix,
     "audit_2026_11.evidence_semantics_covers_field": check_audit_evidence_semantics_covers_field,
+    "audit_2026_11.needs_outputs_not_in_job_if": check_audit_needs_outputs_not_in_job_if,
 }
 
 
