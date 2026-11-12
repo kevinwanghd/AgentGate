@@ -233,6 +233,43 @@ class PendingWriterDoublePlusSnippetTests(unittest.TestCase):
         self.assertEqual(snippet, "++ counter;")
 
 
+class WorkflowIfOutputsTests(unittest.TestCase):
+    """job if 不能引用 always() 依赖的 outputs (求值时恒为空, auto-merge 曾因此静默失效)。"""
+
+    def _jobs(self, rel: str) -> dict:
+        import yaml
+
+        data = yaml.safe_load((ROOT / rel).read_text(encoding="utf-8"))
+        return data["jobs"]
+
+    def test_no_if_references_always_dependency_outputs(self) -> None:
+        import re
+
+        for rel in (".github/workflows/governance.yml", ".github/workflows/agentgate.yml"):
+            jobs = self._jobs(rel)
+            always_jobs = {
+                jid for jid, job in jobs.items()
+                if "always(" in str(job.get("if") or "")
+            }
+            for jid, job in jobs.items():
+                cond = str(job.get("if") or "")
+                for dep in re.findall(r"needs\.([\w-]+)\.outputs", cond):
+                    self.assertNotIn(
+                        dep, always_jobs,
+                        f"{rel} job {jid} 的 if 引用 always() 依赖 {dep} 的 outputs "
+                        "(求值时恒为空, 参见 lessons/agentgate-audit-2026-11.yml)",
+                    )
+
+    def test_auto_merge_gates_in_step(self) -> None:
+        for rel in (".github/workflows/governance.yml", ".github/workflows/agentgate.yml"):
+            steps = self._jobs(rel)["auto-merge"]["steps"]
+            run_texts = [str(s.get("run") or "") + str(s.get("env") or "") for s in steps]
+            self.assertTrue(
+                any("MERGE_ACTION" in t for t in run_texts),
+                f"{rel} auto-merge 必须在 step 内判定 GateResult",
+            )
+
+
 class MetricsNonMappingRootTests(unittest.TestCase):
     """pending YAML 根节点为列表/标量时曾让整份报表 AttributeError 崩溃。"""
 
