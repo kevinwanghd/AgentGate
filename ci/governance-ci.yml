@@ -32,7 +32,7 @@
 #     2. 镜像存在且标签正确
 #     3. 有拉取权限
 #
-# P1-C: 推荐使用预装了 PyYAML==6.0.3 的镜像, 避免每次 job 启动时 pip install
+# P1-C: 推荐使用预装了 PyYAML==6.0.3 的镜像, 避免每次 job 启动时联网安装依赖
 #   推荐镜像: swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest
 #   (已包含 Python 3.10+ + PyYAML==6.0.3 + git)
 #
@@ -41,10 +41,10 @@
 # CI 优化 (2026-09):
 #   P0-A: 共享 checkout artifact — 统一 git fetch, 避免每个 job 重复拉取
 #   P0-B: shallow fetch — GIT_DEPTH: 1 替代 GIT_DEPTH: 1000, 节省 50~80% fetch 时间
-#   P1-A: Path filter — 按需触发 job, 纯文档 PR 跳过风险/密钥扫描
+#   P1-A: Path filter — 仅 GitHub Actions 工作流实现; GitLab 11.x 模板不启用
 
 stages:
-  - checkout        # 统一拉取 + path filter
+  - checkout        # 统一拉取
   - governance      # 风险/密钥/MR/测试检查 + 语言 job（同 stage 并行）
   - test            # gate-decision（依赖所有 governance job）
   - build
@@ -66,10 +66,9 @@ variables:
   GOVERNANCE_DOTNET_IMAGE: "swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest"
   GOVERNANCE_RUST_IMAGE: "swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest"
 
-# ── P0-A: 统一 Checkout + P1-A: Path Filter ─────────────────────────────────
+# ── P0-A: 统一 Checkout ─────────────────────────────────────────────────────
 #
 # 所有 scan job 复用同一个 git fetch 结果，避免每个 job 独立拉取。
-# path-filter 检测变更文件，决定后续 job 是否需要运行。
 # artifacts 跨 job 传递（同一 pipeline 内有效）。
 governance:checkout:
   stage: checkout
@@ -93,20 +92,12 @@ governance:checkout:
     when: always
   allow_failure: false
 
-# ── P1-A: Path Filter — 检测变更文件，决定后续 job 是否运行 ─────────────────
-# 使用 GitLab rules:changes 按需触发各 job（不在 governance:checkout 后单独成 job，
-# 因为 GitLab 不支持跨 stage 共享 artifact 状态给独立的 filter job——
-# 改为在各 job 的 rules:changes 里直接写条件）
-#
-# 以下 rules:changes 覆盖所有 governance + language job。
-# 逻辑说明:
-#   - YAML 验证: .yml/.yaml 文件变化时触发
-#   - 风险/密钥扫描: 生产代码/配置/脚本变化时触发
-#   - MR 校验: 任何变化都触发
-#   - 测试检查: 测试文件或生产代码变化时触发
-#   - 语言测试: 对应语言源文件变化时触发
-#
-# 注意: rules:changes 在 MR pipeline 中比较的是 source vs target 分支。
+# ── P1-A 说明: GitLab 11.x 模板不启用 Path Filter ───────────────────────────
+# 本模板面向 GitLab 11.x (legacy)。该版本不支持 `rules` 关键字；`only:changes`
+# 在 11.4 仍是 alpha，且只对 push pipeline 生效，无法可靠覆盖 MR pipeline。
+# 因此这里不做 CI 层 path filter：所有 job 保持启动，由脚本按 diff 与项目
+# 标记文件自行判定是否执行。GitHub Actions 工作流已用独立的 path-filter job
+# 实现 P1-A；path filter 失败时应降级为全跑，不能阻断流水线。
 
 # ── 0. Hard lessons: installation and policy invariants ──────────────────────
 governance:lessons-validate:
@@ -130,48 +121,6 @@ governance:risk-scan:
   only:
     - branches
     - merge_requests
-  # P1-A: 仅生产代码变化时运行
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes:
-        - "**/*.py"
-        - "**/*.ts"
-        - "**/*.tsx"
-        - "**/*.js"
-        - "**/*.jsx"
-        - "**/*.go"
-        - "**/*.java"
-        - "**/*.cs"
-        - "**/*.rs"
-        - "**/*.dart"
-        - "**/*.kt"
-        - "**/*.swift"
-        - "**/*.c"
-        - "**/*.cpp"
-        - "**/*.h"
-        - "**/*.scala"
-        - "**/*.rb"
-        - "**/*.php"
-    - if: '$CI_PIPELINE_SOURCE == "push"'
-      changes:
-        - "**/*.py"
-        - "**/*.ts"
-        - "**/*.tsx"
-        - "**/*.js"
-        - "**/*.jsx"
-        - "**/*.go"
-        - "**/*.java"
-        - "**/*.cs"
-        - "**/*.rs"
-        - "**/*.dart"
-        - "**/*.kt"
-        - "**/*.swift"
-        - "**/*.c"
-        - "**/*.cpp"
-        - "**/*.h"
-        - "**/*.scala"
-        - "**/*.rb"
-        - "**/*.php"
   dependencies:
     - governance:checkout
   variables:
@@ -208,62 +157,6 @@ governance:secret-scan:
   only:
     - branches
     - merge_requests
-  # P1-A: 代码 + 配置 + 脚本变化时运行
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes:
-        - "**/*.py"
-        - "**/*.ts"
-        - "**/*.tsx"
-        - "**/*.js"
-        - "**/*.jsx"
-        - "**/*.go"
-        - "**/*.java"
-        - "**/*.cs"
-        - "**/*.rs"
-        - "**/*.dart"
-        - "**/*.yml"
-        - "**/*.yaml"
-        - "**/*.json"
-        - "**/*.toml"
-        - "**/*.xml"
-        - "**/*.sh"
-        - "**/*.bash"
-        - "**/*.ps1"
-        - "**/*.tf"
-        - "**/*.env"
-        - "**/*.ini"
-        - "**/*.conf"
-        - "**/*.config"
-        - "**/*.gradle"
-        - "**/*.properties"
-    - if: '$CI_PIPELINE_SOURCE == "push"'
-      changes:
-        - "**/*.py"
-        - "**/*.ts"
-        - "**/*.tsx"
-        - "**/*.js"
-        - "**/*.jsx"
-        - "**/*.go"
-        - "**/*.java"
-        - "**/*.cs"
-        - "**/*.rs"
-        - "**/*.dart"
-        - "**/*.yml"
-        - "**/*.yaml"
-        - "**/*.json"
-        - "**/*.toml"
-        - "**/*.xml"
-        - "**/*.sh"
-        - "**/*.bash"
-        - "**/*.ps1"
-        - "**/*.tf"
-        - "**/*.env"
-        - "**/*.ini"
-        - "**/*.conf"
-        - "**/*.config"
-        - "**/*.gradle"
-        - "**/*.properties"
   dependencies:
     - governance:checkout
   variables:
@@ -293,11 +186,6 @@ governance:mr-validate:
   image: "$GOVERNANCE_PY_IMAGE"
   only:
     - merge_requests
-  # P1-A: 任何文件变化都触发 MR 校验
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes:
-        - "**/*"
   dependencies:
     - governance:checkout
   variables:
@@ -373,72 +261,6 @@ governance:test-check:
   only:
     - branches
     - merge_requests
-  # P1-A: 测试文件或生产代码变化时触发
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes:
-        - "**/*_test.py"
-        - "**/test_*.py"
-        - "**/*.test.ts"
-        - "**/*.spec.ts"
-        - "**/*.test.js"
-        - "**/*.spec.js"
-        - "**/test_*.go"
-        - "**/*_test.go"
-        - "**/*.test.dart"
-        - "**/*.spec.dart"
-        - "**/*.test.rs"
-        - "**/*.spec.rs"
-        - "**/*.test.java"
-        - "**/*Test.java"
-        - "**/*.test.cs"
-        - "**/*Test.cs"
-        - "**/conftest.py"
-        - "**/pytest.ini"
-        - "**/tox.ini"
-        - "**/setup.cfg"
-        - "**/*.py"
-        - "**/*.ts"
-        - "**/*.tsx"
-        - "**/*.js"
-        - "**/*.jsx"
-        - "**/*.go"
-        - "**/*.java"
-        - "**/*.cs"
-        - "**/*.rs"
-        - "**/*.dart"
-    - if: '$CI_PIPELINE_SOURCE == "push"'
-      changes:
-        - "**/*_test.py"
-        - "**/test_*.py"
-        - "**/*.test.ts"
-        - "**/*.spec.ts"
-        - "**/*.test.js"
-        - "**/*.spec.js"
-        - "**/test_*.go"
-        - "**/*_test.go"
-        - "**/*.test.dart"
-        - "**/*.spec.dart"
-        - "**/*.test.rs"
-        - "**/*.spec.rs"
-        - "**/*.test.java"
-        - "**/*Test.java"
-        - "**/*.test.cs"
-        - "**/*Test.cs"
-        - "**/conftest.py"
-        - "**/pytest.ini"
-        - "**/tox.ini"
-        - "**/setup.cfg"
-        - "**/*.py"
-        - "**/*.ts"
-        - "**/*.tsx"
-        - "**/*.js"
-        - "**/*.jsx"
-        - "**/*.go"
-        - "**/*.java"
-        - "**/*.cs"
-        - "**/*.rs"
-        - "**/*.dart"
   dependencies:
     - governance:checkout
   variables:
@@ -572,14 +394,6 @@ governance:go-test:
   only:
     - branches
     - merge_requests
-  # P1-A: .go 文件变化时触发
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes:
-        - "**/*.go"
-    - if: '$CI_PIPELINE_SOURCE == "push"'
-      changes:
-        - "**/*.go"
   dependencies:
     - governance:checkout
   variables:
@@ -627,16 +441,6 @@ governance:flutter-test:
   only:
     - branches
     - merge_requests
-  # P1-A: .dart 或 .yaml 文件变化时触发
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes:
-        - "**/*.dart"
-        - "**/*.yaml"
-    - if: '$CI_PIPELINE_SOURCE == "push"'
-      changes:
-        - "**/*.dart"
-        - "**/*.yaml"
   dependencies:
     - governance:checkout
   script:
@@ -680,14 +484,6 @@ governance:python-test:
   only:
     - branches
     - merge_requests
-  # P1-A: .py 文件变化时触发
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes:
-        - "**/*.py"
-    - if: '$CI_PIPELINE_SOURCE == "push"'
-      changes:
-        - "**/*.py"
   dependencies:
     - governance:checkout
   variables:
@@ -736,20 +532,6 @@ governance:node-test:
   only:
     - branches
     - merge_requests
-  # P1-A: .js/.ts/.jsx/.tsx 文件变化时触发
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes:
-        - "**/*.js"
-        - "**/*.ts"
-        - "**/*.jsx"
-        - "**/*.tsx"
-    - if: '$CI_PIPELINE_SOURCE == "push"'
-      changes:
-        - "**/*.js"
-        - "**/*.ts"
-        - "**/*.jsx"
-        - "**/*.tsx"
   dependencies:
     - governance:checkout
   script:
@@ -801,16 +583,6 @@ governance:java-test:
   only:
     - branches
     - merge_requests
-  # P1-A: .java 或 .gradle 文件变化时触发
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes:
-        - "**/*.java"
-        - "**/*.gradle"
-    - if: '$CI_PIPELINE_SOURCE == "push"'
-      changes:
-        - "**/*.java"
-        - "**/*.gradle"
   dependencies:
     - governance:checkout
   script:
@@ -866,18 +638,6 @@ governance:dotnet-test:
   only:
     - branches
     - merge_requests
-  # P1-A: .cs/.csproj/.sln 文件变化时触发
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes:
-        - "**/*.cs"
-        - "**/*.csproj"
-        - "**/*.sln"
-    - if: '$CI_PIPELINE_SOURCE == "push"'
-      changes:
-        - "**/*.cs"
-        - "**/*.csproj"
-        - "**/*.sln"
   dependencies:
     - governance:checkout
   script:
@@ -929,16 +689,6 @@ governance:rust-test:
   only:
     - branches
     - merge_requests
-  # P1-A: .rs 或 .toml 文件变化时触发
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes:
-        - "**/*.rs"
-        - "**/*.toml"
-    - if: '$CI_PIPELINE_SOURCE == "push"'
-      changes:
-        - "**/*.rs"
-        - "**/*.toml"
   dependencies:
     - governance:checkout
   script:

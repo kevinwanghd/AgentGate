@@ -20,13 +20,21 @@ if [[ -z "$PYTHON_BIN" ]]; then
     fi
   done
 fi
+# MINGW/MSYS: convert to Win32 path so Python receives a valid path, not /d/...
+if [[ "$MSYSTEM" == "MINGW"* ]] || [[ "$(uname -s)" == MINGW* ]]; then
+  PYTHON_BIN="$(cygpath -w "$PYTHON_BIN" 2>/dev/null)" || true
+  # wpath: MSYS 路径转 Win32 路径；Linux 上原样返回（无 cygpath，不能裸调）
+  wpath() { cygpath -w "$1"; }
+else
+  wpath() { printf '%s' "$1"; }
+fi
 if [[ -z "$PYTHON_BIN" ]]; then
   echo "[selftest] 错误: 找不到可用的 python3 或 python (AGENTGATE_PYTHON 未设置且 PATH 中无 python)" >&2
   echo "[selftest] 提示: 设置 AGENTGATE_PYTHON=/path/to/python 或确保 python 在 PATH 中" >&2
   exit 2
 fi
 python3() { "$PYTHON_BIN" "$@"; }
-BASH_BIN="$(command -v bash)"
+BASH_BIN="$(command -v bash 2>/dev/null || echo bash)"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -97,7 +105,14 @@ git init -q
 git config user.email t@t; git config user.name t
 FALLBACK_PATH="${WORK}/fallback-bin"
 mkdir -p "$FALLBACK_PATH"
-ln -s "$(command -v git)" "${FALLBACK_PATH}/git"
+if [[ "${MSYSTEM:-}" == "MINGW"* ]] || [[ "$(uname -s)" == MINGW* ]]; then
+  # Windows 的 ln -s 会退化成无扩展名的副本，CreateProcess 无法执行；
+  # 直接用 Git 安装目录作为隔离 PATH（该目录不含 gh/glab）。
+  FALLBACK_TEST_PATH="$(dirname "$(command -v git)")"
+else
+  ln -s "$(command -v git)" "${FALLBACK_PATH}/git"
+  FALLBACK_TEST_PATH="$FALLBACK_PATH"
+fi
 
 # 断言: 期望退出码
 expect() {
@@ -592,7 +607,7 @@ expect "mr prepare 成功提示包含同步 MR 描述动作" 0 $rc
     -u CI_SERVER_URL -u CI_PROJECT_ID -u CI_PROJECT_PATH -u GITHUB_SERVER_URL \
     -u GH_TOKEN -u GITHUB_TOKEN \
     -u PRIVATE_TOKEN -u GOVERNANCE_MR_VALIDATE_TOKEN -u GOVERNANCE_MERGE_BOT_TOKEN \
-    PATH="$FALLBACK_PATH" "$PYTHON_BIN" "$CREATE" --why "用户需求:接入支付" \
+    PATH="$FALLBACK_TEST_PATH" "$PYTHON_BIN" "$CREATE" --why "用户需求:接入支付" \
     --target-branch master --skip-risk-scan --skip-tests ) >/tmp/mr_fallback_out.txt 2>&1
 fallback_rc=$?
 grep -q "手工复制 MR 描述" /tmp/mr_fallback_out.txt \
@@ -931,16 +946,36 @@ else
   SA1="$(mktemp -d)"
   (
     cd "$SA1" && git init -q && git config user.email t@t && git config user.name t && git branch -M main
+    echo "init" > seed.txt && git add seed.txt && git commit -qm "init"
+    # 第二个提交才是 diff 起点（scan_risks/secret 用 HEAD~1...HEAD，需要 >= 2 commits）
     echo "# 合规变更" > README.md
     git add README.md && git commit -qm "chore: add readme"
-    # 合规 PR: 含 AI-Usage + 背景 + 变更内容
-    PR_BODY="## 背景\n\n添加 README\n\n## 变更内容\n\n- 新增 README.md\n\nAI-Usage: lightweight\n"
+    # 合规 PR body: 含 AI-Usage + 背景(>20中文) + 变更内容 + 自测确认 + 风险与回滚
+    PR_BODY="## 背景
+
+本次变更在项目中新增 README.md 文档，用于说明项目整体结构与快速启动方式。
+
+## 变更内容
+
+- 新增 README.md，包含项目说明与运行步骤
+
+## 自测确认
+
+已在本地完成功能验证，README.md 语法正确，格式符合 Markdown 规范。
+
+## 风险与回滚
+
+风险极低。回滚方式：git revert 完成提交即可撤销。
+
+AI-Usage: lightweight
+"
     PR_FILE="$(mktemp)"
     printf '%s' "$PR_BODY" > "$PR_FILE"
     # 无风险代码 → risk-scan 通过；无密钥 → secret-scan 通过；合规 body → mr-validate 通过
-    python3 "$SCAN_ALL" \
+    # 脚本路径用绝对路径，避免子 shell cwd 被 MSYS 拼出 D:\d\...
+    python3 "$(wpath "${SCAN_ALL}")" \
       --diff-base "HEAD~1" \
-      --config "${SOURCE_ROOT}/governance.config.yml" \
+      --config "$(wpath "${SOURCE_ROOT}/governance.config.yml")" \
       --pr-body-file "$PR_FILE" \
       >/dev/null 2>&1
   )
@@ -955,9 +990,9 @@ else
     mkdir -p src
     echo 'bool check(string userId){ return userId == "626786582b50ab8ec08b0fa0"; }' > src/Auth.cs
     git add src/Auth.cs && git commit -qm "feat: auth"
-    python3 "$SCAN_ALL" \
+    python3 "$(wpath "${SCAN_ALL}")" \
       --diff-base "HEAD~1" \
-      --config "${SOURCE_ROOT}/governance.config.yml" \
+      --config "$(wpath "${SOURCE_ROOT}/governance.config.yml")" \
       --pr-body-file /dev/null \
       >/dev/null 2>&1
   )
@@ -970,9 +1005,9 @@ else
     echo "x" > seed.txt && git add . && git commit -qm init
     echo "API_KEY=sk-1234567890abcdef" > .env
     git add .env && git commit -qm "chore: add env"
-    python3 "$SCAN_ALL" \
+    python3 "$(wpath "${SCAN_ALL}")" \
       --diff-base "HEAD~1" \
-      --config "${SOURCE_ROOT}/governance.config.yml" \
+      --config "$(wpath "${SOURCE_ROOT}/governance.config.yml")" \
       --pr-body-file /dev/null \
       >/dev/null 2>&1
   )
@@ -987,9 +1022,9 @@ else
     # 空白 PR body → mr-validate 失败（无 AI-Usage）
     PR_FILE="$(mktemp)"
     printf '%s\n' "## 背景" "fix typo" > "$PR_FILE"
-    python3 "$SCAN_ALL" \
+    python3 "$(wpath "${SCAN_ALL}")" \
       --diff-base "HEAD~1" \
-      --config "${SOURCE_ROOT}/governance.config.yml" \
+      --config "$(wpath "${SOURCE_ROOT}/governance.config.yml")" \
       --pr-body-file "$PR_FILE" \
       >/dev/null 2>&1
   )

@@ -21,20 +21,33 @@ import os
 import subprocess
 import sys
 
+from governance_common import host_python, msys_to_host
+
 
 def run(name: str, cmd: list[str], cwd: str | None = None) -> tuple[int, str, str]:
     """运行子命令，返回 (exit_code, stdout, stderr)。"""
+    # 在 MINGW 下将所有看起来像文件路径的参数转为原生路径
+    fixed_cmd: list[str] = []
+    for arg in cmd:
+        # 绝对 MSYS 路径 (/c/... 或 /tmp/...) 需要转换；git ref 如 HEAD~1 不转
+        if isinstance(arg, str) and (arg.startswith("/") and len(arg) > 2 and arg[1] not in (".", "/")):
+            fixed_cmd.append(msys_to_host(arg))
+        else:
+            fixed_cmd.append(arg)
     print(f"\n{'='*60}")
-    print(f"[governance_scan_all] Running: {' '.join(cmd)}")
+    print(f"[governance_scan_all] Running: {' '.join(fixed_cmd)}")
     print(f"{'='*60}")
     try:
         result = subprocess.run(
-            cmd,
+            fixed_cmd,
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
             cwd=cwd,
+            # 子命令不依赖 stdin；不显式关闭会让 validate_mr.py 在
+            # 无 --file 时读父级 stdin，若父级 stdin 是未关闭的管道会挂死。
+            stdin=subprocess.DEVNULL,
         )
         print(result.stdout)
         if result.stderr:
@@ -73,7 +86,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # ── 1. Risk scan ────────────────────────────────────────────────
     risk_cmd = [
-        sys.executable or "python3",
+        host_python(),
         os.path.join(scripts_dir, "scan_risks.py"),
         "--diff-base",
         args.diff_base,
@@ -94,7 +107,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # ── 2. Secret scan ─────────────────────────────────────────────
     secret_cmd = [
-        sys.executable or "python3",
+        host_python(),
         os.path.join(scripts_dir, "scan_secrets.py"),
         "--diff-base",
         args.diff_base,
@@ -113,7 +126,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # ── 3. MR validation ───────────────────────────────────────────
     mr_cmd = [
-        sys.executable or "python3",
+        host_python(),
         os.path.join(scripts_dir, "validate_mr.py"),
         "--diff-base",
         args.diff_base,
@@ -122,11 +135,7 @@ def main(argv: list[str] | None = None) -> int:
     ]
     if args.pr_body_file:
         mr_cmd.extend(["--file", args.pr_body_file])
-    else:
-        # MR validation reads from stdin when no --file is given;
-        # pass an empty file so it doesn't hang waiting for input.
-        mr_cmd.append("--file")
-        mr_cmd.append("/dev/null")
+    # 不传 --file: validate_mr.py 会走 empty-body 逻辑（不报 FileNotFoundError）
 
     rc, stdout, stderr = run("mr-validate", mr_cmd)
     results["mr_validate"] = {

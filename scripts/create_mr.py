@@ -51,7 +51,7 @@ import urllib.parse
 import urllib.request
 import webbrowser
 
-from governance_common import ConfigError, load_config as load_shared_config, repository_state
+from governance_common import ConfigError, host_python, load_config as load_shared_config, repository_state
 
 try:
     import yaml  # type: ignore
@@ -656,7 +656,7 @@ def _script_path(name: str) -> str:
 
 def run_risk_scan(args) -> int:
     cmd = [
-        sys.executable,
+        host_python(),
         _script_path("scan_risks.py"),
         "--diff-base",
         args.target_branch,
@@ -702,7 +702,7 @@ def run_preflight_tests(args, cfg: dict) -> int:
         sys.stderr.write(f"[create-mr] 测试命令解析失败: {exc}\n")
         return 2
     if cmd and cmd[0] in {"python", "python3"}:
-        cmd[0] = sys.executable
+        cmd[0] = host_python()
     rc = subprocess.run(cmd, text=True).returncode
     if rc != 0:
         sys.stderr.write("[create-mr] 本地测试未通过，拒绝创建 MR。请修复后重跑。\n")
