@@ -67,9 +67,13 @@ auto_merge:
     - governance/**
     - CODEOWNERS
     - scripts/scan_risks.py
+    - scripts/scan_secrets.py
     - scripts/check_tested.py
     - scripts/validate_mr.py
     - scripts/gate_decision.py
+    # 共享工具: 篡改它们可间接操纵所有扫描/校验脚本的行为, 须走人工审批
+    - scripts/governance_common.py
+    - scripts/fingerprint.py
   risk_paths:
     low:
       - docs/**

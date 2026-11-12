@@ -168,6 +168,8 @@ governance:mr-validate:
 # ── 4b. 测试绕过检测: 直接跑测试命令不走 record_test_run.py 时拦截 ──────────
 # 扫描 staged diff 中有对应测试的生产文件改动，检查是否有测试执行记录。
 # 若有测试但无记录 -> FAIL（防止 dotnet test / npm test 直接绕过）
+# 注: 本 job 只在 branch pipeline 运行 (only: branches), MR pipeline 走
+# governance:mr-validate; 两者互斥, artifact 同名不会冲突。
 governance:mr-validate-compat:
   stage: governance
   image: "$GOVERNANCE_PY_IMAGE"

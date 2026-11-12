@@ -1,0 +1,45 @@
+version: agentgate.io/lessons/v1
+scope: agentgate-audit-2026-11
+lessons:
+  - id: audit_2026_11.gate_policy_from_target_ref
+    enforcement: hard
+    applies_to:
+      - .github/workflows/**
+      - ci/governance-ci.yml
+      - generated governance CI snippets
+    trigger: gate/scan job reads governance.config.yml (or scripts) from the PR checkout
+    risk: "A PR can rewrite the very policy that judges it (empty protected_paths, critical_approvals: 0) and self-authorize AUTO_MERGE."
+    fix: Gates must load policy via --target-ref from the target branch; POLICY_SHA must resolve from the target ref, never from SOURCE_SHA. Mirrors of the gate (self-hosted and reusable) must stay in sync on this rule.
+    regression: any gate pipeline where policy SHA or --config resolves from the PR head is a critical bypass.
+
+  - id: audit_2026_11.required_checks_cannot_be_path_filtered
+    enforcement: hard
+    applies_to:
+      - .github/workflows/governance.yml
+      - path-filter style change detection
+    trigger: a job listed in required_checks is conditionally skipped by a path filter
+    risk: The skipped job reaches gate-decision as skip/fail and blocks legitimate doc-only PRs, or (if skip were silently passed) weakens the gate; either way the semantics drift.
+    fix: Jobs that are cheap scanners and belong to required_checks (risk-scan, secret-scan, yaml-validate) must run unconditionally; only expensive language/runtime jobs may be path-filtered.
+    regression: required_checks semantics assume every required job produces pass/fail evidence on every PR.
+
+  - id: audit_2026_11.diff_parser_plus_prefix
+    enforcement: hard
+    applies_to:
+      - scripts/scan_risks.py
+      - scripts/scan_secrets.py
+      - any unified-diff line parser
+    trigger: diff content lines are classified by startswith("+++") / not startswith("+++")
+    risk: Content lines starting with ++ or -- (e.g. "++ counter;") masquerade as file headers, dropping or misattributing every following line — a trivially exploitable scanner blind spot.
+    fix: Treat as file header only lines of the exact form +++ a/…, +++ b/…, +++ /dev/null (and --- equivalents). Never filter content lines by a bare "+++" prefix test.
+    regression: parser tests must cover content lines starting with ++ and --.
+
+  - id: audit_2026_11.evidence_semantics_covers_field
+    enforcement: hard
+    applies_to:
+      - scripts/check_job.py
+      - scripts/record_test_run.py
+      - evidence consumers
+    trigger: check_job compares evidence covers entries against test-file candidate paths instead of the production file under review
+    risk: "'covers' records production files covered by a test run; comparing it against test-file candidates always fails, so genuine test runs get blocked and the check teaches people to ignore it."
+    fix: Match covers against the production file under review (plus candidate paths for cmd heuristics); write tests that prove a record_test_run-produced record passes.
+    regression: any change to check_job matching must keep the record_test_run round-trip green.

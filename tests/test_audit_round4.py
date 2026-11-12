@@ -191,6 +191,48 @@ class GateDecisionTargetRefConfigTests(unittest.TestCase):
         self.assertIn("policies/custom.config.yml", calls["cmd"][-1])
 
 
+class ScanIgnoreBlacklistTests(unittest.TestCase):
+    """scan:ignore 的 reason 命中黑名单/语义不足时豁免必须无效。"""
+
+    def _cfg(self) -> dict:
+        return scan_risks.DEFAULT_CONFIG
+
+    def test_blacklisted_reason_is_invalid(self) -> None:
+        m = scan_risks._SCAN_IGNORE_RE.search('x(); // scan:ignore reason:"临时方案先这样凑合用"')
+        assert m is not None
+        self.assertTrue(scan_risks._scan_ignore_invalid(m, self._cfg()["risk_annotations"]["reason_blacklist"]))
+
+    def test_meaningful_reason_is_valid(self) -> None:
+        m = scan_risks._SCAN_IGNORE_RE.search('x(); // scan:ignore reason:"业务确认该分支为白名单路径"')
+        assert m is not None
+        self.assertFalse(scan_risks._scan_ignore_invalid(m, self._cfg()["risk_annotations"]["reason_blacklist"]))
+
+
+class AcceptTestedTrailerDefaultTests(unittest.TestCase):
+    """代码内默认值必须是 false (与 install.sh 一致), trailer 不能默认免检。"""
+
+    def test_default_config_rejects_trailer(self) -> None:
+        import check_tested
+
+        self.assertFalse(check_tested.DEFAULT_CONFIG["testing"]["accept_tested_trailer"])
+
+
+class PendingWriterDoublePlusSnippetTests(unittest.TestCase):
+    """hunk 内以 ++ 开头的内容行不能被裸 +++ 前缀漏掉。"""
+
+    def test_double_plus_line_in_snippet(self) -> None:
+        diff = (
+            "diff --git a/src/calc.cpp b/src/calc.cpp\n"
+            "--- a/src/calc.cpp\n"
+            "+++ b/src/calc.cpp\n"
+            "@@ -1,0 +1,2 @@\n"
+            "+++ counter;\n"
+            "+y = 2;\n"
+        )
+        snippet = pending_writer._extract_snippet(diff, "src/calc.cpp", 1)
+        self.assertEqual(snippet, "++ counter;")
+
+
 class MetricsNonMappingRootTests(unittest.TestCase):
     """pending YAML 根节点为列表/标量时曾让整份报表 AttributeError 崩溃。"""
 

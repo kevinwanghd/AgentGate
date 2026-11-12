@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`Tested: pass` trailer 默认不再免检** — `check_tested` 代码内默认 `accept_tested_trailer` 由 `true` 改为 `false`（与 install.sh 生成值对齐）。trailer 是 commit message 自由文本、伪造成本一行，此前配置缺失时兜底值可被 agent 自助免检；需要信任 trailer 的仓库须显式 `accept_tested_trailer: true`。
+- **`scan:ignore` 豁免加约束** — reason 现在与 `risk:` 注解同标准：命中 `reason_blacklist`（临时/先这样/TODO 等）或语义不足的豁免无效，防止 agent 批量自助豁免风险命中。
+- **protected_paths 扩围** — `scripts/governance_common.py`、`scripts/scan_secrets.py`、`scripts/fingerprint.py` 纳入保护（篡改它们可间接操纵所有扫描/校验行为，须走人工审批）。
+- **审计发现沉淀为 lessons** — 新增 `lessons/agentgate-audit-2026-11.yml` 四条硬 lesson（目标分支策略、必查 job 不可 path-filter、diff 解析器 `++` 前缀、evidence covers 语义），各配可执行检查（validate_lessons 15 条全绿）。
+
+### Fixed
+
+- **`check_test_removal`/`pending_writer` 的裸 `+++` 前缀过滤** — 内容以 `--`/`++` 开头的行曾被误排除/漏计，统一改为精确文件头匹配（与 #88 的 scan_risks/scan_secrets 修复同一模式）。
+- **`pending_writer` 使用已废弃的 `datetime.utcnow()`** — 改为 timezone-aware 的 `datetime.now(timezone.utc)`。
+- **默认 preflight 测试命令失效** — 补 `tests/__init__.py`，`python -m unittest tests.test_regressions...` 可正常导入（此前 create_mr 默认预检在本地必失败，需 pytest 覆盖）。
+- **`.gitignore` 补 `uv.lock`** — 本地 uv 运行产物不再污染 git status。
+- **`governance:mr-validate-compat` 注释澄清** — 说明其 `only: branches` 是有意设计（branch pipeline 专用），与 mr-validate 互斥、artifact 不冲突。
+
 - **自举门禁 `governance.yml` 策略改从目标分支读取** — 此前 `POLICY_SHA` 取自 PR head 且 `--config` 读 PR 工作区，PR 可清空 `protected_paths`/降低 `critical_approvals` 自授权 `AUTO_MERGE`；现与 `agentgate.yml`/GitLab 一致走 `--target-ref`（目标分支无配置时用内置默认值）。
 - **`governance.yml` 补工作流级最小权限与按 PR `concurrency`** — 无覆盖 job（含在 PR 代码上执行脚本的 scan/selftest）只拿只读 token；同 PR 新推送取消旧运行，旧判定不能再为新提交开启自动合并。
 - **`risk-scan`/`secret-scan`/`yaml-validate` 在 `governance.yml` 无条件运行** — 属必查项，path-filter 跳过会被 gate 按 missing/skip 阻断纯文档 PR；扫描开销极小。
