@@ -21,7 +21,7 @@ if [[ -z "$PYTHON_BIN" ]]; then
   done
 fi
 # MINGW/MSYS: convert to Win32 path so Python receives a valid path, not /d/...
-if [[ "$MSYSTEM" == "MINGW"* ]] || [[ "$(uname -s)" == MINGW* ]]; then
+if [[ "${MSYSTEM:-}" == "MINGW"* ]] || [[ "$(uname -s)" == MINGW* ]]; then
   PYTHON_BIN="$(cygpath -w "$PYTHON_BIN" 2>/dev/null)" || true
   # wpath: MSYS 路径转 Win32 路径；Linux 上原样返回（无 cygpath，不能裸调）
   wpath() { cygpath -w "$1"; }
