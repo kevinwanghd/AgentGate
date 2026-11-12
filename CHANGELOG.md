@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **诊断**（临时）: auto-merge output 传递问题排查。
+
+### Changed
+
 - **`Tested: pass` trailer 默认不再免检** — `check_tested` 代码内默认 `accept_tested_trailer` 由 `true` 改为 `false`（与 install.sh 生成值对齐）。trailer 是 commit message 自由文本、伪造成本一行，此前配置缺失时兜底值可被 agent 自助免检；需要信任 trailer 的仓库须显式 `accept_tested_trailer: true`。
 - **`scan:ignore` 豁免加约束** — reason 现在与 `risk:` 注解同标准：命中 `reason_blacklist`（临时/先这样/TODO 等）或语义不足的豁免无效，防止 agent 批量自助豁免风险命中。
 - **protected_paths 扩围** — `scripts/governance_common.py`、`scripts/scan_secrets.py`、`scripts/fingerprint.py` 纳入保护（篡改它们可间接操纵所有扫描/校验行为，须走人工审批）。
