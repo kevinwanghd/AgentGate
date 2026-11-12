@@ -69,12 +69,14 @@ class AggregatedFingerprint:
             self.pattern_type = data.get("pattern_type")
 
         # Track the most recent review decision
-        reviewed_at = data.get("reviewed_at", "")
+        # lessons_review 把审核信息写在 review.* 下; 顶层字段为旧格式兼容
+        review = data.get("review") or {}
+        reviewed_at = review.get("reviewed_at") or data.get("reviewed_at", "")
         if reviewed_at:
             if self.latest_reviewed_at is None or reviewed_at > self.latest_reviewed_at:
                 self.latest_reviewed_at = reviewed_at
                 self.latest_decision = data.get("status")
-                self.latest_reviewer = data.get("reviewer")
+                self.latest_reviewer = review.get("reviewer") or data.get("reviewer")
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON output."""
@@ -109,7 +111,8 @@ def load_pending_files(roots: list[Path]) -> list[tuple[Path, dict]]:
         for file in pending.glob("*.yml"):
             try:
                 data = yaml.safe_load(file.read_text(encoding="utf-8")) if yaml else {}
-                if data:
+                # 根节点非 mapping (如列表/标量) 的坏文件跳过, 不能让聚合崩溃
+                if isinstance(data, dict) and data:
                     results.append((file, data))
             except Exception:
                 continue
@@ -135,20 +138,8 @@ def aggregate_dicts_by_fingerprint(pending_dicts: list[dict]) -> dict[str, Aggre
 
 
 def aggregate_by_fingerprint(pending_files: list[tuple[Path, dict]]) -> dict[str, AggregatedFingerprint]:
-    """Aggregate pending files by fingerprint."""
-    aggregations: dict[str, AggregatedFingerprint] = {}
-
-    for file, data in pending_files:
-        fp = data.get("fingerprint", "")
-        if not fp:
-            continue
-
-        if fp not in aggregations:
-            aggregations[fp] = AggregatedFingerprint(fp)
-
-        aggregations[fp].add(data)
-
-    return aggregations
+    """Aggregate pending files by fingerprint (路径仅用于展示, 聚合逻辑见 dicts 版)。"""
+    return aggregate_dicts_by_fingerprint([data for _, data in pending_files])
 
 
 def filter_by_status(
@@ -200,7 +191,8 @@ def resolve_conflicts(
     conflicts = []
 
     for fp, agg in aggregations.items():
-        statuses = set(e.get("status") for e in agg.pending_entries)
+        # status 缺失/None 的记录归一为 "pending", 避免 sorted() 混排 str 和 None 崩溃
+        statuses = set(e.get("status") or "pending" for e in agg.pending_entries)
 
         if len(statuses) > 1:
             conflict = {

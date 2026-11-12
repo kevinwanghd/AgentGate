@@ -14,7 +14,17 @@ import unicodedata
 
 # Version for fingerprint normalization algorithm
 # Bump this when normalization logic changes to invalidate old fingerprints
-FINGERPRINT_VERSION = "v1"
+FINGERPRINT_VERSION = "v2"  # v2: 保留关键字与占位符, 避免不同结构的代码撞指纹
+
+# 关键字决定代码结构, 不能当作变量名归一化 (比较时忽略大小写, 覆盖 SQL)
+_KEYWORDS = frozenset("""
+    if else elif for foreach while do switch case default break continue return
+    try catch except finally throw throws raise defer go panic recover
+    new delete def func function class struct interface async await yield lambda
+    import from as with using
+    select insert update where and or not in is null none nil true false
+""".split())
+_PLACEHOLDERS = frozenset({"STR", "NUM", "VAR"})
 
 
 def normalize_code_for_fingerprint(code: str) -> str:
@@ -52,7 +62,14 @@ def normalize_code_for_fingerprint(code: str) -> str:
     # Step 5: Replace common variable name patterns
     # Replace common variable naming patterns (camelCase, snake_case, PascalCase)
     # These are likely to differ between implementations
-    normalized = re.sub(r'\b[a-z][a-z0-9_]*\b', '<VAR>', normalized, flags=re.IGNORECASE)
+    # 关键字和已替换的 <STR>/<NUM> 占位符保持原样
+    def _identifier(match: re.Match[str]) -> str:
+        word = match.group(0)
+        if word in _PLACEHOLDERS or word.lower() in _KEYWORDS:
+            return word
+        return "<VAR>"
+
+    normalized = re.sub(r'\b[A-Za-z_]\w*\b', _identifier, normalized)
 
     # Step 6: Collapse multiple spaces
     normalized = re.sub(r'\s+', ' ', normalized)

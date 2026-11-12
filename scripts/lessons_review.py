@@ -1,444 +1,647 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3  # risk:untested reason:"CLI 审核工具，无直接业务逻辑路径" owner:@kevinwanghd reviewed:2026-08-31
 """
-lessons_review.py — Pending lessons review workflow
+lessons_review.py — Pending Lessons Review 工具
 
-Implements the review flow for pending candidate governance rules:
-- list: Show pending lessons with aggregation
-- review: Interactive review of a specific pending lesson
-- confirm: Mark as confirmed candidate
-- reject: Mark as rejected with reason
-- apply: Promote to patterns/ or lessons/
+管理 pending lessons 的审核流程：列出、审核、确认、拒绝、应用。
 
-Usage:
+用法:
     python scripts/lessons_review.py list
-    python scripts/lessons_review.py review <id>
-    python scripts/lessons_review.py confirm <id> --classification pattern --enforcement soft
-    python scripts/lessons_review.py reject <id> --reason "Not a governance issue"
-    python scripts/lessons_review.py apply <id> --to patterns/python.yml
+    python scripts/lessons_review.py review <fingerprint>
+    python scripts/lessons_review.py confirm <fingerprint> --classification <type> [--target <path>]
+    python scripts/lessons_review.py reject <fingerprint> --reason "<reason>"
+    python scripts/lessons_review.py apply [--dry-run]
+    python scripts/lessons_review.py stats
+
+状态流转:
+    pending → confirmed → promoted
+                ↓
+              rejected
 """
 from __future__ import annotations
 
 import argparse
 import datetime as dt
-import re
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Optional
 
 try:
-    import yaml
-except ImportError:
-    sys.stderr.write("[lessons-review] missing pyyaml; install pyyaml\n")
-    sys.exit(1)
+    import yaml  # type: ignore
+except ImportError:  # pragma: no cover
+    yaml = None
 
-# Add scripts dir to path for imports
-sys.path.insert(0, str(Path(__file__).parent))
-import fingerprint as fp_module
-
-
-PENDING_DIR = Path(".governance/pending-lessons")
-PATTERNS_DIR = Path("patterns")
-LESSONS_DIR = Path("lessons")
-
-
-# Classification options
-CLASSIFICATIONS = ("pattern", "process", "none")
-
-# Enforcement options
-ENFORCEMENTS = ("soft", "hard")
+PENDING_DIR = Path(__file__).parent.parent / ".governance" / "pending-lessons"
+STATUSES = {"pending", "confirmed", "rejected", "promoted"}
+CLASSIFICATIONS = {"code-pattern", "process-lesson"}
+ENFORCEMENTS = {"hard", "soft"}
+# pending lessons 统一为 YAML (见 .governance/pending-lessons/SCHEMA.md)
+PENDING_GLOBS = ("*.yml", "*.yaml")
+LANGUAGE_BY_EXT = {
+    ".py": "python", ".go": "go", ".cs": "csharp", ".java": "java", ".dart": "dart",
+    ".js": "javascript", ".jsx": "javascript", ".ts": "javascript", ".tsx": "javascript",
+}
 
 
-def _load_pending(pending_id: str) -> tuple[Path | None, dict]:
-    """Load pending lesson by ID. Returns (path, data)."""
+def _pending_files() -> list[Path]:
     if not PENDING_DIR.exists():
-        return None, {}
-
-    for file in PENDING_DIR.glob("*.yml"):
-        try:
-            data = yaml.safe_load(file.read_text(encoding="utf-8"))
-            if data and data.get("id") == pending_id:
-                return file, data
-        except Exception:
-            continue
-
-    return None, {}
+        return []
+    return sorted(p for pattern in PENDING_GLOBS for p in PENDING_DIR.glob(pattern))
 
 
-def _load_all_pending() -> list[tuple[Path, dict]]:
-    """Load all pending lessons."""
+def _read_pending(path: Path) -> dict:
+    if yaml is None:
+        raise RuntimeError("PyYAML is required to read pending lessons")
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"{path.name}: pending lesson 根节点必须是 mapping")
+    return data
+
+
+def _context(data: dict) -> dict:
+    """failure_context 的只读视图: 补齐审核/应用需要但 YAML schema 中不直接存储的字段。"""
+    fc = dict(data.get("failure_context") or {})
+    fc.setdefault("code_snippet", fc.get("snippet", ""))
+    fc.setdefault("language", LANGUAGE_BY_EXT.get(Path(str(fc.get("file", ""))).suffix, "unknown"))
+    fc.setdefault("pattern_description", (data.get("evidence") or {}).get("scan_summary", ""))
+    return fc
+
+
+def _load_all_pending() -> list[tuple[dict, Path]]:
+    """读取全部可解析的 pending 文件, 损坏文件跳过。"""
     results = []
-    if not PENDING_DIR.exists():
-        return results
-
-    for file in PENDING_DIR.glob("*.yml"):
+    for path in _pending_files():
         try:
-            data = yaml.safe_load(file.read_text(encoding="utf-8"))
-            if data:
-                results.append((file, data))
-        except Exception:
-            continue
-
-    return sorted(results, key=lambda x: x[1].get("detected_at", ""))
+            results.append((_read_pending(path), path))
+        except (OSError, ValueError, yaml.YAMLError):
+            pass
+    return results
 
 
-def _now_iso() -> str:
-    """Return current UTC time in ISO 8601 format."""
-    return dt.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+def _load_pending(fingerprint_or_id: str) -> tuple[Optional[dict], Optional[Path]]:
+    """按 fingerprint 或 id 查找 pending 文件; 命中多条时报错, 避免误审核。"""
+    entries = _load_all_pending()
+
+    # 先匹配 id 后缀, 再模糊匹配 fingerprint
+    for match in (
+        lambda d: d.get("id", "").endswith(fingerprint_or_id),
+        lambda d: fingerprint_or_id in d.get("fingerprint", ""),
+    ):
+        hits = [(d, p) for d, p in entries if match(d)]
+        if len(hits) == 1:
+            return hits[0]
+        if len(hits) > 1:
+            names = ", ".join(p.name for _, p in hits)
+            sys.stderr.write(
+                f"[lessons-review] '{fingerprint_or_id}' 匹配到多条 ({names}), 请提供更长的 fingerprint/id\n"
+            )
+            return None, None
+
+    return None, None
+
+
+def _save_pending(data: dict, path: Path) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False, default_flow_style=False)
 
 
 def cmd_list(args: argparse.Namespace) -> int:
-    """List pending lessons with aggregation by fingerprint."""
-    all_pending = _load_all_pending()
-
-    if not all_pending:
-        print("[lessons-review] no pending lessons found")
+    """列出所有 pending lessons。"""
+    if not PENDING_DIR.exists():
+        print("[lessons-review] pending lessons 目录不存在")
         return 0
 
-    # Group by fingerprint for aggregation
-    by_fingerprint: dict[str, list[tuple[Path, dict]]] = {}
-    for path, data in all_pending:
-        fp = data.get("fingerprint", "")
-        if fp not in by_fingerprint:
-            by_fingerprint[fp] = []
-        by_fingerprint[fp].append((path, data))
+    files = sorted(_pending_files(), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not files:
+        print("[lessons-review] 暂无 pending lessons")
+        return 0
 
-    print(f"[lessons-review] pending lessons: {len(all_pending)}")
-    print(f"[lessons-review] unique fingerprints: {len(by_fingerprint)}\n")
+    # 统计
+    stats = {"pending": 0, "confirmed": 0, "rejected": 0, "promoted": 0}
+    for path in files:
+        try:
+            data = _read_pending(path)
+            status = data.get("status", "pending")
+            if status not in STATUSES:
+                sys.stderr.write(f"[lessons-review] {path.name}: 未知 status '{status}'\n")
+                continue
+            stats[status] += 1
+        except Exception:
+            stats["pending"] += 1
 
-    for fp, entries in sorted(by_fingerprint.items(), key=lambda x: x[1][0][1].get("detected_at", "")):
-        first = entries[0][1]
-        status = first.get("status", "pending")
-        pattern_type = first.get("pattern_type", "unknown")
-        repos = list(set(e[1].get("source_repo", "") for e in entries))
-        count = len(entries)
+    print(f"=== Pending Lessons ({len(files)} 条) ===")
+    print(f"  pending: {stats['pending']} | confirmed: {stats['confirmed']} | "
+          f"rejected: {stats['rejected']} | promoted: {stats['promoted']}\n")
 
-        print(f"Fingerprint: {fp}")
-        print(f"  Pattern Type: {pattern_type}")
-        print(f"  Status: {status}")
-        print(f"  Occurrences: {count} (repos: {', '.join(repos)})")
-        print(f"  Last Detected: {first.get('detected_at', 'unknown')}")
-        print(f"  Sample File: {first.get('failure_context', {}).get('file', 'N/A')}")
-        print(f"  Sample Snippet: {first.get('failure_context', {}).get('snippet', 'N/A')[:80]}")
+    for i, path in enumerate(files, 1):
+        try:
+            data = _read_pending(path)
+        except Exception:
+            print(f"[{i}] {path.name} - 读取失败")
+            continue
 
-        # Show all IDs in this fingerprint group
-        ids = [e[1].get("id", "")[:8] for e in entries]
-        print(f"  IDs: {', '.join(ids)}")
+        fp = data.get("fingerprint", "?")[:8]
+        status = data.get("status", "pending")
+        pattern = data.get("pattern_type", "?")
+        file_path = _context(data).get("file", "?")
+        line = _context(data).get("line", "?")
+        repo = data.get("source_repo", "?")
+        detected = data.get("detected_at", "?")[:10]
+        occ = data.get("occurrence_count", 1)
+
+        status_icon = {"pending": "⏳", "confirmed": "✅", "rejected": "❌", "promoted": "🚀"}.get(status, "?")
+        print(f"[{i}] {status_icon} {fp} | {pattern}")
+        print(f"    文件: {file_path}:{line}")
+        print(f"    来源: {repo} ({detected})")
+        print(f"    命中: {occ} 次")
+        if status != "pending":
+            review = data.get("review", {})
+            reviewer = review.get("reviewer", "?")
+            decision = review.get("decision", "?")
+            print(f"    审核: {reviewer} → {decision}")
+            if status == "rejected":
+                print(f"    原因: {review.get('reason', '')}")
         print()
 
     return 0
 
 
 def cmd_review(args: argparse.Namespace) -> int:
-    """Review a specific pending lesson by ID."""
-    path, data = _load_pending(args.id)
-
-    if not path or not data:
-        print(f"[lessons-review] pending lesson '{args.id}' not found")
+    """交互式审核单个 pending lesson。"""
+    data, path = _load_pending(args.fingerprint)
+    if data is None:
+        sys.stderr.write(f"[lessons-review] 找不到 fingerprint/id: {args.fingerprint}\n")
         return 1
 
-    print("=" * 60)
-    print("PENDING LESSON REVIEW")
-    print("=" * 60)
+    print(f"\n=== Pending Lesson Review ===")
     print(f"ID: {data.get('id')}")
-    print(f"Pattern Type: {data.get('pattern_type')}")
-    print(f"Status: {data.get('status')}")
     print(f"Fingerprint: {data.get('fingerprint')}")
-    print(f"Source Repo: {data.get('source_repo')}")
-    print(f"Source Ref: {data.get('source_ref')}")
-    print(f"Detected At: {data.get('detected_at')}")
+    print(f"状态: {data.get('status')}")
+    print(f"风险类型: {data.get('pattern_type')}")
+    print(f"来源: {data.get('source_repo')} @ {data.get('source_ref')}")
+    print(f"发现时间: {data.get('detected_at')}")
+    print(f"发现次数: {data.get('occurrence_count', 1)}")
+    print()
+    print(f"--- 失败上下文 ---")
+    fc = _context(data)
+    print(f"文件: {fc.get('file')} (line {fc.get('line')})")
+    print(f"语言: {fc.get('language')}")
+    print(f"代码片段:")
+    for line in (fc.get("code_snippet", "") or "").splitlines():
+        print(f"  {line}")
+    print(f"模式描述: {fc.get('pattern_description')}")
+    print()
+    print(f"--- 回归建议 ---")
+    print(f"  {data.get('regression')}")
+    print()
 
-    fc = data.get("failure_context", {})
-    print(f"\nFailure Context:")
-    print(f"  File: {fc.get('file')}")
-    print(f"  Line: {fc.get('line')}")
-    print(f"  Snippet: {fc.get('snippet')}")
-    print(f"  Diff Baseline: {fc.get('diff_baseline')}")
+    if data.get("status") != "pending":
+        print("--- 审核记录 ---")
+        review = data.get("review", {})
+        print(f"审核人: {review.get('reviewer')}")
+        print(f"审核时间: {review.get('reviewed_at')}")
+        print(f"决策: {review.get('decision')}")
+        if review.get("reason"):
+            print(f"原因: {review.get('reason')}")
+        if review.get("classification"):
+            print(f"分类: {review.get('classification')}")
+        if review.get("target_path"):
+            print(f"目标路径: {review.get('target_path')}")
+        print()
+        return 0
 
-    ev = data.get("evidence", {})
-    print(f"\nEvidence:")
-    print(f"  Rule ID: {ev.get('rule_id')}")
-    print(f"  Scan Summary: {ev.get('scan_summary')}")
-    print(f"  Raw Diff: {ev.get('raw_diff_fragment', '')[:200]}...")
+    print("--- 操作 ---")
+    print("  [c]onfirm  确认有效")
+    print("  [r]eject   拒绝（误报）")
+    print("  [q]uit     退出")
+    choice = input("选择操作: ").strip().lower()
 
-    print(f"\nRegression: {data.get('regression')}")
+    if choice == "q":
+        return 0
+    elif choice == "c":
+        print("\n分类:")
+        print("  [1] code-pattern (可正则化的代码风险)")
+        print("  [2] process-lesson (流程教训)")
+        cls_choice = input("选择分类 [1/2]: ").strip()
+        classification = "code-pattern" if cls_choice == "1" else "process-lesson"
 
-    if data.get("reviewer"):
-        print(f"\nReview Info:")
-        print(f"  Reviewer: {data.get('reviewer')}")
-        print(f"  Reviewed At: {data.get('reviewed_at')}")
-        print(f"  Decision Reason: {data.get('decision_reason')}")
-        print(f"  Classification: {data.get('classification')}")
-        print(f"  Enforcement: {data.get('enforcement')}")
+        print("\nenforcement:")
+        print("  [1] soft (推荐，自动生成内容默认 soft)")
+        print("  [2] hard (需人工编写可执行检查)")
+        enf_choice = input("选择 enforcement [1/2]: ").strip()
+        enforcement = "soft" if enf_choice == "1" else "hard"
 
-    if data.get("promoted_to"):
-        print(f"  Promoted To: {data.get('promoted_to')}")
+        reviewer = input("审核人: ").strip() or "anonymous"
+        target_path = ""
+        suggested_regex = ""
 
-    print("=" * 60)
-    print(f"\nActions: confirm, reject, apply")
-    return 0
+        if classification == "code-pattern":
+            target_path = input("目标路径 (如 patterns/python.yml): ").strip() or f"patterns/{fc.get('language', 'unknown')}.yml"
+            suggested_regex = input("建议正则 (可选): ").strip()
+        else:
+            target_path = input("目标路径 (如 lessons/process.yml): ").strip() or "lessons/process.yml"
+
+        # 更新 pending
+        data["status"] = "confirmed"
+        data["review"] = {
+            "reviewer": reviewer,
+            "reviewed_at": dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).isoformat(),
+            "decision": "confirmed",
+            "classification": classification,
+            "target_path": target_path,
+            "enforcement": enforcement,
+            "suggested_regex": suggested_regex,
+        }
+        _save_pending(data, path)
+        print(f"\n[lessons-review] 已确认: {path.name}")
+        print(f"  → 分类: {classification}")
+        print(f"  → 目标: {target_path}")
+        print(f"  → enforcement: {enforcement}")
+        return 0
+
+    elif choice == "r":
+        reason = input("拒绝原因: ").strip()
+        if not reason:
+            sys.stderr.write("[lessons-review] 拒绝必须提供原因\n")
+            return 1
+        reviewer = input("审核人: ").strip() or "anonymous"
+
+        data["status"] = "rejected"
+        data["review"] = {
+            "reviewer": reviewer,
+            "reviewed_at": dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).isoformat(),
+            "decision": "rejected",
+            "reason": reason,
+        }
+        _save_pending(data, path)
+        print(f"\n[lessons-review] 已拒绝: {path.name}")
+        print(f"  原因: {reason}")
+        return 0
+
+    else:
+        sys.stderr.write("[lessons-review] 无效选择\n")
+        return 1
 
 
 def cmd_confirm(args: argparse.Namespace) -> int:
-    """Confirm a pending lesson as a candidate rule."""
-    path, data = _load_pending(args.id)
-
-    if not path or not data:
-        print(f"[lessons-review] pending lesson '{args.id}' not found")
+    """非交互式确认 pending lesson。"""
+    data, path = _load_pending(args.fingerprint)
+    if data is None:
+        sys.stderr.write(f"[lessons-review] 找不到 fingerprint/id: {args.fingerprint}\n")
         return 1
 
-    if data.get("status") not in ("pending", "confirmed"):
-        print(f"[lessons-review] cannot confirm - current status is '{data.get('status')}'")
+    if data.get("status") != "pending":
+        sys.stderr.write(f"[lessons-review] 当前状态为 {data.get('status')}，无法确认\n")
         return 1
 
-    # Validate arguments
-    if not args.classification:
-        print("[lessons-review] --classification required (pattern|process|none)")
+    classification = args.classification
+    if classification not in CLASSIFICATIONS:
+        sys.stderr.write(f"[lessons-review] classification 必须是 {CLASSIFICATIONS} 之一\n")
         return 1
 
-    if args.classification not in CLASSIFICATIONS:
-        print(f"[lessons-review] --classification must be one of {CLASSIFICATIONS}")
-        return 1
-
-    enforcement = args.enforcement or "soft"
+    enforcement = getattr(args, "enforcement", "soft")
     if enforcement not in ENFORCEMENTS:
-        print(f"[lessons-review] --enforcement must be one of {ENFORCEMENTS}")
-        return 1
+        enforcement = "soft"
 
-    # For hard enforcement, require owner
-    if enforcement == "hard" and not args.owner:
-        print("[lessons-review] --owner required for hard enforcement")
-        return 1
+    reviewer = getattr(args, "reviewer", None) or "cli"
+    target_path = args.target or ""
 
-    # Update the pending file
+    fc = _context(data)
+    if not target_path:
+        if classification == "code-pattern":
+            target_path = f"patterns/{fc.get('language', 'unknown')}.yml"
+        else:
+            target_path = "lessons/process.yml"
+
     data["status"] = "confirmed"
-    data["reviewer"] = args.reviewer or _get_reviewer_from_git()
-    data["reviewed_at"] = _now_iso()
-    data["decision_reason"] = args.reason or "Confirmed as candidate rule"
-    data["classification"] = args.classification
-    data["enforcement"] = enforcement
-    if args.owner:
-        data["owner"] = args.owner
-
-    _write_pending(path, data)
-
-    print(f"[lessons-review] confirmed: {args.id}")
-    print(f"  Classification: {args.classification}")
-    print(f"  Enforcement: {enforcement}")
-    if args.owner:
-        print(f"  Owner: {args.owner}")
-
+    data["review"] = {
+        "reviewer": reviewer,
+        "reviewed_at": dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).isoformat(),
+        "decision": "confirmed",
+        "classification": classification,
+        "target_path": target_path,
+        "enforcement": enforcement,
+        "suggested_regex": getattr(args, "suggested_regex", "") or "",
+    }
+    _save_pending(data, path)
+    print(f"[lessons-review] 已确认: {path.name}")
+    print(f"  → 分类: {classification}")
+    print(f"  → 目标: {target_path}")
     return 0
 
 
 def cmd_reject(args: argparse.Namespace) -> int:
-    """Reject a pending lesson with reason."""
-    path, data = _load_pending(args.id)
-
-    if not path or not data:
-        print(f"[lessons-review] pending lesson '{args.id}' not found")
+    """非交互式拒绝 pending lesson。"""
+    data, path = _load_pending(args.fingerprint)
+    if data is None:
+        sys.stderr.write(f"[lessons-review] 找不到 fingerprint/id: {args.fingerprint}\n")
         return 1
 
-    if data.get("status") == "rejected":
-        print(f"[lessons-review] already rejected")
-        return 0
+    if data.get("status") != "pending":
+        sys.stderr.write(f"[lessons-review] 当前状态为 {data.get('status')}，无法拒绝\n")
+        return 1
 
     if not args.reason:
-        print("[lessons-review] --reason required for rejection")
+        sys.stderr.write("[lessons-review] 拒绝必须提供 --reason\n")
         return 1
 
-    # Update the pending file
+    reviewer = getattr(args, "reviewer", None) or "cli"
     data["status"] = "rejected"
-    data["reviewer"] = args.reviewer or _get_reviewer_from_git()
-    data["reviewed_at"] = _now_iso()
-    data["decision_reason"] = args.reason
-
-    _write_pending(path, data)
-
-    print(f"[lessons-review] rejected: {args.id}")
-    print(f"  Reason: {args.reason}")
-
+    data["review"] = {
+        "reviewer": reviewer,
+        "reviewed_at": dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).isoformat(),
+        "decision": "rejected",
+        "reason": args.reason,
+    }
+    _save_pending(data, path)
+    print(f"[lessons-review] 已拒绝: {path.name}")
+    print(f"  原因: {args.reason}")
     return 0
 
 
 def cmd_apply(args: argparse.Namespace) -> int:
-    """Apply a confirmed lesson to patterns/ or lessons/."""
-    path, data = _load_pending(args.id)
+    """将 confirmed lessons 应用到 patterns/ 或 lessons/。"""
+    if not PENDING_DIR.exists():
+        print("[lessons-review] pending lessons 目录不存在")
+        return 0
 
-    if not path or not data:
-        print(f"[lessons-review] pending lesson '{args.id}' not found")
-        return 1
+    confirmed = [(d, p) for d, p in _load_all_pending() if d.get("status") == "confirmed"]
 
-    if data.get("status") != "confirmed":
-        print(f"[lessons-review] must be confirmed before apply (current: {data.get('status')})")
-        return 1
+    if not confirmed:
+        print("[lessons-review] 暂无 confirmed lessons 需要应用")
+        return 0
 
-    classification = data.get("classification", "pattern")
-    enforcement = data.get("enforcement", "soft")
+    print(f"[lessons-review] 发现 {len(confirmed)} 条 confirmed lessons待应用\n")
 
-    if classification == "none":
-        print("[lessons-review] classification 'none' cannot be applied")
-        return 1
+    for data, src_path in confirmed:
+        review = data.get("review", {})
+        classification = review.get("classification")
+        target_path_str = review.get("target_path", "")
+        enforcement = review.get("enforcement", "soft")
 
-    # Determine target file
-    if args.to:
-        target = Path(args.to)
-    elif classification == "pattern":
-        # Infer language from file extension in snippet
-        snippet_file = data.get("failure_context", {}).get("file", "")
-        ext = Path(snippet_file).suffix
-        lang_map = {
-            ".py": "python",
-            ".js": "javascript",
-            ".ts": "javascript",
-            ".java": "java",
-            ".go": "go",
-            ".cs": "csharp",
-            ".dart": "dart",
-        }
-        lang = lang_map.get(ext, "python")
-        target = PATTERNS_DIR / f"{lang}.yml"
-    else:
-        target = LESSONS_DIR / f"custom-{data.get('pattern_type', 'rule')}.yml"
+        fc = _context(data)
+        pattern_type = data.get("pattern_type", "")
+        desc = fc.get("pattern_description", "")
+        code_snippet = fc.get("code_snippet", "")
+        language = fc.get("language", "unknown")
+
+        if classification == "code-pattern":
+            # 写入 patterns/
+            target = Path(__file__).parent.parent / target_path_str
+            print(f"  → 应用 code-pattern: {target}")
+            if args.dry_run:
+                print(f"      [dry-run] 跳过实际写入")
+                continue
+
+            # 追加到 patterns yaml 文件
+            _apply_code_pattern(target, pattern_type, desc, code_snippet, language, enforcement, review, data)
+
+        else:
+            # 写入 lessons/
+            target = Path(__file__).parent.parent / target_path_str
+            print(f"  → 应用 process-lesson: {target}")
+            if args.dry_run:
+                print(f"      [dry-run] 跳过实际写入")
+                continue
+
+            _apply_process_lesson(target, pattern_type, desc, enforcement, review, data)
+
+        # 更新状态为 promoted
+        data["status"] = "promoted"
+        data["review"]["applied_at"] = dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).isoformat()
+        _save_pending(data, src_path)
+        print(f"      ✓ 已标记为 promoted: {src_path.name}")
+
+    print(f"\n[lessons-review] 完成")
+    return 0
+
+
+def _apply_code_pattern(
+    target: Path,
+    pattern_type: str,
+    desc: str,
+    code_snippet: str,
+    language: str,
+    enforcement: str,
+    review: dict,
+    data: dict,
+) -> None:
+    """将 code-pattern 应用到 patterns/ yaml 文件。"""
+    try:
+        import yaml
+    except ImportError:
+        sys.stderr.write("[lessons-review] 需要 pyyaml 库来写入 patterns\n")
+        return
 
     target.parent.mkdir(parents=True, exist_ok=True)
 
-    # Create the pattern/lesson entry
-    entry = _create_entry(data)
+    # 读取现有 patterns
+    existing = []
+    if target.exists():
+        try:
+            with open(target, encoding="utf-8") as f:
+                existing = yaml.safe_load(f) or {}
+        except Exception:
+            existing = {}
 
-    # Append to target file
-    _append_to_yaml_file(target, entry)
+    patterns = existing.get("patterns", [])
+    if not isinstance(patterns, list):
+        patterns = []
+        existing["patterns"] = patterns
 
-    # Update pending status
-    data["status"] = "promoted"
-    data["promoted_to"] = str(target)
-    _write_pending(path, data)
+    # 构建新 pattern
+    fp = data.get("fingerprint", "")[:8]
+    new_pattern = {
+        "type": pattern_type,
+        "desc": desc,
+        "regex": review.get("suggested_regex") or f"# TODO: 请补充 regex for {pattern_type}",
+        "mode": "block" if enforcement == "hard" else "warn",
+        "source": f"pending-lessons/{data.get('id')}",
+        "language": language,
+    }
 
-    print(f"[lessons-review] applied: {args.id} -> {target}")
-    print(f"  Enforcement: {enforcement}")
+    patterns.append(new_pattern)
+    existing["patterns"] = patterns
+
+    with open(target, "w", encoding="utf-8") as f:
+        yaml.dump(existing, f, allow_unicode=True, sort_keys=False)
+
+    print(f"      ✓ 已追加到 {target}")
+
+
+def _apply_process_lesson(
+    target: Path,
+    pattern_type: str,
+    desc: str,
+    enforcement: str,
+    review: dict,
+    data: dict,
+) -> None:
+    """将 process-lesson 应用到 lessons/ yaml 文件。"""
+    try:
+        import yaml
+    except ImportError:
+        sys.stderr.write("[lessons-review] 需要 pyyaml 库来写入 lessons\n")
+        return
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    # 读取现有 lessons
+    existing = {}
+    if target.exists():
+        try:
+            with open(target, encoding="utf-8") as f:
+                existing = yaml.safe_load(f) or {}
+        except Exception:
+            existing = {}
+
+    if not existing:
+        existing = {
+            "version": "agentgate.io/lessons/v1",
+            "scope": "agent-instructions",
+            "lessons": [],
+        }
+
+    lessons = existing.get("lessons", [])
+    if not isinstance(lessons, list):
+        lessons = []
+        existing["lessons"] = lessons
+
+    # 构建新 lesson（soft enforcement）
+    fp = data.get("fingerprint", "")[:8]
+    fc = _context(data)
+    new_lesson = {
+        "id": f"governance.{pattern_type.replace('-', '_')}_{fp}",
+        "enforcement": enforcement,
+        "applies_to": [f"**/{Path(fc.get('file', '')).name}"],
+        "trigger": desc,
+        "risk": f"{pattern_type}: {desc}",
+        "fix": data.get("regression", ""),
+        "regression": data.get("regression", ""),
+        "source": f"pending-lessons/{data.get('id')}",
+    }
+
+    lessons.append(new_lesson)
+    existing["lessons"] = lessons
+
+    with open(target, "w", encoding="utf-8") as f:
+        yaml.dump(existing, f, allow_unicode=True, sort_keys=False)
+
+    print(f"      ✓ 已追加到 {target}")
+
+
+def cmd_stats(args: argparse.Namespace) -> int:
+    """显示 pending lessons 统计信息。"""
+    if not PENDING_DIR.exists():
+        print("[lessons-review] pending lessons 目录不存在")
+        return 0
+
+    files = _pending_files()
+    if not files:
+        print("[lessons-review] 暂无 pending lessons")
+        return 0
+
+    stats = {
+        "total": len(files),
+        "pending": 0, "confirmed": 0, "rejected": 0, "promoted": 0,
+        "by_repo": {},
+        "by_type": {},
+        "total_occurrences": 0,
+    }
+
+    for path in files:
+        try:
+            data = _read_pending(path)
+        except Exception:
+            continue
+
+        status = data.get("status", "pending")
+        repo = data.get("source_repo", "unknown")
+        ptype = data.get("pattern_type", "unknown")
+        occ = data.get("occurrence_count", 1)
+
+        if status not in STATUSES:
+            sys.stderr.write(f"[lessons-review] {path.name}: 未知 status '{status}', 已跳过状态统计\n")
+        else:
+            stats[status] += 1
+        stats["total_occurrences"] += occ
+        stats["by_repo"][repo] = stats["by_repo"].get(repo, 0) + 1
+        stats["by_type"][ptype] = stats["by_type"].get(ptype, 0) + 1
+
+    print("=== Pending Lessons 统计 ===")
+    print(f"总数: {stats['total']}")
+    print(f"累计命中: {stats['total_occurrences']}")
+    print()
+    print(f"状态分布:")
+    print(f"  pending:   {stats['pending']:3d}")
+    print(f"  confirmed: {stats['confirmed']:3d}")
+    print(f"  rejected:  {stats['rejected']:3d}")
+    print(f"  promoted:  {stats['promoted']:3d}")
+    print()
+
+    # 废弃率（rejected / (confirmed + rejected)）
+    confirmed = stats["confirmed"] + stats["promoted"]
+    rejected = stats["rejected"]
+    total_decided = confirmed + rejected
+    if total_decided > 0:
+        abandonment_rate = rejected / total_decided
+        print(f"废弃率: {abandonment_rate:.1%} ({rejected}/{total_decided})")
+    else:
+        print(f"废弃率: N/A (暂无审核决策)")
+
+    print()
+    print(f"按仓库:")
+    for repo, count in sorted(stats["by_repo"].items(), key=lambda x: -x[1]):
+        print(f"  {repo}: {count}")
+    print()
+    print(f"按风险类型:")
+    for ptype, count in sorted(stats["by_type"].items(), key=lambda x: -x[1]):
+        print(f"  {ptype}: {count}")
 
     return 0
 
 
-def _create_entry(data: dict) -> dict:
-    """Create a pattern/lesson entry from pending data."""
-    pattern_type = data.get("pattern_type", "unknown")
-    enforcement = data.get("enforcement", "soft")
-
-    if enforcement == "hard":
-        # For hard enforcement, include executable check fields
-        return {
-            "type": pattern_type,
-            "desc": data.get("evidence", {}).get("scan_summary", ""),
-            "regex": _snippet_to_regex(data.get("failure_context", {}).get("snippet", "")),
-            "mode": "block" if enforcement == "hard" else "warn",
-            "owner": data.get("owner", "@agentgate"),
-        }
-    else:
-        return {
-            "type": pattern_type,
-            "desc": data.get("evidence", {}).get("scan_summary", ""),
-            "regex": _snippet_to_regex(data.get("failure_context", {}).get("snippet", "")),
-            "mode": "warn",
-        }
-
-
-def _snippet_to_regex(snippet: str) -> str:
-    """Convert a code snippet to a regex pattern (simplified)."""
-    if not snippet:
-        return ".*"
-
-    # Simple normalization: escape special regex chars
-    escaped = re.escape(snippet)
-    # Collapse whitespace
-    escaped = re.sub(r'\\ +', r'\\s+', escaped)
-    return escaped
-
-
-def _write_pending(path: Path, data: dict) -> None:
-    """Write pending lesson to file."""
-    with open(path, "w", encoding="utf-8") as f:
-        yaml.safe_dump(
-            data,
-            f,
-            default_flow_style=False,
-            allow_unicode=True,
-            sort_keys=False,
-        )
-
-
-def _append_to_yaml_file(path: Path, entry: dict) -> None:
-    """Append entry to a YAML file, creating if necessary."""
-    if path.exists():
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        if "patterns" not in data:
-            data["patterns"] = []
-        data["patterns"].append(entry)
-    else:
-        # Create new file with header
-        data = {
-            "# Auto-generated from pending lessons" if "patterns" in path.name else "# Custom lessons": "",
-            "patterns" if "patterns" in path.name else "lessons": [entry],
-        }
-
-    with open(path, "w", encoding="utf-8") as f:
-        yaml.safe_dump(data, f, default_flow_style=False, allow_unicode=True)
-
-
-def _get_reviewer_from_git() -> str:
-    """Get the current git user as reviewer."""
-    import subprocess
-
-    try:
-        result = subprocess.run(
-            ["git", "config", "user.name"],
-            check=True,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-        )
-        return result.stdout.strip() or "unknown"
-    except Exception:
-        return "unknown"
-
-
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Pending lessons review workflow")
-    subparsers = parser.add_subparsers(dest="command", help="commands")
+    parser = argparse.ArgumentParser(description="Pending Lessons Review 工具")
+    subparsers = parser.add_subparsers(dest="command", help="子命令")
 
-    # list command
-    subparsers.add_parser("list", help="List pending lessons with aggregation")
+    # list
+    subparsers.add_parser("list", help="列出所有 pending lessons")
 
-    # review command
-    review_parser = subparsers.add_parser("review", help="Review a specific pending lesson")
-    review_parser.add_argument("id", help="Pending lesson ID (or fingerprint)")
+    # review
+    review_parser = subparsers.add_parser("review", help="交互式审核 pending lesson")
+    review_parser.add_argument("fingerprint", help="fingerprint 或 id")
 
-    # confirm command
-    confirm_parser = subparsers.add_parser("confirm", help="Confirm a pending lesson")
-    confirm_parser.add_argument("id", help="Pending lesson ID")
-    confirm_parser.add_argument("--classification", choices=CLASSIFICATIONS, required=True,
-                               help="Classification: pattern (regex-able) or process (workflow)")
-    confirm_parser.add_argument("--enforcement", choices=ENFORCEMENTS, default="soft",
-                               help="Enforcement level (default: soft)")
-    confirm_parser.add_argument("--owner", help="Owner for hard enforcement rules")
-    confirm_parser.add_argument("--reason", help="Confirmation reason")
-    confirm_parser.add_argument("--reviewer", help="Reviewer username")
+    # confirm
+    confirm_parser = subparsers.add_parser("confirm", help="确认 pending lesson")
+    confirm_parser.add_argument("fingerprint", help="fingerprint 或 id")
+    confirm_parser.add_argument("--classification", required=True,
+                               choices=["code-pattern", "process-lesson"],
+                               help="分类")
+    confirm_parser.add_argument("--target", help="目标文件路径")
+    confirm_parser.add_argument("--enforcement", default="soft",
+                               choices=["hard", "soft"],
+                               help="enforcement 级别")
+    confirm_parser.add_argument("--reviewer", help="审核人")
+    confirm_parser.add_argument("--suggested-regex", help="建议的正则表达式")
 
-    # reject command
-    reject_parser = subparsers.add_parser("reject", help="Reject a pending lesson")
-    reject_parser.add_argument("id", help="Pending lesson ID")
-    reject_parser.add_argument("--reason", required=True, help="Rejection reason")
-    reject_parser.add_argument("--reviewer", help="Reviewer username")
+    # reject
+    reject_parser = subparsers.add_parser("reject", help="拒绝 pending lesson")
+    reject_parser.add_argument("fingerprint", help="fingerprint 或 id")
+    reject_parser.add_argument("--reason", required=True, help="拒绝原因")
+    reject_parser.add_argument("--reviewer", help="审核人")
 
-    # apply command
-    apply_parser = subparsers.add_parser("apply", help="Apply a confirmed lesson")
-    apply_parser.add_argument("id", help="Pending lesson ID")
-    apply_parser.add_argument("--to", help="Target file path (auto-detected if omitted)")
+    # apply
+    apply_parser = subparsers.add_parser("apply", help="应用 confirmed lessons 到 patterns/ 或 lessons/")
+    apply_parser.add_argument("--dry-run", action="store_true", help="仅预览，不实际写入")
+
+    # stats
+    subparsers.add_parser("stats", help="显示统计信息")
 
     args = parser.parse_args(argv)
 
     if not args.command:
         parser.print_help()
-        return 0
+        return 1
 
     commands = {
         "list": cmd_list,
@@ -446,9 +649,10 @@ def main(argv: list[str] | None = None) -> int:
         "confirm": cmd_confirm,
         "reject": cmd_reject,
         "apply": cmd_apply,
+        "stats": cmd_stats,
     }
 
-    return commands[args.command](args)
+    return commands.get(args.command, lambda _: parser.print_help() or 1)(args)
 
 
 if __name__ == "__main__":

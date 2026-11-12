@@ -14,16 +14,19 @@ auto_merge:
   single_maintainer_mode: false
   required_checks_by_risk:
     low:
+      - yaml-validate
       - risk-scan
       - secret-scan
       - mr-validate
     medium:
+      - yaml-validate
       - risk-scan
       - secret-scan
       - mr-validate
       - test-check
       - python-test
     high:
+      - yaml-validate
       - risk-scan
       - secret-scan
       - mr-validate
@@ -31,6 +34,7 @@ auto_merge:
       - python-test
       - selftest
     critical:
+      - yaml-validate
       - risk-scan
       - secret-scan
       - mr-validate
@@ -44,6 +48,7 @@ auto_merge:
     - test-check
     - python-test
     - selftest
+    - yaml-validate
   # 保护分支: 只能通过 MR 合并，禁止直接推送
   protected_branches:
     - master
@@ -92,6 +97,16 @@ metadata:
 risk_annotations:
   enforcement: hard           # 自举展示严格模式 (消费仓库默认 soft)
   reviewed_max_age_days: 90
+  # 自举: 本仓库 MR 也加载语言规则包 (路径相对本文件; 类型自动注册)
+  # 注: scripts/** 与 tests/** 已被 scan_exclude_paths 豁免, 规则包主要覆盖
+  #     未来落在豁免目录之外的源码
+  pattern_includes:
+    - patterns/python.yml
+    - patterns/javascript.yml
+    - patterns/go.yml
+    - patterns/java.yml
+    - patterns/csharp.yml
+    - patterns/dart.yml
   scan_exclude_paths:
     # 测试文件: 整目录豁免，避免测试代码含规则模式字面量导致自指误报
     - "tests/**"
@@ -134,7 +149,7 @@ large_change:
   excluded_paths:
     - "*.lock"
     - "*.Designer.cs"
-    - "migrations/**"
+    - "**/migrations/**"
     - "**/*.generated.*"
   sensitive_paths:
     - "ci/"

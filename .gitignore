@@ -2,6 +2,7 @@
 .governance/sessions/
 .governance/reports/
 .governance/*.log
+.governance/*.jsonl
 # NOTE: .governance/pending-lessons/ IS versioned - these are governance candidates
 !.governance/pending-lessons/
 governance/reports/
@@ -16,6 +17,11 @@ __pycache__/
 
 # 工具产物
 .upload-cache/
+# CI 结果文件 / 临时 PR 描述 (本地调试产生, 不入库)
+/governance-*-result.json
+/gate-evidence.json
+/gate-result.json
+/pr_body.txt
 
 # 第三方工具安装目录（不提交到仓库）
 .claude/

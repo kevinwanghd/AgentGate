@@ -244,10 +244,10 @@ def rollout_one(args: argparse.Namespace, repo: RolloutRepo) -> None:
     run(prepare_command(args, repo_dir, base_branch), repo_dir, apply=True)
     run(["git", "add", ".agentgate/mr-description.md"], repo_dir, apply=True)
     run(["git", "commit", "--amend", "--no-edit"], repo_dir, apply=True)
+    # verify 在 amend 之后已执行一次; 此处到 push 之间无任何改动, 不必重复验证
     run(verify_command(args, base_branch), repo_dir, apply=True)
 
     if args.push:
-        run(verify_command(args, base_branch), repo_dir, apply=True)
         run(["git", "push", "-u", "origin", branch_name], repo_dir, apply=True)
         if args.pr:
             run(

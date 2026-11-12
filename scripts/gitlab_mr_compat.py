@@ -401,12 +401,11 @@ def main() -> int:
     try:
         resolution = resolve_description(args, source_branch)
         if resolution.text is None:
-            status = "fail"
-            _write_result(args.output, status, **resolution.evidence())
+            _write_result(args.output, "fail", **resolution.evidence())
             sys.stderr.write(
-                f"[gitlab-mr-compat] {resolution.reason}; status={status}\n"
+                f"[gitlab-mr-compat] {resolution.reason}; status=fail\n"
             )
-            return 0 if status == "skip" else 1
+            return 1
         problems = validate_description(
             resolution.text,
             args.config,

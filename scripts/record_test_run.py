@@ -94,7 +94,7 @@ def main() -> int:
     sys.stderr.write(f"[record-test] 运行: {' '.join(cmd)}\n")
     # 实时透传输出, 同时捕获用于解析
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     except FileNotFoundError:
         sys.stderr.write(f"[record-test] 找不到命令: {cmd[0]}\n")
         return 127
@@ -105,6 +105,15 @@ def main() -> int:
     sys.stderr.write(proc.stderr or "")
 
     counts = parse_counts(combined)
+    # 多项目运行只解析到第一段 "Failed: 0" 时, 以退出码为准, 不能把失败记成通过
+    if proc.returncode != 0 and counts["failed"] == 0:
+        counts["failed"] = None
+    try:
+        git_state = repository_state()
+    except RuntimeError as exc:
+        # 测试已经跑完: 仍写入记录并透传退出码, 不因取不到 git 状态丢失结果
+        sys.stderr.write(f"[record-test] 警告: 无法获取 git 状态: {exc}\n")
+        git_state = None
     covers = [c.strip() for c in args.covers.split(",") if c.strip()]
 
     record = {
@@ -117,7 +126,7 @@ def main() -> int:
         "failed": counts["failed"] if counts["failed"] is not None
                   else (0 if proc.returncode == 0 else -1),
         "covers": covers,
-        "git_state": repository_state(),
+        "git_state": git_state,
     }
     if args.tool:
         record["tool"] = args.tool

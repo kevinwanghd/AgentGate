@@ -41,7 +41,13 @@ THRESHOLDS = {
     "rejection_rate": {"green": 0.3, "yellow": 0.5},      # Lower is better
     "obsolescence_rate": {"green": 0.3, "yellow": 0.5},   # Lower is better
     "duplicate_fingerprint_rate": {"green": 0.1, "yellow": 0.2},  # Lower is better
+    "rule_hit_rate": {"green": 0.7, "yellow": 0.5},       # Higher is better
 }
+
+# 状态生命周期: pending -> confirmed/rejected; confirmed 晋升为 hard lesson 后 -> promoted。
+# promoted 是确认的最终形态, 「确认类」指标必须计入, 否则晋升越多确认率反而越低。
+CONFIRMED_STATUSES = ("confirmed", "promoted")
+REVIEWED_STATUSES = ("confirmed", "rejected", "promoted")
 
 
 def load_pending_files(root: Path) -> list[dict]:
@@ -54,7 +60,8 @@ def load_pending_files(root: Path) -> list[dict]:
     for file in pending_dir.glob("*.yml"):
         try:
             data = yaml.safe_load(file.read_text(encoding="utf-8")) if yaml else {}
-            if data:
+            # 根节点非 mapping (如列表/标量) 的坏文件跳过, 不能让整份报表崩溃
+            if isinstance(data, dict) and data:
                 files.append(data)
         except Exception:
             continue
@@ -73,14 +80,12 @@ def aggregate_by_fingerprint(pending_files: list[dict]) -> dict[str, list[dict]]
 
 
 def calculate_confirmation_rate(pending_files: list[dict]) -> float | str:
-    """Calculate confirmation rate: confirmed / (confirmed + rejected + pending)."""
+    """Calculate confirmation rate: (confirmed + promoted) / total."""
     total = len(pending_files)
     if total == 0:
         return "N/A"
 
-    confirmed = sum(1 for p in pending_files if p.get("status") == "confirmed")
-    # For confirmation rate, we consider all non-rejected as potentially confirmable
-    # Or just confirmed / total
+    confirmed = sum(1 for p in pending_files if p.get("status") in CONFIRMED_STATUSES)
     return round(confirmed / total, 4)
 
 
@@ -96,12 +101,12 @@ def calculate_rejection_rate(pending_files: list[dict]) -> float | str:
 
 def calculate_obsolescence_rate(pending_files: list[dict]) -> float | str:
     """
-    Calculate obsolescence rate: rejected / (confirmed + rejected).
+    Calculate obsolescence rate: rejected / (confirmed + promoted + rejected).
     
     This is the废弃率 as specified in the requirements.
     When denominator is zero, returns "N/A".
     """
-    confirmed = sum(1 for p in pending_files if p.get("status") == "confirmed")
+    confirmed = sum(1 for p in pending_files if p.get("status") in CONFIRMED_STATUSES)
     rejected = sum(1 for p in pending_files if p.get("status") == "rejected")
 
     denominator = confirmed + rejected
@@ -129,8 +134,14 @@ def calculate_rule_hit_rate(pending_files: list[dict]) -> float | str:
     if total == 0:
         return "N/A"
 
-    reviewed = sum(1 for p in pending_files if p.get("status") in ("confirmed", "rejected"))
+    reviewed = sum(1 for p in pending_files if p.get("status") in REVIEWED_STATUSES)
     return round(reviewed / total, 4)
+
+
+def _parse_ts(value: str) -> dt.datetime:
+    """解析 ISO 时间; 无时区视为 UTC, 保证带/不带时区的时间可相减。"""
+    parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=dt.timezone.utc)
 
 
 def calculate_review_latency(pending_files: list[dict]) -> float | str:
@@ -138,18 +149,19 @@ def calculate_review_latency(pending_files: list[dict]) -> float | str:
     latencies = []
 
     for p in pending_files:
-        if p.get("status") not in ("confirmed", "rejected"):
+        if p.get("status") not in REVIEWED_STATUSES:
             continue
 
         detected = p.get("detected_at", "")
-        reviewed = p.get("reviewed_at", "")
+        # lessons_review 把审核信息写在 review.* 下; 顶层字段为旧格式兼容
+        reviewed = (p.get("review") or {}).get("reviewed_at") or p.get("reviewed_at", "")
 
         if not detected or not reviewed:
             continue
 
         try:
-            d1 = dt.datetime.fromisoformat(detected.rstrip("Z"))
-            d2 = dt.datetime.fromisoformat(reviewed.rstrip("Z"))
+            d1 = _parse_ts(detected)
+            d2 = _parse_ts(reviewed)
             latency = (d2 - d1).total_seconds() / 86400  # days
             latencies.append(latency)
         except (ValueError, TypeError):

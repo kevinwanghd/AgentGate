@@ -4,9 +4,14 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, edited]
 
-# auto-merge 任务需要 contents: write（enablePullRequestAutoMerge）；
-# 可复用工作流的 GITHUB_TOKEN 权限不得超过 caller 此处声明的上限
+# 同一 PR 新推送/编辑描述时取消旧运行, 避免重复占用 runner
+concurrency:
+  group: agentgate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 permissions:
+  # 可复用工作流的 job 级 contents: write (auto-merge) 受 caller 上限约束,
+  # 这里必须是 write, 否则 enablePullRequestAutoMerge 报 "Resource not accessible by integration"
   contents: write
   pull-requests: write
   checks: write
