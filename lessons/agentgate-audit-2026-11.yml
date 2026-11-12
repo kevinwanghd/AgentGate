@@ -43,3 +43,13 @@ lessons:
     risk: "'covers' records production files covered by a test run; comparing it against test-file candidates always fails, so genuine test runs get blocked and the check teaches people to ignore it."
     fix: Match covers against the production file under review (plus candidate paths for cmd heuristics); write tests that prove a record_test_run-produced record passes.
     regression: any change to check_job matching must keep the record_test_run round-trip green.
+
+  - id: audit_2026_11.needs_outputs_not_in_job_if
+    enforcement: hard
+    applies_to:
+      - .github/workflows/governance.yml
+      - .github/workflows/agentgate.yml
+    trigger: a job's if condition references needs.<job>.outputs while the needed job uses if with always()
+    risk: "GitHub evaluates the downstream if before the always()-dependency completes, so the output is always empty: auto-merge has silently never fired since the gate gained if: always()."
+    fix: "Keep job-level if to static event conditions only (draft/fork/inputs); read needs outputs inside a step (env + shell check) where they are final."
+    regression: no job if may contain needs.*.outputs in the governance workflows.
