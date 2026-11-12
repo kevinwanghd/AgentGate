@@ -695,6 +695,20 @@ jobs:
       - run: |
           echo "combined: ${{ needs.gate-decision.result == 'success' && needs.gate-decision.outputs.merge_action == 'AUTO_MERGE' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository }}
 
+  debug-if-nonempty:
+    needs: [gate-decision]
+    if: ${{ needs.gate-decision.outputs.merge_action != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "output was NON-EMPTY at if evaluation: [${{ needs.gate-decision.outputs.merge_action }}]"
+
+  debug-if-always-echo:
+    needs: [gate-decision]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "output at step time: [${{ needs.gate-decision.outputs.merge_action }}]"
+
   auto-merge:
     needs: [gate-decision]
     # DEBUG: 同一表达式, ${{ }} 单行形式
