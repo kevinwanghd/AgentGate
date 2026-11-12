@@ -713,18 +713,27 @@ jobs:
 
   auto-merge:
     needs: [gate-decision]
-    # DEBUG: 同一表达式, ${{ }} 单行形式
-    if: ${{ needs.gate-decision.result == 'success' && needs.gate-decision.outputs.merge_action == 'AUTO_MERGE' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository }}
+    # 修复: gate-decision 带 if: always() 时, 下游 if 里的 needs outputs 在其
+    # 完成前求值 (GitHub 已知行为), merge_action 恒为空 → 永远 skip。
+    # 改为 if 只判静态事件条件, output 判定移入 step。
+    if: ${{ always() && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
     steps:
-      - name: debug outputs
+      - name: gate on merge_action
+        env:
+          MERGE_ACTION: ${{ needs.gate-decision.outputs.merge_action }}
+          GATE_RESULT_STATUS: ${{ needs.gate-decision.result }}
         run: |
-          echo "merge_action=[${{ needs.gate-decision.outputs.merge_action }}]"
-          echo "IF evaluated TRUE — mechanism works, #92 mystery is elsewhere"
-          exit 1  # 不真正合并
+          echo "merge_action=[$MERGE_ACTION] gate_status=[$GATE_RESULT_STATUS]"
+          if [ "$GATE_RESULT_STATUS" != "success" ] || [ "$MERGE_ACTION" != "AUTO_MERGE" ]; then
+            echo "GateResult 非 AUTO_MERGE, 跳过自动合并。"
+            exit 0
+          fi
+          echo "WOULD MERGE — fix verified"
+          exit 1  # debug: 不真正合并
       - name: enable squash auto-merge
         env:
           GH_TOKEN: ${{ github.token }}
