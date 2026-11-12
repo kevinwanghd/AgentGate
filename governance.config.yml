@@ -14,16 +14,19 @@ auto_merge:
   single_maintainer_mode: false
   required_checks_by_risk:
     low:
+      - yaml-validate
       - risk-scan
       - secret-scan
       - mr-validate
     medium:
+      - yaml-validate
       - risk-scan
       - secret-scan
       - mr-validate
       - test-check
       - python-test
     high:
+      - yaml-validate
       - risk-scan
       - secret-scan
       - mr-validate
@@ -31,6 +34,7 @@ auto_merge:
       - python-test
       - selftest
     critical:
+      - yaml-validate
       - risk-scan
       - secret-scan
       - mr-validate
@@ -44,6 +48,7 @@ auto_merge:
     - test-check
     - python-test
     - selftest
+    - yaml-validate
   # 保护分支: 只能通过 MR 合并，禁止直接推送
   protected_branches:
     - master

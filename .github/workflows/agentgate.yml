@@ -156,6 +156,8 @@ jobs:
       - name: Verify preinstalled Python dependencies
         run: python3 -c "import yaml; print('pyyaml ok')"
       - name: Run affected Go tests
+        env:
+          GOVERNANCE_GO_TEST_TIMEOUT: ${{ vars.GOVERNANCE_GO_TEST_TIMEOUT }}
         run: |
           if [ ! -f go.mod ]; then
             echo "[go-test] go.mod not found, skipping."
@@ -276,7 +278,8 @@ jobs:
 
   auto-merge:
     needs: gate-decision
-    if: ${{ !inputs.skip-auto-merge && needs.gate-decision.outputs.merge-action == 'AUTO_MERGE' }}
+    # draft PR 与 fork PR 不开自动合并 (fork 的 head.repo 不同仓, 事件不可信且合并目标错误)
+    if: ${{ !inputs.skip-auto-merge && needs.gate-decision.outputs.merge-action == 'AUTO_MERGE' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     # 工作流级 permissions 是 contents: read（其余任务最小权限），本 job 无覆盖时会继承 read，
     # enablePullRequestAutoMerge 必报 "Resource not accessible by integration"。
@@ -288,7 +291,15 @@ jobs:
       - name: Enable auto merge
         env:
           GH_TOKEN: ${{ secrets.GOVERNANCE_MERGE_BOT_TOKEN || github.token }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
+          set -euo pipefail
+          # 复核 PR 当前 head 仍是本次判定的 head, 防止旧运行为新提交开自动合并
+          CURRENT_HEAD="$(gh pr view "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --json headRefOid --jq .headRefOid)"
+          if [ "$CURRENT_HEAD" != "$EXPECTED_HEAD" ]; then
+            echo "::error::PR head 已更新 ($CURRENT_HEAD != $EXPECTED_HEAD), 本次判定过期, 拒绝开启自动合并。"
+            exit 1
+          fi
           gh pr merge "${{ github.event.pull_request.number }}" \
             --repo "${{ github.repository }}" \
             --auto \

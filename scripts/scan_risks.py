@@ -98,10 +98,13 @@ SCAN_EXTENSIONS = {
 }
 
 # 测试文件判定 (与 check_tested.py 保持一致，收紧避免误匹配)
+# Tests? 分支用大小写敏感 (?-i:) 并要求路径边界:
+# IGNORECASE 的 Tests?\.[a-z]+$ 会把 latest.cs / contest.java 误判为测试文件，
+# 导致其中所有 block 规则被跳过
 _TEST_FILE_RE = re.compile(
     r'(^|/)(tests?|spec|__tests?__)/'  # test/, spec/, __tests__/ 目录下
     r'|(_test|_spec)\.[a-z]+$'
-    r'|Tests?\.[a-z]+$'
+    r'|(?-i:Tests?)\.[a-z]+$'
     r'|(^|/)test_[^/]+$',
     re.IGNORECASE,
 )
@@ -421,8 +424,17 @@ def parse_diff(diff_text: str) -> dict[str, list[tuple[int, str]]]:
     cur_file: str | None = None
     new_lineno = 0
 
+    def _is_file_header(line: str, prefix: str) -> bool:
+        # 真 diff 文件头只可能是 +++/--- 加 a/、b/ 或 /dev/null。
+        # 新增行内容以 ++ 或 -- 开头时 (如 "++ counter;") 会拼出 "+++ counter;"，
+        # 不能误当文件头，否则后续行全部挂到假路径下。
+        if not line.startswith(prefix):
+            return False
+        path = line[4:].strip()
+        return path == "/dev/null" or path.startswith(("a/", "b/"))
+
     for line in diff_text.splitlines():
-        if line.startswith("+++ "):
+        if _is_file_header(line, "+++"):
             # +++ b/path/to/file  或  +++ /dev/null
             path = line[4:].strip()
             if path == "/dev/null":
@@ -439,11 +451,11 @@ def parse_diff(diff_text: str) -> dict[str, list[tuple[int, str]]]:
             continue
         if cur_file is None:
             continue
-        if line.startswith("+") and not line.startswith("+++"):
+        if line.startswith("+") and not _is_file_header(line, "+++"):
             # 新增行
             result[cur_file].append((new_lineno, line[1:]))
             new_lineno += 1
-        elif line.startswith("-") and not line.startswith("---"):
+        elif line.startswith("-") and not _is_file_header(line, "---"):
             # 删除行不增加 new_lineno
             pass
         else:

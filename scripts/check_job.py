@@ -98,17 +98,19 @@ def run_git(args: list[str]) -> str:
 
 def get_changed_files(diff_base: str | None = None) -> list[str]:
     """新增/修改的文件。CI 无 staged 改动, 传 diff_base 时按 base...HEAD 取 MR diff。"""
+    # --no-renames: 重命名+改内容时 git 会输出 R 状态且只保留新路径，
+    # 拆成 A/D 后新增路径必然进入 A 分支，避免重命名文件整体绕过本检查
     if diff_base:
-        out = run_git(["diff", "--name-status", "-M", "--no-color", f"{diff_base}...HEAD"])
+        out = run_git(["diff", "--name-status", "--no-renames", "--no-color", f"{diff_base}...HEAD"])
     else:
-        out = run_git(["diff", "--cached", "--name-status", "-M", "--no-color"])
+        out = run_git(["diff", "--cached", "--name-status", "--no-renames", "--no-color"])
     files = []
     for line in out.splitlines():
         parts = line.split("\t")
         if len(parts) >= 2:
-            # 只关心新增(A)和修改(M)
+            # 新增(A)/修改(M)取路径; R(万一上游又启用 -M)取新路径 parts[-1]
             status = parts[0][0] if parts[0] else ""
-            if status in ("A", "M"):
+            if status in ("A", "M", "R"):
                 files.append(parts[-1])
     return files
 
@@ -159,8 +161,10 @@ def find_test_candidates(prod_file: str) -> list[str]:
             f"{test_dir}/{stem}_test{p.suffix}",
             f"{test_dir}/{stem}Test{p.suffix}",
             f"{test_dir}/{stem}Tests{p.suffix}",
+            # pytest 最常见布局: tests/test_foo.py
+            f"{test_dir}/test_{stem}{p.suffix}",
         ])
-        
+
         # src/Foo.cs -> test/Foo.cs（镜像目录结构）
         candidates.append(f"{test_dir}/{p.name}")
     
@@ -299,7 +303,9 @@ def check(
         # 如果该生产文件有对应测试文件
         if test_file_exists(candidates):
             # 检查是否有测试执行记录
-            related = [c for c in candidates if os.path.isfile(c)]
+            # covers 记录的是本次测试覆盖的生产文件（见 record_test_run.py），
+            # 因此候选里必须包含生产文件本身，否则真跑了测试也判 FAIL
+            related = [c for c in candidates if os.path.isfile(c)] + [prod_file]
             if not has_recent_test_record(evidence, related):
                 violations.append({
                     "file": prod_file,

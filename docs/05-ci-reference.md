@@ -11,9 +11,12 @@
 | Job | 内容 | v1 模式 | allow_failure |
 |---|---|---|---|
 | `governance:risk-scan` | 扫描 8 类风险模式 + 注解校验 | **硬阻断** | `false` |
-| `governance:secret-scan` | gitleaks 密钥扫描 | **硬阻断** | `false` |
+| `governance:secret-scan` | 内置 `scan_secrets.py` 密钥扫描 | **硬阻断** | `false` |
 | `governance:mr-validate` | 校验 MR 描述必填段落 + 读 AI-Usage trailer | **软警告** | `false`* |
 | `governance:test-check` | 改动的生产代码是否做过测试（读 Tested trailer） | **软警告** / 失败测试硬拦 | `false`* |
+| `governance:test-bypass` | 有对应测试文件但无测试执行记录（防绕过 record_test_run） | **硬阻断** | `false` |
+| `governance:lessons-validate` | pending lessons schema 校验 | **硬阻断** | `false` |
+| `governance:mr-validate-compat` | 兼容层校验（branch pipeline） | 按需 | `false` |
 | `governance:go-test` | 受影响 Go 包跑 `go test`；**无 go.mod 自动 skip** | **硬阻断** | `false` |
 | `governance:flutter-test` | 递归查找 `pubspec.yaml`，跑 `flutter test`；**无标记文件自动 skip** | **硬阻断** | `false` |
 | `governance:python-test` | 递归查找 `requirements.txt/pyproject.toml/setup.py`，跑 `pytest`；**无标记文件自动 skip** | **硬阻断** | `false` |
@@ -37,7 +40,7 @@
 1. 用 `find -maxdepth 3` 递归查找标记文件
 2. 找不到 → 写 `{"status": "skip"}` → exit 0
 3. 找到 → 在每个目录里运行测试 → 写 `{"status": "pass/fail"}`
-4. `gate-decision` 将 `skip` 和 `missing`（job 未触发）均视为通过，`fail` 才阻断
+4. `gate-decision` 对 `skip`（无标记文件）放行语言类检查之外的必查项；`missing`（必查 job 未触发）视为 **ERROR 阻断**，`fail` 阻断
 
 **Monorepo 支持**：同一仓库存在多个语言子目录时，对应 job 会逐一进入每个目录运行测试，任意子目录失败则整个 job 失败。
 
@@ -117,15 +120,13 @@
 
 ## secret-scan 做了什么
 
-1. 用 `GOVERNANCE_SECRET_IMAGE` 指定的内部 gitleaks 镜像扫描**本次 MR 引入的提交**（`base..HEAD`），不扫历史全量。
+1. 用仓库内置的 `scan_secrets.py`（标准库正则，无外部镜像依赖）扫描**本次 MR 引入的提交**（`base..HEAD` 各提交 patch + `base...HEAD` 总差异，覆盖 evil merge），不扫历史全量。
 2. 命中任何密钥/凭据模式（API key、token、私钥、连接串等）→ job 失败，**硬阻断**。
-3. 输出用 `--redact` 脱敏，不在日志里回显密钥明文，只显示文件、行号、规则名。
+3. 输出脱敏，不在日志里回显密钥明文，只显示文件、行号、规则名。
 
 > 它只看本次 MR 新引入的提交。历史里早已存在的密钥不会反复拦你（那是另一码事，应单独做一次全量清理 + 轮换）。
 >
 > 命中后正确做法：**把密钥从代码里移除、改走环境变量/密钥管理，并轮换已泄露的凭据**。不要试图加注解豁免——密钥泄露没有"经过说明的例外"。
->
-> 如确属误报（如测试用的假 token），在仓库根加 `.gitleaks.toml` 配置 `[allowlist]` 规则，该改动会触及被 CODEOWNERS 锁定的范围、需治理负责人审批。
 
 ---
 
@@ -140,7 +141,7 @@
 4. 判断是否"大变更"，是则要求 `## 风险与回滚`。
 5. v1 软模式：缺失项只打 `[warn]`，job 仍绿；`soft_deadline` 后转硬阻断。
 
-> 该 job 设 `GIT_DEPTH: 0`，以便读取完整 commit 历史里的 AI-Usage trailer。
+> 该 job 设 `GIT_DEPTH: "1000"`，以便读取近期 commit 历史里的 AI-Usage trailer（超出深度时需 fetch 补齐）。
 >
 > branch pipeline 必须配置具备 MR 读取权限的 `AGENTGATE_GITLAB_READ_TOKEN`（也兼容已有 AgentGate GitLab token 变量）。任何 `status=pass` 结果都必须写入 `actual_mr_verified=true`；API 不可用时 fail closed。
 
@@ -166,7 +167,7 @@
    - 文件里有合法 `// risk:untested reason:"..." owner:@ reviewed:` 注解
 3. **硬规则**：测试记录里有失败用例（`Tested: fail`）→ 任何模式下都拒合，注解也豁免不了。
 
-**痕迹从哪来**：开发时用 `record_test_run.py` 包装测试命令，结果记到 `.governance/test-evidence.jsonl`（gitignore）。CI 看不到这个文件，所以提交 hook 把结果汇总成 commit 的 `Tested:` trailer，CI 读 trailer（该 job 设 `GIT_DEPTH: 0`）。
+**痕迹从哪来**：开发时用 `record_test_run.py` 包装测试命令，结果记到 `.governance/test-evidence.jsonl`（gitignore）。CI 看不到这个文件，所以提交 hook 把结果汇总成 commit 的 `Tested:` trailer，CI 读 trailer（该 job 设 `GIT_DEPTH: "1000"`）。
 
 ```bash
 # 开发时跑测试留痕
@@ -337,7 +338,7 @@ python governance/scripts/risk_merge_decision.py \
 
 ## v1 阶段的实现状态
 
-> ✅ **三个 job 全部就绪**：`risk-scan`（`scan_risks.py`，硬门禁）、`mr-validate`（`validate_mr.py`，软门禁）已实现并通过自测；`secret-scan` 使用 `GOVERNANCE_SECRET_IMAGE` 指定的内部 gitleaks 镜像扫描本次 MR 范围（硬门禁）。install.sh 生成的 `governance/ci-snippet.yml` 直接调用它们，不再是占位 echo。
+> ✅ **三个 job 全部就绪**：`risk-scan`（`scan_risks.py`，硬门禁）、`mr-validate`（`validate_mr.py`，软门禁）已实现并通过自测；`secret-scan` 使用内置 `scan_secrets.py` 扫描本次 MR 范围（硬门禁）。install.sh 生成的 `governance/ci-snippet.yml` 直接调用它们，不再是占位 echo。
 >
 > 运行环境要求：
 > - `risk-scan` / `mr-validate` / `secret-scan`：`GOVERNANCE_PY_IMAGE` 需有 `python3`、`git`、`pyyaml`。
@@ -398,7 +399,7 @@ auto_merge:
 | 现象 | 检查 |
 |---|---|
 | governance job 没跑 | `.gitlab-ci.yml` 是否 include 了 CI 片段；pipeline 是否在 MR event 触发 |
-| secret-scan 报 `no commits found` 或漏扫 | 多半是 `GIT_DEPTH` 太浅；确认 job 里设了 `GIT_DEPTH: 0` |
+| secret-scan 报 `no commits found` 或漏扫 | 多半是 `GIT_DEPTH` 太浅；确认 job 里设了 `GIT_DEPTH: "1000"` |
 | risk-scan 报 `ModuleNotFoundError: yaml` | CI 镜像缺 pyyaml；脚本会退化用内置默认配置，但建议 `pip install pyyaml` |
 | risk-scan 该拦没拦 | 确认 diff-base 正确（看的是本次变更）；本地用 `selftest.sh` 验证脚本本身 |
 | go-test 在非 Go 仓库报错 | 正常情况应自动 skip；检查 `ci-snippet.yml` 里是否有 `if [ ! -f go.mod ]` 判断 |

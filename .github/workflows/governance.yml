@@ -22,6 +22,16 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, edited]
 
+# 同一 PR 新推送时取消旧运行: 旧运行算出的 AUTO_MERGE 不能为新提交"上膛"
+concurrency:
+  group: governance-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+# 工作流级最小权限: 无覆盖的 job (含在 PR 代码上执行脚本的 scan/selftest)
+# 只拿只读 token, 防止组织默认 token 为 write 时 PR 可控脚本外发写权限
+permissions:
+  contents: read
+
 jobs:
   # P1-A: Change Detection — 轻量 path filter，决定后续 scan job 是否需要运行
   # 每个 scan job 独立 checkout 完整历史（artifact 方案有 zip 压缩 bug）
@@ -135,9 +145,10 @@ jobs:
   #  governance_scan_all.py 仍可用于本地一次性检查。)
 
   # YAML 配置语法检查: 最先运行，快速失败
+  # 无条件运行: 它是必过检查 (见 governance.config.yml required_checks), 纯文档 PR
+  # 也要有 'pass' 证据, 否则 gate-decision 按 required_check_missing ERROR。
   yaml-validate:
     needs: [path-filter]
-    if: ${{ needs.path-filter.outputs.run_yaml_validate == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -153,9 +164,10 @@ jobs:
         run: python3 scripts/pending_lessons_schema.py
 
   # 风险扫描: 硬阻断 (命中风险模式且缺合法注解 → 拒合)
+  # 无条件运行: 属 required_checks (所有风险级别), path-filter 触发时跳过会让
+  # gate-decision 收到 skip/fail 而阻断纯文档 PR; 扫描器本身开销极小。
   risk-scan:
     needs: [path-filter]
-    if: ${{ needs.path-filter.outputs.run_risk_scan == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -172,10 +184,9 @@ jobs:
           git fetch -q origin "$BASE_REF"
           python3 scripts/scan_risks.py --diff-base "origin/$BASE_REF" --config governance.config.yml
 
-  # 密钥扫描: 硬阻断
+  # 密钥扫描: 硬阻断 (无条件运行, 理由同 risk-scan)
   secret-scan:
     needs: [path-filter]
-    if: ${{ needs.path-filter.outputs.run_secret_scan == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -552,6 +563,7 @@ jobs:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          YAML_VALIDATE: ${{ needs.yaml-validate.result == 'success' && 'pass' || 'fail' }}
           RISK_SCAN: ${{ needs.risk-scan.result == 'success' && 'pass' || 'fail' }}
           SECRET_SCAN: ${{ needs.secret-scan.result == 'success' && 'pass' || 'fail' }}
           MR_VALIDATE: ${{ needs.mr-validate.result == 'success' && 'pass' || 'fail' }}
@@ -569,13 +581,25 @@ jobs:
           git fetch -q origin "$BASE_REF"
           git cat-file -e "$HEAD_SHA^{commit}"
           SOURCE_SHA="$HEAD_SHA"
-          POLICY_SHA="$(git rev-parse "${SOURCE_SHA}:governance.config.yml")"
+          # 策略必须来自目标分支 (与 agentgate.yml/GitLab 一致)。
+          # 若读 PR 工作区的 governance.config.yml, PR 可清空 protected_paths、
+          # 降低 critical_approvals 实现自授权 AUTO_MERGE (见 agentgate.yml 同款注释)。
+          TARGET_SHA="$(git rev-parse "origin/$BASE_REF")"
+          if git cat-file -e "${TARGET_SHA}:governance.config.yml" 2>/dev/null; then
+            POLICY_SHA="$(git rev-parse "${TARGET_SHA}:governance.config.yml")"
+            POLICY_ARGS=(--target-ref "$TARGET_SHA")
+          else
+            POLICY_SHA="$TARGET_SHA"
+            printf '{}\n' > "$RUNNER_TEMP/agentgate-default-policy.yml"
+            POLICY_ARGS=(--config "$RUNNER_TEMP/agentgate-default-policy.yml")
+          fi
           export POLICY_SHA
           python - <<'PY' > /tmp/agentgate-evidence.json
           import json
           import os
 
           checks = {
+              "yaml-validate": os.environ["YAML_VALIDATE"],
               "risk-scan": os.environ["RISK_SCAN"],
               "secret-scan": os.environ["SECRET_SCAN"],
               "mr-validate": os.environ["MR_VALIDATE"],
@@ -604,7 +628,7 @@ jobs:
             --target-sha "$BASE_SHA" \
             --policy-sha "$POLICY_SHA" \
             --diff-base "origin/$BASE_REF" \
-            --config governance.config.yml \
+            "${POLICY_ARGS[@]}" \
             --output gate-result.json
           DECISION_EXIT=$?
           set -e
@@ -646,8 +670,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
+          # 复核 PR 当前 head 仍是本次判定的 head: 否则旧运行的 AUTO_MERGE
+          # 可能为新推送 (未重新过门禁) 的提交开启自动合并
+          CURRENT_HEAD="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq .headRefOid)"
+          if [ "$CURRENT_HEAD" != "$EXPECTED_HEAD" ]; then
+            echo "::error::PR head 已更新 ($CURRENT_HEAD != $EXPECTED_HEAD), 本次判定过期, 拒绝开启自动合并。"
+            exit 1
+          fi
           gh pr merge "$PR_NUMBER" \
             --repo "$GITHUB_REPOSITORY" \
             --auto \

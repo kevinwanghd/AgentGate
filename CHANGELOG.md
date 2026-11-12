@@ -11,6 +11,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **自举门禁 `governance.yml` 策略改从目标分支读取** — 此前 `POLICY_SHA` 取自 PR head 且 `--config` 读 PR 工作区，PR 可清空 `protected_paths`/降低 `critical_approvals` 自授权 `AUTO_MERGE`；现与 `agentgate.yml`/GitLab 一致走 `--target-ref`（目标分支无配置时用内置默认值）。
+- **`governance.yml` 补工作流级最小权限与按 PR `concurrency`** — 无覆盖 job（含在 PR 代码上执行脚本的 scan/selftest）只拿只读 token；同 PR 新推送取消旧运行，旧判定不能再为新提交开启自动合并。
+- **`risk-scan`/`secret-scan`/`yaml-validate` 在 `governance.yml` 无条件运行** — 属必查项，path-filter 跳过会被 gate 按 missing/skip 阻断纯文档 PR；扫描开销极小。
+- **`yaml-validate` 纳入必查项并进入 gate 证据** — 此前 yaml-validate 失败不进 evidence，改 `.yml`+`.py` 的 PR 可在语法错误的情况下 AUTO_MERGE。
+- **auto-merge 复核 PR head SHA** — `governance.yml`/`agentgate.yml` 开启自动合并前比对当前 head 与判定时 head，防止旧运行为未过门禁的新提交"上膛"；`agentgate.yml` 补 draft/fork 守卫与 `GOVERNANCE_GO_TEST_TIMEOUT` 变量传递。
+- **调用方模板权限修正** — `templates/github_agentgate_workflow.yml` 工作流级 `contents: read` → `write`：可复用工作流 job 级 `contents: write` 受 caller 上限约束，此前薄接入仓库 auto-merge 必报 "Resource not accessible by integration"。
+- **GitLab `governance:test-bypass` 移入 test stage 并声明 `dependencies`** — GitLab 同 stage job 互相看不到 artifact，此前读不到 test-check 的 `.governance/test-evidence.jsonl`，必误报硬阻断。
+
+### Fixed
+
+- **`check_job.py` 重命名绕过** — `git diff -M` 的 R 状态被丢弃，`git mv` + 改内容可整体绕过 test-bypass 门禁；改 `--no-renames` 且兼容 R 状态取新路径。
+- **`check_job.py` 漏识别 pytest 布局** — 候选不含 `tests/test_foo.py`，Python 仓库的"有测试但无执行记录"检测形同虚设。
+- **`check_job.py` covers 语义** — `covers` 记录生产文件却与测试候选比对，真跑了测试也 FAIL；候选并入生产文件本身。
+- **`pending_writer.py` snippet 行号偏移一行** — `@@` 头行被计入行号，指纹退化为 `路径:行号`；并限制 hunk 匹配不跨文件。
+- **`pending_writer.py` 原子写** — merge 路径直接截断重写，中断丢整条 lesson；改临时文件 + `os.replace`。
+- **`scan_risks.py` `++` 内容行误判文件头** — 新增行以 `++` 开头（如 `++ counter;`）被当 `+++ b/` 头，同文件后续行全部不扫；文件头判定改为精确匹配 `a/`/`b/`/`/dev/null`。
+- **`scan_risks.py` 测试文件正则过宽** — IGNORECASE 的 `Tests?\.[a-z]+$` 把 `latest.cs`/`contest.java` 误判为测试文件，其中所有 block 规则被跳过；改大小写敏感匹配（与 check_tested 一致）。
+- **`scan_secrets.py` `++` 前缀行漏扫** — `not startswith("+++")` 把内容以 `++` 开头的新增行整行丢弃，密钥可藏其中；同样补扫 `base...HEAD` 总差异覆盖 evil merge 引入的密钥，按 `(path,line,规则)` 去重。
+- **`gate_decision.py` `--target-ref` 忽略 `--config`** — 目标分支策略路径硬编码 `governance.config.yml`，自定义 config-path 时 `git show` 失败门禁永远 ERROR。
+- **`create_mr.py` Windows 引号命令** — `shlex.split(posix=False)` 保留引号导致带引号 preflight 命令必然 FileNotFoundError；剥掉首尾成对引号。
+- **`create_mr.py` GitLab API 读超时** — 裸 `TimeoutError` 不是 `URLError` 子类，未捕获时直接 traceback 绕过回退。
+- **`governance_metrics.py`/`aggregate_pending.py` 坏数据崩溃** — pending YAML 根节点非 mapping 时 AttributeError；同 fingerprint 记录缺 `status` 时 `sorted()` 抛 TypeError；均改为跳过/归一 pending。
+- **文档漂移** — `05-ci-reference.md` 修正 secret-scan 实现描述（内置 `scan_secrets.py`，非 gitleaks 镜像）、`missing` 的 ERROR 语义、`GIT_DEPTH`、补齐 test-bypass/lessons-validate/mr-validate-compat job 表。
+
 - **GitLab 11.x MR 描述门禁不再依赖个人 PAT** — branch pipeline 优先校验当前分支提交的 `.agentgate/mr-description.md`，并要求该文件相对目标分支已更新；GitLab API 降为可选回退。
 - **新增 `agentgate.py mr prepare`** — 自动生成、校验并写入 MR 描述清单，供旧版 GitLab CI 和手工创建 MR 共同使用。
 - **目标分支流水线自动跳过 MR 描述校验** — `master/main` 自身没有对应 MR，不再因缺少 MR 描述误报失败。
