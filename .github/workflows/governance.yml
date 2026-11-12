@@ -697,12 +697,8 @@ jobs:
 
   auto-merge:
     needs: [gate-decision]
-    # DEBUG: 真实 4 条件 if + 强制 AUTO_MERGE output, 验证 if 求值
-    if: >-
-      needs.gate-decision.result == 'success' &&
-      needs.gate-decision.outputs.merge_action == 'AUTO_MERGE' &&
-      github.event.pull_request.draft == false &&
-      github.event.pull_request.head.repo.full_name == github.repository
+    # DEBUG: 同一表达式, ${{ }} 单行形式
+    if: ${{ needs.gate-decision.result == 'success' && needs.gate-decision.outputs.merge_action == 'AUTO_MERGE' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
