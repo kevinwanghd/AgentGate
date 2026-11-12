@@ -116,6 +116,16 @@ _SCAN_IGNORE_RE = re.compile(
     re.IGNORECASE,
 )
 
+
+def _scan_ignore_invalid(match: re.Match, blacklist: list[str]) -> bool:
+    """scan:ignore 的 reason 是否无效 (黑名单词/语义不足), 与 risk: 注解同标准。"""
+    reason = match.group("reason")
+    if reason_blacklist_hit(reason, blacklist):
+        return True
+    stripped = reason.strip()
+    meaningful = sum(1 for c in stripped if c.isalnum() or c in ("-", "_", ".", "·"))
+    return meaningful < 3
+
 # 测试文件中仍然需要检查的模式 (skipped-test 的检测对象就是测试代码本身)
 _TEST_FILE_PATTERNS = {"skipped-test"}
 
@@ -650,9 +660,17 @@ def check_test_removal(diff_text: str, cfg: dict) -> list[str]:
     risk:test-removal 注解, 返回问题。这里只检测删除行, 注解需在 commit message
     或同一 diff 的新增注解里 —— v1 简化: 只要 diff 文本里出现合法 test-removal 注解即放行。
     """
+    def _is_diff_header(line: str, prefix: str) -> bool:
+        # 真 diff 文件头只可能 ---/+++ 加 a/、b/ 或 /dev/null
+        if not line.startswith(prefix):
+            return False
+        path = line[4:].lstrip()
+        return path.startswith(("a/", "b/")) or path == "/dev/null"
+
     removed_tests = []
     for line in diff_text.splitlines():
-        if line.startswith("-") and not line.startswith("---"):
+        # 精确排除文件头 (--- a/…): 内容以 -- 开头的删除行不能被裸 --- 前缀误排除
+        if line.startswith("-") and not _is_diff_header(line, "---"):
             if _TEST_DECL_RE.search(line):
                 removed_tests.append(line[1:].strip())
     if not removed_tests:
@@ -661,7 +679,7 @@ def check_test_removal(diff_text: str, cfg: dict) -> list[str]:
     # 在整个 diff 的新增行里找 test-removal 注解
     added_text = "\n".join(
         l[1:] for l in diff_text.splitlines()
-        if l.startswith("+") and not l.startswith("+++")
+        if l.startswith("+") and not _is_diff_header(l, "+++")
     )
     matches = list(re.finditer(
         r'risk:\s*test-removal.*?reason:\s*"([^"]*)".*?owner:.*?reviewed:\s*(\d{4}-\d{2}-\d{2})',
@@ -749,12 +767,18 @@ def scan(diff_text: str, cfg: dict) -> list[dict]:
             if not hits:
                 continue
 
-            # 行内豁免: 命中行同行或上一行有 scan:ignore reason:"..." 则整行跳过
+            # 行内豁免: 命中行同行或上一行有 scan:ignore reason:"..." 则整行跳过。
+            # reason 与 risk: 注解同一套约束 (黑名单词/语义不足则豁免无效),
+            # 防止 agent 用 scan:ignore reason:"临时先这样" 批量自助免检
             ignore_window = [content]
             prev = added_by_line.get(lineno - 1)
             if prev is not None:
                 ignore_window.append(prev)
-            if any(_SCAN_IGNORE_RE.search(l) for l in ignore_window):
+            blacklist = cfg["risk_annotations"].get("reason_blacklist", []) or []
+            if any(
+                (m := _SCAN_IGNORE_RE.search(l)) and not _scan_ignore_invalid(m, blacklist)
+                for l in ignore_window
+            ):
                 continue
 
             hit_types = {t for t, _, _ in hits}

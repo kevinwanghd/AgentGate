@@ -61,7 +61,9 @@ DEFAULT_CONFIG = {
     "testing": {
         "enforcement": "hard",
         "soft_deadline": None,
-        "accept_tested_trailer": True,
+        # 默认 false (与 install.sh 生成值一致): trailer 是 commit message 自由文本,
+        # 伪造成本一行; 信任它等于门禁可被 agent 自助免检。仅显式开启时才接受。
+        "accept_tested_trailer": False,
         # 整目录/模式免测试检查 (P2-1 优化: 细化豁免模式, 降低误报)
         # 分类说明:
         #   - 生成代码: .Designer.cs, .generated.*, .pb.go, *.g.cs, *.gen.cs
@@ -503,7 +505,7 @@ def check(diff_text: str, evidence: list[dict], cfg: dict,
             continue
         # 未通过任何放行条件
         reason = []
-        if not green_runs and not trailer_pass and tc.get("accept_tested_trailer", True):
+        if not green_runs and not trailer_pass and tc.get("accept_tested_trailer", False):
             reason.append("无全绿测试记录/Tested:trailer (用 record_test_run.py 跑测试)")
         elif not touched_test_file:
             reason.append("本次 diff 未改动任何测试文件, 且未 --covers 声明")
@@ -573,7 +575,7 @@ def main() -> int:
             return 2
     # 本地无证据 (CI 场景) 时, 退回读 commit 的 Tested: trailer
     trailer = None
-    if not evidence and not args.diff_file and cfg["testing"].get("accept_tested_trailer", True):
+    if not evidence and not args.diff_file and cfg["testing"].get("accept_tested_trailer", False):
         trailer = read_tested_trailer(args.diff_base)
 
     # --ci-mode: 无 evidence 文件 且 无 Tested:pass trailer → 硬阻断

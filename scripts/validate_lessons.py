@@ -255,6 +255,58 @@ def check_agentgate_test_jobs_do_not_install_runtime(root: Path, errors: list[st
                 )
 
 
+def check_audit_gate_policy_from_target_ref(root: Path, errors: list[str]) -> None:
+    """gate 必须从目标分支读策略: 任何 workflow 用 SOURCE_SHA 解析 policy 都是自授权绕过。"""
+    for rel in (".github/workflows/governance.yml", ".github/workflows/agentgate.yml"):
+        path = root / rel
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        if re.search(r'POLICY_SHA="[^"]*git rev-parse[^(]*\$\{?SOURCE_SHA\}?[^"]*"', text) or \
+                "rev-parse \"${SOURCE_SHA}:governance.config.yml\"" in text:
+            _fail(errors, f"audit_2026_11.gate_policy_from_target_ref: {rel} 从 PR head 解析策略")
+
+
+def check_audit_required_checks_not_path_filtered(root: Path, errors: list[str]) -> None:
+    """必查 job (risk-scan/secret-scan/yaml-validate) 不能被 path-filter 跳过。"""
+    path = root / ".github/workflows/governance.yml"
+    if not path.exists():
+        return
+    text = path.read_text(encoding="utf-8")
+    for job in ("run_risk_scan", "run_secret_scan", "run_yaml_validate"):
+        if f"needs.path-filter.outputs.{job} == 'true'" in text:
+            _fail(
+                errors,
+                f"audit_2026_11.required_checks_cannot_be_path_filtered: "
+                f"governance.yml 的必查 job 被 path-filter 门控 ({job})",
+            )
+
+
+def check_audit_diff_parser_plus_prefix(root: Path, errors: list[str]) -> None:
+    """diff 解析器不能用裸 not startswith(\"+++\") 过滤内容行。"""
+    for rel in ("scripts/scan_risks.py", "scripts/scan_secrets.py"):
+        path = root / rel
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        if re.search(r'not\s+\w+\.startswith\("\+\+\+"\)', text):
+            _fail(errors, f"audit_2026_11.diff_parser_plus_prefix: {rel} 用裸 +++ 前缀过滤内容行")
+
+
+def check_audit_evidence_semantics_covers_field(root: Path, errors: list[str]) -> None:
+    """check_job 的证据候选必须包含生产文件本身, 否则 covers 永远不命中。"""
+    path = root / "scripts/check_job.py"
+    if not path.exists():
+        return
+    text = path.read_text(encoding="utf-8")
+    if "os.path.isfile(c)] + [prod_file]" not in text:
+        _fail(
+            errors,
+            "audit_2026_11.evidence_semantics_covers_field: "
+            "check_job.py 证据候选未包含生产文件本身",
+        )
+
+
 LESSON_CHECKS: dict[str, Callable[[Path, list[str]], None]] = {
     "gitlab_legacy.job_timeout_unsupported": check_gitlab_job_timeout_unsupported,
     "gitlab_legacy.modern_schema_unsupported": check_gitlab_modern_schema_unsupported,
@@ -265,6 +317,10 @@ LESSON_CHECKS: dict[str, Callable[[Path, list[str]], None]] = {
     "agent_instructions.preserve_repository_agents_md": check_agent_instructions_preserve_repository_agents_md,
     "agentgate_operations.sensitive_pr_requires_risk_rollback": check_agentgate_sensitive_pr_requires_risk_rollback,
     "agentgate_operations.test_jobs_no_runtime_install": check_agentgate_test_jobs_do_not_install_runtime,
+    "audit_2026_11.gate_policy_from_target_ref": check_audit_gate_policy_from_target_ref,
+    "audit_2026_11.required_checks_cannot_be_path_filtered": check_audit_required_checks_not_path_filtered,
+    "audit_2026_11.diff_parser_plus_prefix": check_audit_diff_parser_plus_prefix,
+    "audit_2026_11.evidence_semantics_covers_field": check_audit_evidence_semantics_covers_field,
 }
 
 
