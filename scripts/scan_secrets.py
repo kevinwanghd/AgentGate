@@ -39,7 +39,7 @@ def added_lines(diff: str) -> list[tuple[str, int, str]]:
     line_no = 0
     for raw in diff.splitlines():
         # 真 diff 文件头只可能是 +++ b/ 或 +++ /dev/null。
-        # 不能用 not raw.startswith("+++") 排除: 内容以 ++ 开头的新增行 (如 "++i; const k=...")
+        # 不能用裸 +++ 前缀排除内容行: 内容以 ++ 开头的新增行 (如 "++i; const k=...")
         # 会拼成 "+++i; ..." 而被整行丢弃, 密钥可藏在其中。
         if raw.startswith("+++ b/") or raw.startswith("+++ /dev/null"):
             path = raw[6:] if raw.startswith("+++ b/") else "<unknown>"

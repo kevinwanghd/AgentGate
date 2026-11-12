@@ -11,6 +11,8 @@ reports/
 # Python
 __pycache__/
 *.pyc
+# 本地 uv 运行时产物 (依赖锁定走消费方各自管理)
+uv.lock
 
 # 备份文件 (install.sh 生成)
 *.bak.*

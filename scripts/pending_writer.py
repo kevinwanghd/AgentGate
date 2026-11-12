@@ -34,7 +34,7 @@ PENDING_DIR = Path(".governance") / "pending-lessons"
 
 def _now_iso() -> str:
     """Return current UTC time in ISO 8601 format."""
-    return dt.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _get_repo_name() -> str:
@@ -218,7 +218,9 @@ def _extract_snippet(diff_text: str, file_path: str, line_no: int) -> str:
                 if line.startswith("@@"):
                     # hunk 头本身不占新文件的行号
                     continue
-                if line.startswith("+") and not line.startswith("+++"):
+                # hunk 内不会出现 +++ 文件头 (section 已按 diff --git 截断),
+                # 不能用裸 +++ 前缀排除: 内容以 ++ 开头的行会被漏掉
+                if line.startswith("+"):
                     if current_line == line_no:
                         return line[1:].strip()
                     current_line += 1

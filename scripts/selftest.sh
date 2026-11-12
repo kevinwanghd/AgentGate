@@ -529,9 +529,16 @@ echo "public class BarTests { public void T(){} }" > tr_dir/tests/BarTests.cs
 ( cd tr_dir && git add -A && git commit -qm "feat: bar
 
 Tested: pass (5/5)" )
-# 无本地证据, 靠 commit trailer + 改了测试文件 -> 放行
+# 无本地证据, 靠 commit trailer + 改了测试文件 -> 放行 (需显式 opt-in; 默认拒绝)
+cat > tr_dir/optin.yml <<'CFG'
+testing:
+  enforcement: hard
+  accept_tested_trailer: true
+CFG
+( cd tr_dir && python3 "$CHECK" --diff-base HEAD~1 --evidence .governance/none.jsonl --config optin.yml ) >/dev/null 2>&1
+expect "Tested:pass trailer+改测试放行(opt-in)" 0 $?
 ( cd tr_dir && python3 "$CHECK" --diff-base HEAD~1 --evidence .governance/none.jsonl ) >/dev/null 2>&1
-expect "Tested:pass trailer+改测试放行" 0 $?
+expect "Tested:pass trailer默认拒绝" 1 $?
 
 # Tested: fail trailer -> 硬拦
 echo "public class Baz { public int Go()=>1; }" > tr_dir/src/Baz.cs
@@ -835,6 +842,7 @@ SQ="$(mktemp -d)"
 testing:
   enforcement: hard
   exclude_paths: []
+  accept_tested_trailer: true
 CFG
   git checkout -q -b feat
   echo 'class Mine { void Go(){} }' > mine.cs
