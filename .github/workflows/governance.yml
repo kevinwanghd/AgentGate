@@ -656,16 +656,25 @@ jobs:
   # 开发 agent、测试 runner 和 Gate Controller 均不直接获得该权限。
   auto-merge:
     needs: [gate-decision]
-    if: >-
-      needs.gate-decision.result == 'success' &&
-      needs.gate-decision.outputs.merge_action == 'AUTO_MERGE' &&
-      github.event.pull_request.draft == false &&
-      github.event.pull_request.head.repo.full_name == github.repository
+    # GitHub 已知行为: 依赖 job (gate-decision) 带 if: always() 时, 下游 job
+    # if 里的 needs.<job>.outputs 会在依赖完成前求值, merge_action 恒为空,
+    # auto-merge 永远 skip (实测复现)。因此 if 只判静态事件条件,
+    # GateResult 判定移入 step 内做。
+    if: ${{ always() && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
     steps:
+      - name: gate on GateResult
+        env:
+          MERGE_ACTION: ${{ needs.gate-decision.outputs.merge_action }}
+          GATE_STATUS: ${{ needs.gate-decision.result }}
+        run: |
+          if [ "$GATE_STATUS" != "success" ] || [ "$MERGE_ACTION" != "AUTO_MERGE" ]; then
+            echo "GateResult=$MERGE_ACTION (job=$GATE_STATUS), 不满足自动合并条件, 跳过。"
+            exit 0
+          fi
       - name: enable squash auto-merge
         env:
           GH_TOKEN: ${{ github.token }}
