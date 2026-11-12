@@ -71,6 +71,21 @@ else
 fi
 echo ""
 
+# ==================== 前置检查: 版本号一致 (仅 AgentGate 仓库自身) ====================
+if [[ -f "${REPO_ROOT}/install.sh" && -f "${REPO_ROOT}/pyproject.toml" ]]; then
+  echo "== 版本号一致性检查 =="
+  SH_VER="$(sed -n 's/^VERSION="v\{0,1\}\([^"]*\)"$/\1/p' "${REPO_ROOT}/install.sh" | head -1)"
+  PY_VER="$(sed -n 's/^version = "\([^"]*\)"$/\1/p' "${REPO_ROOT}/pyproject.toml" | head -1)"
+  if [[ -n "$SH_VER" && "$SH_VER" == "$PY_VER" ]]; then
+    echo "  ✓ install.sh 与 pyproject.toml 版本一致 ($PY_VER)"
+    PASS=$((PASS+1))
+  else
+    echo "  ✗ 版本不一致: install.sh=$SH_VER pyproject.toml=$PY_VER"
+    FAIL=$((FAIL+1))
+  fi
+  echo ""
+fi
+
 # ==================== 前置检查: lessons 必须有可执行硬约束 ====================
 echo "== Lessons 硬约束检查 =="
 VALIDATE_LESSONS="${SCRIPT_DIR}/validate_lessons.py"
@@ -98,6 +113,16 @@ git config user.email t@t; git config user.name t
 FALLBACK_PATH="${WORK}/fallback-bin"
 mkdir -p "$FALLBACK_PATH"
 ln -s "$(command -v git)" "${FALLBACK_PATH}/git"
+# Windows (Git Bash): ln -s 实为复制且无 .exe 后缀, 原生 Python 找不到、git 也缺 DLL;
+# 改用 git 自身所在目录 (只要其中没有 gh/glab, 仍满足"无 CLI token 工具"的前提)。
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    GIT_BIN_DIR="$(dirname "$(command -v git)")"
+    if ! ls "$GIT_BIN_DIR"/gh "$GIT_BIN_DIR"/gh.exe "$GIT_BIN_DIR"/glab "$GIT_BIN_DIR"/glab.exe >/dev/null 2>&1; then
+      FALLBACK_PATH="$GIT_BIN_DIR"
+    fi
+    ;;
+esac
 
 # 断言: 期望退出码
 expect() {

@@ -1527,8 +1527,9 @@ class EvidenceBundleTests(unittest.TestCase):
         self.assertEqual("merge-sha", plan["merge_sha"])
         self.assertTrue(plan["policy_digest"].startswith("sha256:"))
         self.assertTrue(plan["profile_digest"].startswith("sha256:"))
+        # profile 不再用 gitleaks 覆盖 secret-scan (CI 统一由 scan_secrets.py 产出)
         self.assertEqual(
-            ["dart-format", "flutter-analyze", "flutter-test", "secret-scan"],
+            ["dart-format", "flutter-analyze", "flutter-test"],
             [item["id"] for item in plan["checks"]],
         )
 
@@ -1582,7 +1583,9 @@ class EvidenceBundleTests(unittest.TestCase):
             "checks": [{"id": "unit", "status": "pass"}],
         }
         problems = evidence_bundle.verify_bundle(bundle, {"source_sha": "other"})
-        self.assertEqual(["source_sha_mismatch"], problems)
+        self.assertIn("source_sha_mismatch", problems)
+        # 未提供的期望值必须失败关闭, 不能被跳过
+        self.assertIn("target_sha_expected_missing", problems)
 
 
 class RiskMergeDecisionTests(unittest.TestCase):
@@ -3028,7 +3031,7 @@ class GateDecisionTests(unittest.TestCase):
             evidence.write_text(
                 '{"checks":{"risk-scan":"pass","secret-scan":"pass",'
                 '"mr-validate":"pass","test-check":"pass","go-test":"pass",'
-                '"selftest":"pass"}}',
+                '"selftest":"pass","yaml-validate":"pass"}}',
                 encoding="utf-8-sig",
             )
             with mock.patch.object(gate_decision, "_changed_paths", return_value=[]):
@@ -3129,7 +3132,7 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
             )
 
             subprocess.run(
-                [bash, "-l", (ROOT / "install.sh").as_posix(), target.as_posix(), "--agents", "codex"],
+                [bash, (ROOT / "install.sh").as_posix(), target.as_posix(), "--agents", "codex"],
                 check=True,
                 capture_output=True,
                 text=True,
@@ -3168,7 +3171,7 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
             agents.write_text(original, encoding="utf-8")
 
             subprocess.run(
-                [bash, "-l", (ROOT / "install.sh").as_posix(), target.as_posix(), "--agents", "codex"],
+                [bash, (ROOT / "install.sh").as_posix(), target.as_posix(), "--agents", "codex"],
                 check=True,
                 capture_output=True,
                 text=True,
@@ -3219,7 +3222,6 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
             subprocess.run(
                 [
                     bash,
-                    "-l",
                     (ROOT / "install.sh").as_posix(),
                     target.as_posix(),
                     "--agents",
@@ -3252,7 +3254,7 @@ class GitLabAutoMergeTemplateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory)
             subprocess.run(
-                [bash, "-l", (ROOT / "install.sh").as_posix(), target.as_posix(), "--agents", "none"],
+                [bash, (ROOT / "install.sh").as_posix(), target.as_posix(), "--agents", "none"],
                 check=True,
                 capture_output=True,
                 text=True,

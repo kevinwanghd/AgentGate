@@ -48,14 +48,16 @@ patterns:
 
   # 6. SQL 注入 (Node.js)
   - type: sql-injection
-    regex: "(?:query|execute)\\s*\\([^)]*\\$\\{|\\.concat\\s*\\(|[+]\\s*[\"']SELECT|INSERT|UPDATE|DELETE"
+    # SQL 关键字须紧跟引号或位于字面量内; .concat 仅在 SQL 字面量上调用时命中
+    regex: '(?:query|execute)\s*\([^)]*\$\{|[+]\s*["''`](?:SELECT|INSERT|UPDATE|DELETE)\b|["''`][^"''`]*\b(?:SELECT|INSERT|UPDATE|DELETE)\b[^"''`]*["''`]\s*\.concat\s*\('
     desc: "SQL 语句拼接存在注入风险，应使用参数化查询"
     exts: [".js", ".ts", ".mjs", ".cjs"]
     mode: block
 
   # 7. 命令注入 (child_process)
   - type: command-injection
-    regex: "(?:exec|execSync|spawn|spawnSync)\\s*\\([^)]*\\$\\{|\\.concat\\s*\\("
+    # .concat 仅在 exec/spawn 参数内时命中, 避免任意数组/字符串 concat 误报
+    regex: '(?:exec|execSync|spawn|spawnSync)\s*\([^)]*(?:\$\{|\.concat\s*\()'
     desc: "命令拼接存在注入风险，应使用参数数组或验证输入"
     exts: [".js", ".ts", ".mjs", ".cjs"]
     mode: block

@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import fnmatch
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import evidence_bundle
+from governance_common import path_matches_any
 
 
 SCHEMA_VERSION = "agentgate.io/risk-decision/v1"
@@ -40,7 +40,7 @@ def _max_risk(left: str, right: str) -> str:
 
 
 def _matches(path: str, patterns: list[str]) -> bool:
-    return any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
+    return path_matches_any(path, patterns)
 
 
 def classify_risk(changed_paths: list[str], profile: dict[str, Any], declared: str = "low") -> str:
