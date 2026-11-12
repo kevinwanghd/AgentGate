@@ -3031,7 +3031,7 @@ class GateDecisionTests(unittest.TestCase):
             evidence.write_text(
                 '{"checks":{"risk-scan":"pass","secret-scan":"pass",'
                 '"mr-validate":"pass","test-check":"pass","go-test":"pass",'
-                '"selftest":"pass"}}',
+                '"selftest":"pass","yaml-validate":"pass"}}',
                 encoding="utf-8-sig",
             )
             with mock.patch.object(gate_decision, "_changed_paths", return_value=[]):

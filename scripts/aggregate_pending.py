@@ -111,7 +111,8 @@ def load_pending_files(roots: list[Path]) -> list[tuple[Path, dict]]:
         for file in pending.glob("*.yml"):
             try:
                 data = yaml.safe_load(file.read_text(encoding="utf-8")) if yaml else {}
-                if data:
+                # 根节点非 mapping (如列表/标量) 的坏文件跳过, 不能让聚合崩溃
+                if isinstance(data, dict) and data:
                     results.append((file, data))
             except Exception:
                 continue
@@ -190,7 +191,8 @@ def resolve_conflicts(
     conflicts = []
 
     for fp, agg in aggregations.items():
-        statuses = set(e.get("status") for e in agg.pending_entries)
+        # status 缺失/None 的记录归一为 "pending", 避免 sorted() 混排 str 和 None 崩溃
+        statuses = set(e.get("status") or "pending" for e in agg.pending_entries)
 
         if len(statuses) > 1:
             conflict = {

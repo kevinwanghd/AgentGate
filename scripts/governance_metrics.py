@@ -60,7 +60,8 @@ def load_pending_files(root: Path) -> list[dict]:
     for file in pending_dir.glob("*.yml"):
         try:
             data = yaml.safe_load(file.read_text(encoding="utf-8")) if yaml else {}
-            if data:
+            # 根节点非 mapping (如列表/标量) 的坏文件跳过, 不能让整份报表崩溃
+            if isinstance(data, dict) and data:
                 files.append(data)
         except Exception:
             continue

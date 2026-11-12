@@ -241,9 +241,13 @@ governance:test-check:
 
 # ── 4b. 测试绕过检测: 检查是否有测试但无执行记录 ────────────────────────────
 # 防止直接运行测试命令（dotnet test / npm test）绕过 record_test_run.py
+# 放在 test stage (晚于 governance): GitLab 同 stage job 互相看不到 artifact,
+# 本 job 要读 governance:test-check 产出的 .governance/test-evidence.jsonl
 governance:test-bypass:
-  stage: governance
+  stage: test
   image: "$GOVERNANCE_PY_IMAGE"
+  dependencies:
+    - governance:test-check
   only:
     - branches
     - merge_requests

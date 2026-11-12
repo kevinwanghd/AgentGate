@@ -192,30 +192,40 @@ def _extract_snippet(diff_text: str, file_path: str, line_no: int) -> str:
 
     start = match.end()
 
+    # 只在本文件的 diff 段内找 hunk，避免行号落空时匹配到后续文件的 hunk
+    section = diff_text[start:]
+    next_file = re.search(r'^diff --git ', section, re.MULTILINE)
+    if next_file:
+        section = section[:next_file.start()]
+
     # Find the hunk header for this line
     hunk_pattern = r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@'
-    hunk_matches = list(re.finditer(hunk_pattern, diff_text[start:], re.MULTILINE))
+    hunk_matches = list(re.finditer(hunk_pattern, section, re.MULTILINE))
 
     for i, hm in enumerate(hunk_matches):
-        hunk_start = start + hm.start()
-        hunk_end = start + hunk_matches[i + 1].start() if i + 1 < len(hunk_matches) else len(diff_text)
+        hunk_start = hm.start()
+        hunk_end = hunk_matches[i + 1].start() if i + 1 < len(hunk_matches) else len(section)
 
         hunk_line = int(hm.group(1))
         hunk_lines = int(hm.group(2) or 1)
 
         if hunk_line <= line_no <= hunk_line + hunk_lines:
             # This hunk contains our line
-            hunk_text = diff_text[hunk_start:hunk_end]
+            hunk_text = section[hunk_start:hunk_end]
             # Find the actual line
             current_line = hunk_line
             for line in hunk_text.splitlines():
+                if line.startswith("@@"):
+                    # hunk 头本身不占新文件的行号
+                    continue
                 if line.startswith("+") and not line.startswith("+++"):
                     if current_line == line_no:
                         return line[1:].strip()
                     current_line += 1
                 elif line.startswith("-"):
                     pass
-                elif line.startswith("@@") or line.startswith(" "):
+                else:
+                    # 上下文行
                     current_line += 1
 
     return f"{file_path}:{line_no}"
@@ -234,19 +244,25 @@ def _extract_diff_context(diff_text: str, file_path: str, line_no: int) -> str:
 
     start = match.end()
 
+    # 只在本文件的 diff 段内找 hunk
+    section = diff_text[start:]
+    next_file = re.search(r'^diff --git ', section, re.MULTILINE)
+    if next_file:
+        section = section[:next_file.start()]
+
     # Find hunk containing this line
     hunk_pattern = r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@'
-    hunk_matches = list(re.finditer(hunk_pattern, diff_text[start:], re.MULTILINE))
+    hunk_matches = list(re.finditer(hunk_pattern, section, re.MULTILINE))
 
     for i, hm in enumerate(hunk_matches):
-        hunk_start = start + hm.start()
-        hunk_end = start + hunk_matches[i + 1].start() if i + 1 < len(hunk_matches) else len(diff_text)
+        hunk_start = hm.start()
+        hunk_end = hunk_matches[i + 1].start() if i + 1 < len(hunk_matches) else len(section)
 
         hunk_line = int(hm.group(1))
         hunk_lines = int(hm.group(2) or 1)
 
         if hunk_line <= line_no <= hunk_line + hunk_lines:
-            hunk_text = diff_text[hunk_start:hunk_end]
+            hunk_text = section[hunk_start:hunk_end]
             # Return first 500 chars of hunk
             return hunk_text[:500]
 
@@ -300,7 +316,9 @@ def _write_pending_yaml(path: Path, data: dict) -> None:
     # Remove internal tracking fields before writing
     to_write = {k: v for k, v in data.items() if not k.startswith("_")}
 
-    with open(path, "w", encoding="utf-8") as f:
+    # 原子写: 先写临时文件再替换，进程中断/磁盘满时不会截断已有 lesson
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
         yaml.safe_dump(
             to_write,
             f,
@@ -308,6 +326,7 @@ def _write_pending_yaml(path: Path, data: dict) -> None:
             allow_unicode=True,
             sort_keys=False,
         )
+    os.replace(tmp, path)
 
 
 def write_pending_from_violations(

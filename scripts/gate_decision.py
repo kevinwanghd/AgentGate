@@ -292,7 +292,7 @@ def main() -> int:
 
     try:
         config = (
-            load_policy_from_target_branch(args.target_ref, "governance.config.yml")
+            load_policy_from_target_branch(args.target_ref, args.config or "governance.config.yml")
             if args.target_ref
             else load_config(args.config, DEFAULT_CONFIG, ("auto_merge",))
         )

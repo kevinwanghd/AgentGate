@@ -10,7 +10,9 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  # 可复用工作流的 job 级 contents: write (auto-merge) 受 caller 上限约束,
+  # 这里必须是 write, 否则 enablePullRequestAutoMerge 报 "Resource not accessible by integration"
+  contents: write
   pull-requests: write
   checks: write
 

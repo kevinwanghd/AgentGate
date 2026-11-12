@@ -38,14 +38,17 @@ def added_lines(diff: str) -> list[tuple[str, int, str]]:
     path = "<unknown>"
     line_no = 0
     for raw in diff.splitlines():
-        if raw.startswith("+++ b/"):
-            path = raw[6:]
+        # 真 diff 文件头只可能是 +++ b/ 或 +++ /dev/null。
+        # 不能用 not raw.startswith("+++") 排除: 内容以 ++ 开头的新增行 (如 "++i; const k=...")
+        # 会拼成 "+++i; ..." 而被整行丢弃, 密钥可藏在其中。
+        if raw.startswith("+++ b/") or raw.startswith("+++ /dev/null"):
+            path = raw[6:] if raw.startswith("+++ b/") else "<unknown>"
             continue
         if raw.startswith("@@"):
             match = re.search(r"\+(\d+)(?:,\d+)?", raw)
             line_no = int(match.group(1)) if match else 0
             continue
-        if raw.startswith("+") and not raw.startswith("+++"):
+        if raw.startswith("+"):
             result.append((path, line_no, raw[1:]))
             line_no += 1
         elif not raw.startswith("-") and line_no:
@@ -55,9 +58,14 @@ def added_lines(diff: str) -> list[tuple[str, int, str]]:
 
 def scan_diff(diff: str) -> list[tuple[str, int, str, str]]:
     findings: list[tuple[str, int, str, str]] = []
+    seen: set[tuple[str, int, str]] = set()
     for path, line_no, text in added_lines(diff):
         for name, pattern in _PATTERNS:
             if pattern.search(text):
+                key = (path, line_no, name)
+                if key in seen:
+                    continue
+                seen.add(key)
                 findings.append((path, line_no, name, text.strip()))
     return findings
 
@@ -76,7 +84,18 @@ def read_diff(args: argparse.Namespace) -> str:
         encoding="utf-8",
         errors="replace",
     )
-    return completed.stdout
+    # log --no-merges 不含合并提交的 diff: merge commit 在冲突解决中引入的密钥
+    # (两个父提交都没有) 只出现在最终树里, 追加 base...HEAD 的总差异补上这个盲区,
+    # scan_diff 内部按 (path, line, 规则) 去重
+    final_diff = subprocess.run(
+        ["git", "-c", "core.quotepath=off", "diff", "--no-color", "--no-ext-diff", f"{args.diff_base}...HEAD", "--"],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    return completed.stdout + "\n" + final_diff.stdout
 
 
 def main(argv: list[str] | None = None) -> int:

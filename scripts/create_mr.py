@@ -689,6 +689,10 @@ def run_preflight_tests(args, cfg: dict) -> int:
     sys.stderr.write(f"[create-mr] 本地测试: {command}\n")
     try:
         cmd = shlex.split(command, posix=(os.name != "nt"))
+        if os.name == "nt":
+            # posix=False 会把引号保留在 token 里 ('"C:\...exe"' 带引号执行必然
+            # FileNotFoundError), 剥掉首尾成对引号还原真实参数
+            cmd = [t[1:-1] if len(t) >= 2 and t[0] == t[-1] == '"' else t for t in cmd]
     except ValueError as exc:
         sys.stderr.write(f"[create-mr] 测试命令解析失败: {exc}\n")
         return 2
@@ -779,6 +783,9 @@ def _gitlab_api_request(
         ) from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f"GitLab API {method} {path} 连接失败: {exc.reason}") from exc
+    except TimeoutError as exc:
+        # urlopen 读超时抛裸 TimeoutError (不是 URLError 子类), 不捕获会直接 traceback
+        raise RuntimeError(f"GitLab API {method} {path} 超时") from exc
 
     if not body:
         return {}
