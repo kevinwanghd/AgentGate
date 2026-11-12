@@ -1,62 +1,21 @@
 # Pending Lessons Schema
 
-**Version:** 1.0
+**Version:** 2.0（2026-09 起统一为 YAML，旧 JSON 格式已废弃）
 **Location:** `.governance/pending-lessons/`
 **隔离目的:** 此目录与 `lessons/` 物理隔离，不被 `validate_lessons.py` 的 lessons/v1 校验器扫描。
 
----
-
-## 文件命名规范
-
-```
-{YYYYMMDD}_{fingerprint}.json
-```
-
-- `YYYYMMDD`: 发现日期
-- `fingerprint`: 基于 `pattern_type + normalized_code_shape` 的哈希值（不含仓库/CR 标识）
-- 示例: `20260830_a1b2c3d4.json`
+**字段权威定义见 [`.governance/pending-lessons/SCHEMA.md`](../../.governance/pending-lessons/SCHEMA.md)**，本文只补充审核流程约定。
 
 ---
 
-## Schema Fields
+## 工具链
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `id` | string | 是 | 全局唯一 ID，格式 `{fingerprint}_{timestamp}` |
-| `pattern_type` | string | 是 | 风险类型，如 `command-injection`、`sql-string-concat` |
-| `source_repo` | string | 是 | 来源仓库名，如 `deliverhq`、`agentgate` |
-| `source_ref` | string | 是 | 触发扫描的 ref，如 commit SHA、MR ID |
-| `detected_at` | string | 是 | ISO 8601 时间戳，格式 `YYYY-MM-DDTHH:MM:SS+08:00` |
-| `failure_context` | object | 是 | 失败上下文详情（见下） |
-| `evidence` | object | 是 | 证据详情（见下） |
-| `regression` | string | 是 | 回归测试建议（与 lessons/v1 保持一致） |
-| `status` | string | 是 | 状态：`pending` \| `confirmed` \| `rejected` \| `promoted` |
-| `fingerprint` | string | 是 | 跨仓库聚合指纹 |
-| `discovered_by` | string | 是 | `agent` \| `human` |
-| `review` | object | 否 | 审核信息（状态非 `pending` 时必填） |
-
----
-
-## failure_context
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `file` | string | 文件路径 |
-| `line` | integer | 行号 |
-| `code_snippet` | string | 风险代码片段（原始） |
-| `language` | string | 编程语言 |
-| `pattern_description` | string | 命中的风险模式描述 |
-
----
-
-## evidence
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `diff_base` | string | 扫描基准 |
-| `scan_command` | string | 触发扫描的命令 |
-| `scan_output_hash` | string | 扫描输出的 SHA256 哈希（防篡改） |
-| `raw_violation` | object | scan_risks.py 的原始违规对象 |
+| 环节 | 脚本 |
+|------|------|
+| 写入 / 去重合并 | `scripts/pending_writer.py`（文件名 `<pattern_type>-<fingerprint>.yml`） |
+| 校验 | `scripts/validate_pending.py`；`scripts/pending_lessons_schema.py` 为 CI 兼容入口 |
+| 审核 / 应用 | `scripts/lessons_review.py` |
+| 跨仓聚合 / 指标 | `scripts/aggregate_pending.py`、`scripts/governance_metrics.py` |
 
 ---
 

@@ -24,8 +24,9 @@ _PATTERNS = (
     (
         "credential-assignment",
         re.compile(
-            r"(?i)(?:^|[\s;({])(?:api[_-]?key|client[_-]?secret|password|passwd|private[_-]?key|secret|token)"
-            r"\s*[:=]\s*[\"'][^\"'\r\n]{12,}[\"']"
+            # 前缀允许 . [ 引号: 覆盖 self.token = "..." / cfg["password"] = "..."
+            r"(?i)(?:^|[\s;({.\[\"'])(?:api[_-]?key|client[_-]?secret|password|passwd|private[_-]?key|secret|token)"
+            r"[\"']?\]?\s*[:=]\s*[\"'][^\"'\r\n]{12,}[\"']"
         ),
     ),
 )
@@ -37,14 +38,17 @@ def added_lines(diff: str) -> list[tuple[str, int, str]]:
     path = "<unknown>"
     line_no = 0
     for raw in diff.splitlines():
-        if raw.startswith("+++ b/"):
-            path = raw[6:]
+        # 真 diff 文件头只可能是 +++ b/ 或 +++ /dev/null。
+        # 不能用裸 +++ 前缀排除内容行: 内容以 ++ 开头的新增行 (如 "++i; const k=...")
+        # 会拼成 "+++i; ..." 而被整行丢弃, 密钥可藏在其中。
+        if raw.startswith("+++ b/") or raw.startswith("+++ /dev/null"):
+            path = raw[6:] if raw.startswith("+++ b/") else "<unknown>"
             continue
         if raw.startswith("@@"):
             match = re.search(r"\+(\d+)(?:,\d+)?", raw)
             line_no = int(match.group(1)) if match else 0
             continue
-        if raw.startswith("+") and not raw.startswith("+++"):
+        if raw.startswith("+"):
             result.append((path, line_no, raw[1:]))
             line_no += 1
         elif not raw.startswith("-") and line_no:
@@ -54,9 +58,14 @@ def added_lines(diff: str) -> list[tuple[str, int, str]]:
 
 def scan_diff(diff: str) -> list[tuple[str, int, str, str]]:
     findings: list[tuple[str, int, str, str]] = []
+    seen: set[tuple[str, int, str]] = set()
     for path, line_no, text in added_lines(diff):
         for name, pattern in _PATTERNS:
             if pattern.search(text):
+                key = (path, line_no, name)
+                if key in seen:
+                    continue
+                seen.add(key)
                 findings.append((path, line_no, name, text.strip()))
     return findings
 
@@ -68,14 +77,25 @@ def read_diff(args: argparse.Namespace) -> str:
         raise ValueError("one of --diff-base or --diff-file is required")
     # 使用 commit range (..) 而非两点比较，确保中间提交的密钥也被扫描
     completed = subprocess.run(
-        ["git", "log", "-p", "--no-merges", f"{args.diff_base}..HEAD", "--"],
+        ["git", "-c", "core.quotepath=off", "log", "-p", "--no-color", "--no-ext-diff", "--no-merges", f"{args.diff_base}..HEAD", "--"],
         check=True,
         capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",
     )
-    return completed.stdout
+    # log --no-merges 不含合并提交的 diff: merge commit 在冲突解决中引入的密钥
+    # (两个父提交都没有) 只出现在最终树里, 追加 base...HEAD 的总差异补上这个盲区,
+    # scan_diff 内部按 (path, line, 规则) 去重
+    final_diff = subprocess.run(
+        ["git", "-c", "core.quotepath=off", "diff", "--no-color", "--no-ext-diff", f"{args.diff_base}...HEAD", "--"],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    return completed.stdout + "\n" + final_diff.stdout
 
 
 def main(argv: list[str] | None = None) -> int:

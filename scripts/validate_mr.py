@@ -43,7 +43,7 @@ import re
 import subprocess
 import sys
 
-from governance_common import ConfigError, load_config as load_shared_config
+from governance_common import ConfigError, load_config as load_shared_config, path_matches_any
 
 try:
     import yaml  # type: ignore
@@ -225,26 +225,17 @@ def find_ai_usage_in_commits(diff_base: str | None) -> tuple[bool, str | None]:
 # ============================================================
 # 大变更判定 (基于 git diff 统计)
 # ============================================================
-def _fnmatch_any(path: str, patterns: list[str]) -> bool:
-    import fnmatch
-    for pat in patterns:
-        # 目录前缀模式 "ci/" 视为 "ci/**"
-        if pat.endswith("/"):
-            if path.startswith(pat) or fnmatch.fnmatch(path, pat + "**"):
-                return True
-        elif fnmatch.fnmatch(path, pat):
-            return True
-    return False
+_fnmatch_any = path_matches_any  # 与其他治理脚本共用同一路径 glob 语义 ("ci/" 视为 "ci/**")
 
 
 def detect_large_change(cfg: dict, diff_base: str | None) -> tuple[bool, list[str]]:
-    """返回 (是否大变更, 触发原因列表)。无 git 时返回 (False, [])。"""
+    """返回 (是否大变更, 触发原因列表)。git 不可用或 diff 失败时 fail-closed 视为大变更。"""
     lc = cfg["large_change"]
     reasons: list[str] = []
     try:
         base = diff_base or "HEAD~1"
         out = subprocess.run(
-            ["git", "diff", "--numstat", f"{base}...HEAD"],
+            ["git", "-c", "core.quotepath=off", "diff", "--numstat", "--no-renames", f"{base}...HEAD"],
             check=True, capture_output=True, text=True,
             encoding="utf-8", errors="replace",
         ).stdout
@@ -313,13 +304,12 @@ def _write_large_diff_summary(
     if not summary_path:
         return
     import collections
-    import fnmatch as _fnmatch
 
     dir_totals: dict[str, int] = collections.defaultdict(int)
     try:
         base = diff_base or "HEAD~1"
         out = subprocess.run(
-            ["git", "diff", "--numstat", f"{base}...HEAD"],
+            ["git", "-c", "core.quotepath=off", "diff", "--numstat", "--no-renames", f"{base}...HEAD"],
             check=True, capture_output=True, text=True,
             encoding="utf-8", errors="replace",
         ).stdout
@@ -328,7 +318,7 @@ def _write_large_diff_summary(
             if len(parts) != 3:
                 continue
             add_s, del_s, path = parts
-            if any(_fnmatch.fnmatch(path, p) for p in excluded):
+            if _fnmatch_any(path, excluded):  # 与 detect_large_change 同一匹配规则
                 continue
             try:
                 lines = int(add_s) + int(del_s)
@@ -483,17 +473,16 @@ def main() -> int:
         try:
             base = args.diff_base or "HEAD~1"
             ns = subprocess.run(
-                ["git", "diff", "--numstat", f"{base}...HEAD"],
+                ["git", "-c", "core.quotepath=off", "diff", "--numstat", "--no-renames", f"{base}...HEAD"],
                 check=True, capture_output=True, text=True,
                 encoding="utf-8", errors="replace",
             ).stdout
             excluded = lc.get("excluded_paths", [])
-            import fnmatch as _fn
             for ln in ns.splitlines():
                 pts = ln.split("\t")
                 if len(pts) == 3:
                     try:
-                        if not any(_fn.fnmatch(pts[2], p) for p in excluded):
+                        if not _fnmatch_any(pts[2], excluded):
                             total_lines += int(pts[0]) + int(pts[1])
                     except ValueError:
                         pass

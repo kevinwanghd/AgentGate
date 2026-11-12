@@ -24,7 +24,7 @@ import re
 import subprocess
 import sys
 
-from governance_common import ConfigError, load_config as load_shared_config
+from governance_common import ConfigError, load_config as load_shared_config, path_matches, reason_blacklist_hit
 
 # ---------- 可选依赖 pyyaml, 缺失时退化为内置默认 ----------
 try:
@@ -98,10 +98,13 @@ SCAN_EXTENSIONS = {
 }
 
 # 测试文件判定 (与 check_tested.py 保持一致，收紧避免误匹配)
+# Tests? 分支用大小写敏感 (?-i:) 并要求路径边界:
+# IGNORECASE 的 Tests?\.[a-z]+$ 会把 latest.cs / contest.java 误判为测试文件，
+# 导致其中所有 block 规则被跳过
 _TEST_FILE_RE = re.compile(
     r'(^|/)(tests?|spec|__tests?__)/'  # test/, spec/, __tests__/ 目录下
     r'|(_test|_spec)\.[a-z]+$'
-    r'|Tests?\.[a-z]+$'
+    r'|(?-i:Tests?)\.[a-z]+$'
     r'|(^|/)test_[^/]+$',
     re.IGNORECASE,
 )
@@ -112,6 +115,16 @@ _SCAN_IGNORE_RE = re.compile(
     r'scan:ignore\b.*?reason:\s*"(?P<reason>[^"]{10,})"',
     re.IGNORECASE,
 )
+
+
+def _scan_ignore_invalid(match: re.Match, blacklist: list[str]) -> bool:
+    """scan:ignore 的 reason 是否无效 (黑名单词/语义不足), 与 risk: 注解同标准。"""
+    reason = match.group("reason")
+    if reason_blacklist_hit(reason, blacklist):
+        return True
+    stripped = reason.strip()
+    meaningful = sum(1 for c in stripped if c.isalnum() or c in ("-", "_", ".", "·"))
+    return meaningful < 3
 
 # 测试文件中仍然需要检查的模式 (skipped-test 的检测对象就是测试代码本身)
 _TEST_FILE_PATTERNS = {"skipped-test"}
@@ -245,33 +258,21 @@ def _build_patterns() -> list[tuple[str, re.Pattern, str, frozenset, str]]:
         ),
         "硬编码 URL，生产环境可能需要动态配置",
         frozenset(),
-        "block",
+        # 命中任意语言的任意 URL 字面量, 误报高: 观察期 warn, 仓库可在 patterns/*.yml 升为 block
+        "warn",
     ))
 
-    # 10. sensitive-log: 敏感字段明文打印到日志
-    # 匹配常见敏感字段名后紧跟的日志打印
-    SENSITIVE_FIELD_PATTERN = (
-        r'password|passwd|pwd|secret|token|key|api[_-]?key|'
-        r'access[_-]?token|refresh[_-]?token|private[_-]?key|'
-        r'credit[_-]?card|card[_-]?no|cvv|ssn'
-    )
-    p.append((
-        "sensitive-log",
-        re.compile(
-            rf'(?i)(log|console\.(log|debug|info|warn)|Logger\.(Debug|Info|Warn|Error))'
-            rf'.*?["\']({SENSITIVE_FIELD_PATTERN})',
-        ),
-        "敏感字段可能明文打印到日志",
-        frozenset(),
-        "block",
-    ))
+    # 10. sensitive-log 不内置: 由 patterns/<lang>.yml 以 warn 模式按语言提供,
+    #     内置 block 版本会在所有语言上误伤 (#76)。
 
     # 11. sql-string-concat: SQL 字符串拼接（SQL 注入风险）
     p.append((
         "sql-string-concat",
         re.compile(
-            r'(?i)(SELECT|INSERT|UPDATE|DELETE|FROM|WHERE)\s*["\']'
-            r'.*?["\'].*?\+|["\'].*?\+.*?["\'].*?(SELECT|INSERT|UPDATE|DELETE)',
+            # 字符串字面量内含完整 SQL 结构 (SELECT..FROM / INSERT INTO / UPDATE..SET / DELETE FROM),
+            # 且紧接 + 拼接; 单个关键字 ("Deleted" / "Select an item") 不算
+            r'(?i)["\'][^"\'\n]*\b(?:SELECT\b[^"\'\n]*\bFROM|INSERT\s+INTO|UPDATE\b[^"\'\n]*\bSET|DELETE\s+FROM)\b'
+            r'[^"\'\n]*["\']\s*\+',
         ),
         "SQL 语句使用字符串拼接，可能导致注入风险",
         frozenset({".cs", ".java", ".py", ".js", ".ts", ".php", ".rb"}),
@@ -295,8 +296,8 @@ def _build_patterns() -> list[tuple[str, re.Pattern, str, frozenset, str]]:
     p.append((
         "weak-crypto",
         re.compile(
-            r'(?i)(?<![a-zA-Z])(MD5|SHA1|des|rc4|ECB)(?![a-zA-Z])'
-            r'|(?<![a-zA-Z])(RC4)(?![a-zA-Z])',
+            # 边界含 _ 与数字: des_key / md5sum 这类标识符不是算法调用
+            r'(?i)(?<![A-Za-z0-9_])(MD5|SHA1|DES|RC4|ECB)(?![A-Za-z0-9_])',
         ),
         "使用弱加密算法，不适合安全敏感场景",
         frozenset(),
@@ -398,7 +399,7 @@ def load_config(path: str | None) -> dict:
 def run_git(args: list[str]) -> str:
     try:
         out = subprocess.run(
-            ["git", *args],
+            ["git", "-c", "core.quotepath=off", *args],
             check=True, capture_output=True, text=True,
             encoding="utf-8", errors="replace",
         )
@@ -433,8 +434,17 @@ def parse_diff(diff_text: str) -> dict[str, list[tuple[int, str]]]:
     cur_file: str | None = None
     new_lineno = 0
 
+    def _is_file_header(line: str, prefix: str) -> bool:
+        # 真 diff 文件头只可能是 +++/--- 加 a/、b/ 或 /dev/null。
+        # 新增行内容以 ++ 或 -- 开头时 (如 "++ counter;") 会拼出 "+++ counter;"，
+        # 不能误当文件头，否则后续行全部挂到假路径下。
+        if not line.startswith(prefix):
+            return False
+        path = line[4:].strip()
+        return path == "/dev/null" or path.startswith(("a/", "b/"))
+
     for line in diff_text.splitlines():
-        if line.startswith("+++ "):
+        if _is_file_header(line, "+++"):
             # +++ b/path/to/file  或  +++ /dev/null
             path = line[4:].strip()
             if path == "/dev/null":
@@ -451,11 +461,11 @@ def parse_diff(diff_text: str) -> dict[str, list[tuple[int, str]]]:
             continue
         if cur_file is None:
             continue
-        if line.startswith("+") and not line.startswith("+++"):
+        if line.startswith("+") and not _is_file_header(line, "+++"):
             # 新增行
             result[cur_file].append((new_lineno, line[1:]))
             new_lineno += 1
-        elif line.startswith("-") and not line.startswith("---"):
+        elif line.startswith("-") and not _is_file_header(line, "---"):
             # 删除行不增加 new_lineno
             pass
         else:
@@ -510,8 +520,8 @@ def _validate_annotation_fields(
     problems: list[str] = []
     ra = cfg["risk_annotations"]
 
-    # 类型必须已注册
-    if risk_type not in ra["registered_types"]:
+    # 类型必须已注册 (内置规则类型始终视为已注册, 避免仓库自定义列表时漏写导致注解无法使用)
+    if risk_type not in ra["registered_types"] and risk_type not in {p[0] for p in PATTERNS}:
         problems.append(f'风险类型 "{risk_type}" 未注册')
     # 类型应覆盖该行命中类型之一
     if risk_type not in expected_types:
@@ -534,11 +544,9 @@ def _validate_annotation_fields(
             problems.append(f'reason 过于简单，仅重复风险类型名称 "{risk_type}"，请说明业务权衡或上下文')
     
     # reason 黑名单词 (P0-3: 硬阻断，不再只是警告)
-    low = reason.lower()
-    for bad in ra["reason_blacklist"]:
-        if bad.lower() in low:
-            problems.append(f'reason 含黑名单词 "{bad}"')
-            break
+    bad = reason_blacklist_hit(reason, ra["reason_blacklist"])
+    if bad:
+        problems.append(f'reason 含黑名单词 "{bad}"')
     # reason 最小语义验证 (P0-3: 防止无意义理由如"无"/"."/纯符号)
     stripped = reason.strip()
     if stripped:
@@ -652,9 +660,17 @@ def check_test_removal(diff_text: str, cfg: dict) -> list[str]:
     risk:test-removal 注解, 返回问题。这里只检测删除行, 注解需在 commit message
     或同一 diff 的新增注解里 —— v1 简化: 只要 diff 文本里出现合法 test-removal 注解即放行。
     """
+    def _is_diff_header(line: str, prefix: str) -> bool:
+        # 真 diff 文件头只可能 ---/+++ 加 a/、b/ 或 /dev/null
+        if not line.startswith(prefix):
+            return False
+        path = line[4:].lstrip()
+        return path.startswith(("a/", "b/")) or path == "/dev/null"
+
     removed_tests = []
     for line in diff_text.splitlines():
-        if line.startswith("-") and not line.startswith("---"):
+        # 精确排除文件头 (--- a/…): 内容以 -- 开头的删除行不能被裸 --- 前缀误排除
+        if line.startswith("-") and not _is_diff_header(line, "---"):
             if _TEST_DECL_RE.search(line):
                 removed_tests.append(line[1:].strip())
     if not removed_tests:
@@ -663,7 +679,7 @@ def check_test_removal(diff_text: str, cfg: dict) -> list[str]:
     # 在整个 diff 的新增行里找 test-removal 注解
     added_text = "\n".join(
         l[1:] for l in diff_text.splitlines()
-        if l.startswith("+") and not l.startswith("+++")
+        if l.startswith("+") and not _is_diff_header(l, "+++")
     )
     matches = list(re.finditer(
         r'risk:\s*test-removal.*?reason:\s*"([^"]*)".*?owner:.*?reviewed:\s*(\d{4}-\d{2}-\d{2})',
@@ -696,25 +712,8 @@ def _today_iso() -> str:
 # 主流程
 # ============================================================
 def _path_matches(path: str, pattern: str) -> bool:
-    """glob 匹配, 支持 ** 跨目录 (fnmatch 原生不支持 **)。"""
-    import re as _re
-    # 逐段构造正则: ** → 任意(含/); * → 非/; ? → 单字符; 其余转义
-    out = []
-    i = 0
-    n = len(pattern)
-    while i < n:
-        c = pattern[i]
-        if pattern[i:i+3] == "**/":
-            out.append("(?:.*/)?"); i += 3
-        elif pattern[i:i+2] == "**":
-            out.append(".*"); i += 2
-        elif c == "*":
-            out.append("[^/]*"); i += 1
-        elif c == "?":
-            out.append("[^/]"); i += 1
-        else:
-            out.append(_re.escape(c)); i += 1
-    return _re.fullmatch("".join(out), path) is not None
+    """glob 匹配, 与其他治理脚本共用 governance_common.path_matches 语义。"""
+    return path_matches(path, pattern)
 
 
 def scan(diff_text: str, cfg: dict) -> list[dict]:
@@ -722,6 +721,8 @@ def scan(diff_text: str, cfg: dict) -> list[dict]:
     violations: list[dict] = []
     parsed = parse_diff(diff_text)
     all_patterns = PATTERNS + build_custom_patterns(cfg)
+    # 模式显式声明的 exts (如 .json/.mjs) 扩展扫描范围; 这些额外扩展名只跑声明了它的模式
+    explicit_exts = {e.lower() for p in all_patterns for e in p[3]}
 
     # 缓存已读文件
     file_cache: dict[str, list[str] | None] = {}
@@ -729,7 +730,8 @@ def scan(diff_text: str, cfg: dict) -> list[dict]:
     exclude = cfg["risk_annotations"].get("scan_exclude_paths", []) or []
     for path, added in parsed.items():
         ext = os.path.splitext(path)[1].lower()
-        if ext not in SCAN_EXTENSIONS:
+        only_explicit = ext not in SCAN_EXTENSIONS
+        if only_explicit and ext not in explicit_exts:
             continue
         # 路径豁免: 生成/引入/第三方代码整文件跳过
         if any(_path_matches(path, pat) for pat in exclude):
@@ -750,6 +752,8 @@ def scan(diff_text: str, cfg: dict) -> list[dict]:
                 # 扩展名过滤: 模式限定了语言且当前文件不在其中则跳过
                 if exts and ext not in exts:
                     continue
+                if only_explicit and not exts:
+                    continue
                 # 测试文件: 只检查测试代码本身相关的模式 (如 skipped-test)
                 if is_test and rtype not in _TEST_FILE_PATTERNS:
                     continue
@@ -763,12 +767,18 @@ def scan(diff_text: str, cfg: dict) -> list[dict]:
             if not hits:
                 continue
 
-            # 行内豁免: 命中行同行或上一行有 scan:ignore reason:"..." 则整行跳过
+            # 行内豁免: 命中行同行或上一行有 scan:ignore reason:"..." 则整行跳过。
+            # reason 与 risk: 注解同一套约束 (黑名单词/语义不足则豁免无效),
+            # 防止 agent 用 scan:ignore reason:"临时先这样" 批量自助免检
             ignore_window = [content]
             prev = added_by_line.get(lineno - 1)
             if prev is not None:
                 ignore_window.append(prev)
-            if any(_SCAN_IGNORE_RE.search(l) for l in ignore_window):
+            blacklist = cfg["risk_annotations"].get("reason_blacklist", []) or []
+            if any(
+                (m := _SCAN_IGNORE_RE.search(l)) and not _scan_ignore_invalid(m, blacklist)
+                for l in ignore_window
+            ):
                 continue
 
             hit_types = {t for t, _, _ in hits}

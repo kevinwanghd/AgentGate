@@ -23,8 +23,13 @@ import sys
 
 from governance_common import host_python, msys_to_host
 
+# 与 governance_common 一致: 汇总含 emoji, 中文 Windows 重定向输出时默认 GBK 会崩溃
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
 
-def run(name: str, cmd: list[str], cwd: str | None = None) -> tuple[int, str, str]:
+
+def run(name: str, cmd: list[str], cwd: str | None = None, stdin=None) -> tuple[int, str, str]:
     """运行子命令，返回 (exit_code, stdout, stderr)。"""
     # 在 MINGW 下将所有看起来像文件路径的参数转为原生路径
     fixed_cmd: list[str] = []
@@ -40,14 +45,12 @@ def run(name: str, cmd: list[str], cwd: str | None = None) -> tuple[int, str, st
     try:
         result = subprocess.run(
             fixed_cmd,
+            stdin=stdin,
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
             cwd=cwd,
-            # 子命令不依赖 stdin；不显式关闭会让 validate_mr.py 在
-            # 无 --file 时读父级 stdin，若父级 stdin 是未关闭的管道会挂死。
-            stdin=subprocess.DEVNULL,
         )
         print(result.stdout)
         if result.stderr:
@@ -71,8 +74,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--config",
-        default="governance.config.yml",
-        help="Path to governance.config.yml",
+default=None,
+        help="Path to governance.config.yml (omit to let each scan use its own default)",
     )
     parser.add_argument(
         "--pr-body-file",
@@ -90,9 +93,10 @@ def main(argv: list[str] | None = None) -> int:
         os.path.join(scripts_dir, "scan_risks.py"),
         "--diff-base",
         args.diff_base,
-        "--config",
-        args.config,
     ]
+    # 只在显式传入时转发 --config; 显式路径不存在会被子脚本当作配置错误
+    if args.config:
+        risk_cmd.extend(["--config", args.config])
     rc, stdout, stderr = run("risk-scan", risk_cmd)
     results["risk_scan"] = {
         "exit_code": rc,
@@ -130,14 +134,18 @@ def main(argv: list[str] | None = None) -> int:
         os.path.join(scripts_dir, "validate_mr.py"),
         "--diff-base",
         args.diff_base,
-        "--config",
-        args.config,
     ]
+    if args.config:
+        mr_cmd.extend(["--config", args.config])
+    mr_stdin = None
     if args.pr_body_file:
         mr_cmd.extend(["--file", args.pr_body_file])
-    # 不传 --file: validate_mr.py 会走 empty-body 逻辑（不报 FileNotFoundError）
+    else:
+        # 不传 --file: validate_mr 会先读 CI_MERGE_REQUEST_DESCRIPTION (GitLab),
+        # 再读 stdin; stdin 接 DEVNULL 防止挂起, 且不依赖 Windows 上不存在的 /dev/null
+        mr_stdin = subprocess.DEVNULL
 
-    rc, stdout, stderr = run("mr-validate", mr_cmd)
+    rc, stdout, stderr = run("mr-validate", mr_cmd, stdin=mr_stdin)
     results["mr_validate"] = {
         "exit_code": rc,
         "stdout_lines": len(stdout.splitlines()),
@@ -158,7 +166,9 @@ def main(argv: list[str] | None = None) -> int:
         icon = "✅" if status == "pass" else "❌"
         print(f"  {icon} {name}: {status} (exit {res['exit_code']})")
 
-    overall_exit = max(r.get("exit_code", 0) for r in results.values())
+    # 任一非零即失败; 被信号终止的子进程返回负数, 不能用 max() 直接取 (会被 0 盖过)
+    codes = [r.get("exit_code", 0) for r in results.values()]
+    overall_exit = 0 if all(c == 0 for c in codes) else max(max(codes), 1)
     summary = {
         "schema": "governance_scan_all/v1",
         "overall": "fail" if overall_exit != 0 else "pass",

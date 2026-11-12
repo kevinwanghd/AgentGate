@@ -22,37 +22,20 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, edited]
 
-jobs:
-  # ── 统一 checkout job (P0-A: 共享 artifact + P0-B: shallow fetch) ────────────
-  checkout:
-    runs-on: ubuntu-latest
-    outputs:
-      base_ref: ${{ steps.vars.outputs.base_ref }}
-    steps:
-      # P0-B: fetch-depth: 1 只拉当前 commit，不拉全量历史
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-      # Shallow fetch 目标分支（只取最新 tip，无需完整历史）
-      - name: Fetch base ref (shallow)
-        id: vars
-        run: |
-          BASE_REF="${{ github.event.pull_request.base.ref }}"
-          echo "base_ref=$BASE_REF" >> $GITHUB_OUTPUT
-          echo "[checkout] Shallow fetch base branch: $BASE_REF"
-          git fetch -q --depth=1 origin "$BASE_REF" || git fetch -q origin "$BASE_REF"
-      # P0-A: 上传 artifact，所有 scan job 复用（节省 2 个 job 的重复 fetch）
-      - name: Upload checkout artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: checkout
-          path: .
-          retention-days: 1
+# 同一 PR 新推送时取消旧运行: 旧运行算出的 AUTO_MERGE 不能为新提交"上膛"
+concurrency:
+  group: governance-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
+# 工作流级最小权限: 无覆盖的 job (含在 PR 代码上执行脚本的 scan/selftest)
+# 只拿只读 token, 防止组织默认 token 为 write 时 PR 可控脚本外发写权限
+permissions:
+  contents: read
+
+jobs:
   # P1-A: Change Detection — 轻量 path filter，决定后续 scan job 是否需要运行
-  # 路径过滤器失败时降级为全跑（不阻断流水线）
+  # 每个 scan job 独立 checkout 完整历史（artifact 方案有 zip 压缩 bug）
   path-filter:
-    needs: [checkout]
     runs-on: ubuntu-latest
     outputs:
       run_yaml_validate: ${{ steps.filter.outputs.run_yaml_validate }}
@@ -69,22 +52,23 @@ jobs:
       run_rust_test: ${{ steps.filter.outputs.run_rust_test }}
       changed_files: ${{ steps.filter.outputs.changed_files }}
     steps:
-      - uses: actions/download-artifact@v4
+      # P0-B: shallow fetch (path-filter 只需当前 commit + base tip)
+      - uses: actions/checkout@v4
         with:
-          name: checkout
-          path: .
-      - name: Verify checkout artifact
+          fetch-depth: 2
+      - name: Fetch base ref (shallow)
+        id: vars
         run: |
-          if [ ! -f ".git/HEAD" ]; then
-            echo "::error::Checkout artifact missing or empty. The 'checkout' job may have failed. Check Actions logs."
-            exit 1
-          fi
-          echo "[artifact] Checkout verified."
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          echo "base_ref=$BASE_REF" >> $GITHUB_OUTPUT
+          echo "[path-filter] BASE_REF=$BASE_REF"
+          # shallow fetch base ref (只需最新 tip，不需完整历史)
+          git fetch -q --depth=1 origin "$BASE_REF" 2>/dev/null || git fetch -q origin "$BASE_REF"
       - name: Detect changed paths
         id: filter
         run: |
-          BASE_REF="${{ needs.checkout.outputs.base_ref }}"
-          echo "[path-filter] BASE_REF=$BASE_REF"
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          echo "[path-filter] Using BASE_REF=$BASE_REF"
 
           # 捕获 git diff 输出
           CHANGED=""
@@ -95,7 +79,12 @@ jobs:
             # 回退: 直接用 base ref 前缀尝试
             CHANGED=$(git diff --name-only "$BASE_REF...HEAD" 2>/dev/null || echo "")
           fi
-          echo "changed_files=$CHANGED" >> $GITHUB_OUTPUT
+          # 多行输出必须用 heredoc 语法，裸换行写入 GITHUB_OUTPUT 会报错
+          {
+            echo 'changed_files<<CHANGED_EOF'
+            echo "$CHANGED"
+            echo 'CHANGED_EOF'
+          } >> "$GITHUB_OUTPUT"
           echo "[path-filter] Changed files: $CHANGED"
 
           # ── YAML 验证: .yml / .yaml 文件变化时触发 ──────────────────
@@ -151,77 +140,20 @@ jobs:
           # Rust
           echo "$CHANGED" | grep -qE '\.rs$|\.toml$' && echo "run_rust_test=true" >> $GITHUB_OUTPUT || echo "run_rust_test=false" >> $GITHUB_OUTPUT
 
-  # P1-B: 统一扫描 job — 运行 governance_scan_all.py 一次性执行 risk-scan + secret-scan + mr-validate
-  # 3 个 runner → 1 个 runner，减少约 40-80 秒启动开销
-  # 各子检查的详细结果实时打印，任意失败整体退出非 0，JSON 摘要在末尾
-  # 注意: 此 job 与独立的 risk-scan / secret-scan / mr-validate job 并存，
-  #       需要时可替换为 --skip 模式或在 PR body 里注释选择其一
-  scan-compound:
-    needs: [checkout, path-filter]
-    # 只在有生产代码/配置变化时运行（覆盖 risk-scan + secret-scan 的条件）
-    if: >-
-      ${{
-        needs.path-filter.outputs.run_risk_scan == 'true' ||
-        needs.path-filter.outputs.run_secret_scan == 'true'
-      }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: checkout
-          path: .
-      - name: Verify checkout artifact
-        run: |
-          if [ ! -f ".git/HEAD" ]; then
-            echo "::error::Checkout artifact missing or empty. Check Actions logs for the 'checkout' job."
-            exit 1
-          fi
-      - name: Verify preinstalled Python dependencies
-        run: python3 -c "import yaml; print('pyyaml ok')"
-      - name: Run compound governance scan
-        env:
-          PR_BODY: ${{ github.event.pull_request.body || '' }}
-        run: |
-          BASE_REF="${{ needs.checkout.outputs.base_ref }}"
-          if [ -z "$BASE_REF" ]; then
-            echo "::error::PR base.ref missing, refusing to scan"
-            exit 1
-          fi
-          # 准备 PR body 文件
-          PR_BODY_FILE="/tmp/pr_body.txt"
-          if [ -n "$PR_BODY" ]; then
-            printf '%s' "$PR_BODY" > "$PR_BODY_FILE"
-          else
-            echo "## 背景" > "$PR_BODY_FILE"
-            echo "请填写 PR 背景" >> "$PR_BODY_FILE"
-            echo "" >> "$PR_BODY_FILE"
-            echo "## 变更内容" >> "$PR_BODY_FILE"
-            echo "请填写变更内容" >> "$PR_BODY_FILE"
-          fi
-          python3 scripts/governance_scan_all.py \
-            --diff-base "origin/$BASE_REF" \
-            --config governance.config.yml \
-            --pr-body-file "$PR_BODY_FILE"
-          EXIT_CODE=$?
-          echo "[scan-compound] Overall exit: $EXIT_CODE"
-          exit $EXIT_CODE
+  # (已移除 scan-compound: 它与 risk-scan/secret-scan/mr-validate 三个独立 job 完全重复,
+  #  每个 PR 把同样的扫描跑两遍; 分支保护要求的是独立 job 名, 故保留独立 job。
+  #  governance_scan_all.py 仍可用于本地一次性检查。)
 
   # YAML 配置语法检查: 最先运行，快速失败
+  # 无条件运行: 它是必过检查 (见 governance.config.yml required_checks), 纯文档 PR
+  # 也要有 'pass' 证据, 否则 gate-decision 按 required_check_missing ERROR。
   yaml-validate:
-    needs: [checkout, path-filter]
-    if: ${{ needs.path-filter.outputs.run_yaml_validate == 'true' }}
+    needs: [path-filter]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
         with:
-          name: checkout
-          path: .
-      - name: Verify checkout artifact
-        run: |
-          if [ ! -f ".git/HEAD" ]; then
-            echo "::error::Checkout artifact missing or empty. Check Actions logs for the 'checkout' job."
-            exit 1
-          fi
+          fetch-depth: 0
       - name: Verify preinstalled Python dependencies
         run: python3 -c "import yaml; print('pyyaml ok')"
       - name: validate YAML config files
@@ -232,80 +164,59 @@ jobs:
         run: python3 scripts/pending_lessons_schema.py
 
   # 风险扫描: 硬阻断 (命中风险模式且缺合法注解 → 拒合)
+  # 无条件运行: 属 required_checks (所有风险级别), path-filter 触发时跳过会让
+  # gate-decision 收到 skip/fail 而阻断纯文档 PR; 扫描器本身开销极小。
   risk-scan:
-    needs: [checkout, path-filter]
-    if: ${{ needs.path-filter.outputs.run_risk_scan == 'true' }}
+    needs: [path-filter]
     runs-on: ubuntu-latest
     steps:
-      # P0-A: 下载共享 artifact（避免重复 fetch）
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
         with:
-          name: checkout
-          path: .
-      - name: Verify checkout artifact
-        run: |
-          if [ ! -f ".git/HEAD" ]; then
-            echo "::error::Checkout artifact missing or empty. Check Actions logs for the 'checkout' job."
-            exit 1
-          fi
+          fetch-depth: 0
       - name: Verify preinstalled Python dependencies
         run: python3 -c "import yaml; print('pyyaml ok')"
       - name: scan risks
         run: |
-          BASE_REF="${{ needs.checkout.outputs.base_ref }}"
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
           # 用目标分支最新 tip 作 base (而非 PR 创建时的旧快照 base.sha),
           # 否则 pull/merge 进来的他人改动会被误算进本次 diff。三点 diff 自动取 merge-base。
           if [ -z "$BASE_REF" ]; then echo "::error::PR base.ref 缺失, 拒绝扫描 (不允许全量回退)"; exit 1; fi
+          git fetch -q origin "$BASE_REF"
           python3 scripts/scan_risks.py --diff-base "origin/$BASE_REF" --config governance.config.yml
 
-  # 密钥扫描: 硬阻断
+  # 密钥扫描: 硬阻断 (无条件运行, 理由同 risk-scan)
   secret-scan:
-    needs: [checkout, path-filter]
-    if: ${{ needs.path-filter.outputs.run_secret_scan == 'true' }}
+    needs: [path-filter]
     runs-on: ubuntu-latest
     steps:
-      # P0-A: 下载共享 artifact（避免重复 fetch）
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
         with:
-          name: checkout
-          path: .
-      - name: Verify checkout artifact
-        run: |
-          if [ ! -f ".git/HEAD" ]; then
-            echo "::error::Checkout artifact missing or empty. Check Actions logs for the 'checkout' job."
-            exit 1
-          fi
+          fetch-depth: 0
       - name: scan introduced secrets (standard library)
         run: |
-          BASE_REF="${{ needs.checkout.outputs.base_ref }}"
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
           if [ -z "$BASE_REF" ]; then echo "::error::PR base.ref 缺失, 拒绝扫描"; exit 1; fi
+          git fetch -q origin "$BASE_REF"
           python3 scripts/scan_secrets.py --diff-base "origin/${BASE_REF}"
 
   # MR 描述校验: 硬门禁 (从 PR body 读 + commit trailer 读 AI-Usage)
   mr-validate:
-    needs: [checkout, path-filter]
+    needs: [path-filter]
     if: ${{ github.event_name == 'pull_request' && needs.path-filter.outputs.run_mr_validate == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      # P0-A: 下载共享 artifact（避免重复 fetch）
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
         with:
-          name: checkout
-          path: .
-      - name: Verify checkout artifact
-        run: |
-          if [ ! -f ".git/HEAD" ]; then
-            echo "::error::Checkout artifact missing or empty. Check Actions logs for the 'checkout' job."
-            exit 1
-          fi
+          fetch-depth: 0
       - name: Verify preinstalled Python dependencies
         run: python3 -c "import yaml; print('pyyaml ok')"
       - name: validate PR description
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
-          BASE_REF="${{ needs.checkout.outputs.base_ref }}"
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
           if [ -z "$BASE_REF" ]; then echo "::error::PR base.ref 缺失, 拒绝扫描"; exit 1; fi
+          git fetch -q origin "$BASE_REF"
           # 如果 PR_BODY 为空，创建临时文件写入提示信息（避免 stdin 为空导致脚本报错）
           if [ -z "$PR_BODY" ]; then
             echo "## 背景" > /tmp/pr_body.txt
@@ -326,34 +237,28 @@ jobs:
   # AgentGate 是工具包仓库，无语言项目 → 直接跑 selftest.sh 生成 evidence
   # (不用 language-specific jobs artifact，因为 python-test/dotnet-test 等被跳过)
   test-check:
-    needs: [checkout, path-filter]
+    needs: [path-filter]
     if: ${{ needs.path-filter.outputs.run_test_check == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      # P0-A: 下载共享 artifact（避免重复 fetch）
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
         with:
-          name: checkout
-          path: .
-      - name: Verify checkout artifact
-        run: |
-          if [ ! -f ".git/HEAD" ]; then
-            echo "::error::Checkout artifact missing or empty. Check Actions logs for the 'checkout' job."
-            exit 1
-          fi
+          fetch-depth: 0
       - name: Verify preinstalled Python dependencies
         run: python3 -c "import yaml; print('pyyaml ok')"
       - name: generate test evidence via selftest
         run: |
           set -euo pipefail
           mkdir -p .governance
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          git fetch -q origin "$BASE_REF"
           python3 scripts/record_test_run.py \
             --evidence .governance/test-evidence.jsonl \
             --tool "selftest" \
             -- bash scripts/selftest.sh
       - name: check tested
         run: |
-          BASE_REF="${{ needs.checkout.outputs.base_ref }}"
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
           if [ -z "$BASE_REF" ]; then echo "::error::PR base.ref 缺失, 拒绝扫描"; exit 1; fi
           python3 scripts/check_tested.py \
             --diff-base "origin/$BASE_REF" \
@@ -363,16 +268,21 @@ jobs:
   # Go 受影响包测试 (含反向依赖一跳扩展)
   # 跳过条件: 仓库无 go.mod (非 Go 仓库), 或 vars.GOVERNANCE_SKIP_GO_TEST == "true"
   go-test:
-    needs: [checkout, path-filter]
+    needs: [path-filter]
     if: ${{ needs.path-filter.outputs.run_go_test == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      # P0-A: 下载共享 artifact（避免重复 fetch）
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
         with:
-          name: checkout
-          path: .
+          fetch-depth: 0
+      - name: Detect Go module
+        id: gomod
+        run: |
+          if [ -f go.mod ]; then echo "present=true" >> "$GITHUB_OUTPUT";
+          else echo "present=false" >> "$GITHUB_OUTPUT"; fi
+      # 无 go.mod 的仓库不下载 Go 工具链
       - uses: actions/setup-go@v5
+        if: steps.gomod.outputs.present == 'true'
         with:
           go-version: "1.22"
       - name: Verify preinstalled Python dependencies
@@ -390,29 +300,22 @@ jobs:
             echo "[go-test] 未找到 go.mod, 跳过 Go 测试。"
             exit 0
           fi
-          BASE_REF="${{ needs.checkout.outputs.base_ref }}"
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
           if [ -z "$BASE_REF" ]; then echo "::error::PR base.ref 缺失, 拒绝扫描"; exit 1; fi
+          git fetch -q origin "$BASE_REF"
           python3 scripts/run_affected_tests.py \
             --diff-base "origin/$BASE_REF" \
             --timeout "${GOVERNANCE_GO_TEST_TIMEOUT:-120}"
 
   # Flutter/Dart 测试: 无 pubspec.yaml 时自动跳过
   flutter-test:
-    needs: [checkout, path-filter]
+    needs: [path-filter]
     if: ${{ needs.path-filter.outputs.run_flutter_test == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      # P0-A: 下载共享 artifact（避免重复 fetch）
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
         with:
-          name: checkout
-          path: .
-      - name: Verify checkout artifact
-        run: |
-          if [ ! -f ".git/HEAD" ]; then
-            echo "::error::Checkout artifact missing or empty. Check Actions logs for the 'checkout' job."
-            exit 1
-          fi
+          fetch-depth: 1
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -433,21 +336,13 @@ jobs:
   # Python 测试: 无 requirements.txt / pyproject.toml / setup.py 时跳过
   # 记录证据到 .governance/test-evidence.jsonl（被 test-check 验证）
   python-test:
-    needs: [checkout, path-filter]
+    needs: [path-filter]
     if: ${{ needs.path-filter.outputs.run_python_test == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      # P0-A: 下载共享 artifact（避免重复 fetch）
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
         with:
-          name: checkout
-          path: .
-      - name: Verify checkout artifact
-        run: |
-          if [ ! -f ".git/HEAD" ]; then
-            echo "::error::Checkout artifact missing or empty. Check Actions logs for the 'checkout' job."
-            exit 1
-          fi
+          fetch-depth: 1
       - name: run python tests with evidence recording
         env:
           GOVERNANCE_SKIP_PYTHON_TEST: ${{ vars.GOVERNANCE_SKIP_PYTHON_TEST }}
@@ -492,21 +387,13 @@ jobs:
 
   # Node.js/TypeScript 测试: 无 package.json 时跳过
   node-test:
-    needs: [checkout, path-filter]
+    needs: [path-filter]
     if: ${{ needs.path-filter.outputs.run_node_test == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      # P0-A: 下载共享 artifact（避免重复 fetch）
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
         with:
-          name: checkout
-          path: .
-      - name: Verify checkout artifact
-        run: |
-          if [ ! -f ".git/HEAD" ]; then
-            echo "::error::Checkout artifact missing or empty. Check Actions logs for the 'checkout' job."
-            exit 1
-          fi
+          fetch-depth: 1
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -534,21 +421,13 @@ jobs:
 
   # Java 测试: 无 pom.xml / build.gradle 时跳过
   java-test:
-    needs: [checkout, path-filter]
+    needs: [path-filter]
     if: ${{ needs.path-filter.outputs.run_java_test == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      # P0-A: 下载共享 artifact（避免重复 fetch）
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
         with:
-          name: checkout
-          path: .
-      - name: Verify checkout artifact
-        run: |
-          if [ ! -f ".git/HEAD" ]; then
-            echo "::error::Checkout artifact missing or empty. Check Actions logs for the 'checkout' job."
-            exit 1
-          fi
+          fetch-depth: 1
       - uses: actions/setup-java@v4
         with:
           java-version: "21"
@@ -578,21 +457,13 @@ jobs:
   # .NET/C# 测试: 无 .sln / .csproj 时跳过
   # 记录证据到 .governance/test-evidence.jsonl（被 test-check 验证）
   dotnet-test:
-    needs: [checkout, path-filter]
+    needs: [path-filter]
     if: ${{ needs.path-filter.outputs.run_dotnet_test == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      # P0-A: 下载共享 artifact（避免重复 fetch）
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
         with:
-          name: checkout
-          path: .
-      - name: Verify checkout artifact
-        run: |
-          if [ ! -f ".git/HEAD" ]; then
-            echo "::error::Checkout artifact missing or empty. Check Actions logs for the 'checkout' job."
-            exit 1
-          fi
+          fetch-depth: 1
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0"
@@ -627,21 +498,13 @@ jobs:
 
   # Rust 测试: 无 Cargo.toml 时跳过
   rust-test:
-    needs: [checkout, path-filter]
+    needs: [path-filter]
     if: ${{ needs.path-filter.outputs.run_rust_test == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      # P0-A: 下载共享 artifact（避免重复 fetch）
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
         with:
-          name: checkout
-          path: .
-      - name: Verify checkout artifact
-        run: |
-          if [ ! -f ".git/HEAD" ]; then
-            echo "::error::Checkout artifact missing or empty. Check Actions logs for the 'checkout' job."
-            exit 1
-          fi
+          fetch-depth: 1
       - uses: dtolnay/rust-toolchain@stable
       - name: run rust tests
         env:
@@ -665,20 +528,11 @@ jobs:
 
   # 自测: 跑 governance 脚本自己的完整回归套件
   selftest:
-    needs: [checkout]
     runs-on: ubuntu-latest
     steps:
-      # P0-A: 下载共享 artifact（避免重复 fetch）
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
         with:
-          name: checkout
-          path: .
-      - name: Verify checkout artifact
-        run: |
-          if [ ! -f ".git/HEAD" ]; then
-            echo "::error::Checkout artifact missing or empty. Check Actions logs for the 'checkout' job."
-            exit 1
-          fi
+          fetch-depth: 1
       - name: Verify preinstalled Python dependencies
         run: python3 -c "import yaml; print('pyyaml ok')"
       - name: run selftest
@@ -688,7 +542,7 @@ jobs:
   # 只有该 job 成功后，后续独立 Merge Bot 才能申请平台自动合并。
   # yaml-validate 是硬门禁，即使 path-filter 认为无需验证也必须跑（YAML 语法错误会导致其他扫描失效）。
   gate-decision:
-    needs: [yaml-validate, scan-compound, risk-scan, secret-scan, mr-validate, test-check, go-test, flutter-test, python-test, node-test, java-test, dotnet-test, rust-test, selftest]
+    needs: [yaml-validate, risk-scan, secret-scan, mr-validate, test-check, go-test, flutter-test, python-test, node-test, java-test, dotnet-test, rust-test, selftest]
     if: ${{ always() && github.event.pull_request.draft == false }}
     outputs:
       merge_action: ${{ steps.compute.outputs.merge_action }}
@@ -709,6 +563,7 @@ jobs:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          YAML_VALIDATE: ${{ needs.yaml-validate.result == 'success' && 'pass' || 'fail' }}
           RISK_SCAN: ${{ needs.risk-scan.result == 'success' && 'pass' || 'fail' }}
           SECRET_SCAN: ${{ needs.secret-scan.result == 'success' && 'pass' || 'fail' }}
           MR_VALIDATE: ${{ needs.mr-validate.result == 'success' && 'pass' || 'fail' }}
@@ -726,13 +581,25 @@ jobs:
           git fetch -q origin "$BASE_REF"
           git cat-file -e "$HEAD_SHA^{commit}"
           SOURCE_SHA="$HEAD_SHA"
-          POLICY_SHA="$(git rev-parse "${SOURCE_SHA}:governance.config.yml")"
+          # 策略必须来自目标分支 (与 agentgate.yml/GitLab 一致)。
+          # 若读 PR 工作区的 governance.config.yml, PR 可清空 protected_paths、
+          # 降低 critical_approvals 实现自授权 AUTO_MERGE (见 agentgate.yml 同款注释)。
+          TARGET_SHA="$(git rev-parse "origin/$BASE_REF")"
+          if git cat-file -e "${TARGET_SHA}:governance.config.yml" 2>/dev/null; then
+            POLICY_SHA="$(git rev-parse "${TARGET_SHA}:governance.config.yml")"
+            POLICY_ARGS=(--target-ref "$TARGET_SHA")
+          else
+            POLICY_SHA="$TARGET_SHA"
+            printf '{}\n' > "$RUNNER_TEMP/agentgate-default-policy.yml"
+            POLICY_ARGS=(--config "$RUNNER_TEMP/agentgate-default-policy.yml")
+          fi
           export POLICY_SHA
           python - <<'PY' > /tmp/agentgate-evidence.json
           import json
           import os
 
           checks = {
+              "yaml-validate": os.environ["YAML_VALIDATE"],
               "risk-scan": os.environ["RISK_SCAN"],
               "secret-scan": os.environ["SECRET_SCAN"],
               "mr-validate": os.environ["MR_VALIDATE"],
@@ -761,7 +628,7 @@ jobs:
             --target-sha "$BASE_SHA" \
             --policy-sha "$POLICY_SHA" \
             --diff-base "origin/$BASE_REF" \
-            --config governance.config.yml \
+            "${POLICY_ARGS[@]}" \
             --output gate-result.json
           DECISION_EXIT=$?
           set -e
@@ -789,22 +656,39 @@ jobs:
   # 开发 agent、测试 runner 和 Gate Controller 均不直接获得该权限。
   auto-merge:
     needs: [gate-decision]
-    if: >-
-      needs.gate-decision.result == 'success' &&
-      needs.gate-decision.outputs.merge_action == 'AUTO_MERGE' &&
-      github.event.pull_request.draft == false &&
-      github.event.pull_request.head.repo.full_name == github.repository
+    # GitHub 已知行为: 依赖 job (gate-decision) 带 if: always() 时, 下游 job
+    # if 里的 needs.<job>.outputs 会在依赖完成前求值, merge_action 恒为空,
+    # auto-merge 永远 skip (实测复现)。因此 if 只判静态事件条件,
+    # GateResult 判定移入 step 内做。
+    if: ${{ always() && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
     steps:
+      - name: gate on GateResult
+        env:
+          MERGE_ACTION: ${{ needs.gate-decision.outputs.merge_action }}
+          GATE_STATUS: ${{ needs.gate-decision.result }}
+        run: |
+          if [ "$GATE_STATUS" != "success" ] || [ "$MERGE_ACTION" != "AUTO_MERGE" ]; then
+            echo "GateResult=$MERGE_ACTION (job=$GATE_STATUS), 不满足自动合并条件, 跳过。"
+            exit 0
+          fi
       - name: enable squash auto-merge
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
+          # 复核 PR 当前 head 仍是本次判定的 head: 否则旧运行的 AUTO_MERGE
+          # 可能为新推送 (未重新过门禁) 的提交开启自动合并
+          CURRENT_HEAD="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq .headRefOid)"
+          if [ "$CURRENT_HEAD" != "$EXPECTED_HEAD" ]; then
+            echo "::error::PR head 已更新 ($CURRENT_HEAD != $EXPECTED_HEAD), 本次判定过期, 拒绝开启自动合并。"
+            exit 1
+          fi
           gh pr merge "$PR_NUMBER" \
             --repo "$GITHUB_REPOSITORY" \
             --auto \

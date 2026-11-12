@@ -29,12 +29,12 @@ sys.path.insert(0, str(Path(__file__).parent))
 import fingerprint as fp_module
 
 
-PENDING_DIR = ".governance" / "pending-lessons"
+PENDING_DIR = Path(".governance") / "pending-lessons"
 
 
 def _now_iso() -> str:
     """Return current UTC time in ISO 8601 format."""
-    return dt.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _get_repo_name() -> str:
@@ -168,10 +168,10 @@ def create_pending_lesson(
     filename = fp_module.fingerprint_file_name(risk_type, snippet)
     file_path_out = pending_dir / filename
 
-    # Add occurrence tracking for this first detection
-    pending_data["_occurrence_count"] = 1
-    pending_data["_first_detection"] = pending_data["detected_at"]
-    pending_data["_repos_seen"] = [pending_data["source_repo"]]
+    # Add occurrence tracking for this first detection (persisted, used by merge)
+    pending_data["occurrence_count"] = 1
+    pending_data["first_detected"] = pending_data["detected_at"]
+    pending_data["repos_seen"] = [pending_data["source_repo"]]
 
     # Write YAML (without internal fields)
     _write_pending_yaml(file_path_out, pending_data)
@@ -192,30 +192,42 @@ def _extract_snippet(diff_text: str, file_path: str, line_no: int) -> str:
 
     start = match.end()
 
+    # 只在本文件的 diff 段内找 hunk，避免行号落空时匹配到后续文件的 hunk
+    section = diff_text[start:]
+    next_file = re.search(r'^diff --git ', section, re.MULTILINE)
+    if next_file:
+        section = section[:next_file.start()]
+
     # Find the hunk header for this line
     hunk_pattern = r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@'
-    hunk_matches = list(re.finditer(hunk_pattern, diff_text[start:], re.MULTILINE))
+    hunk_matches = list(re.finditer(hunk_pattern, section, re.MULTILINE))
 
     for i, hm in enumerate(hunk_matches):
-        hunk_start = start + hm.start()
-        hunk_end = start + hunk_matches[i + 1].start() if i + 1 < len(hunk_matches) else len(diff_text)
+        hunk_start = hm.start()
+        hunk_end = hunk_matches[i + 1].start() if i + 1 < len(hunk_matches) else len(section)
 
         hunk_line = int(hm.group(1))
         hunk_lines = int(hm.group(2) or 1)
 
         if hunk_line <= line_no <= hunk_line + hunk_lines:
             # This hunk contains our line
-            hunk_text = diff_text[hunk_start:hunk_end]
+            hunk_text = section[hunk_start:hunk_end]
             # Find the actual line
             current_line = hunk_line
             for line in hunk_text.splitlines():
-                if line.startswith("+") and not line.startswith("+++"):
+                if line.startswith("@@"):
+                    # hunk 头本身不占新文件的行号
+                    continue
+                # hunk 内不会出现 +++ 文件头 (section 已按 diff --git 截断),
+                # 不能用裸 +++ 前缀排除: 内容以 ++ 开头的行会被漏掉
+                if line.startswith("+"):
                     if current_line == line_no:
                         return line[1:].strip()
                     current_line += 1
                 elif line.startswith("-"):
                     pass
-                elif line.startswith("@@") or line.startswith(" "):
+                else:
+                    # 上下文行
                     current_line += 1
 
     return f"{file_path}:{line_no}"
@@ -234,19 +246,25 @@ def _extract_diff_context(diff_text: str, file_path: str, line_no: int) -> str:
 
     start = match.end()
 
+    # 只在本文件的 diff 段内找 hunk
+    section = diff_text[start:]
+    next_file = re.search(r'^diff --git ', section, re.MULTILINE)
+    if next_file:
+        section = section[:next_file.start()]
+
     # Find hunk containing this line
     hunk_pattern = r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@'
-    hunk_matches = list(re.finditer(hunk_pattern, diff_text[start:], re.MULTILINE))
+    hunk_matches = list(re.finditer(hunk_pattern, section, re.MULTILINE))
 
     for i, hm in enumerate(hunk_matches):
-        hunk_start = start + hm.start()
-        hunk_end = start + hunk_matches[i + 1].start() if i + 1 < len(hunk_matches) else len(diff_text)
+        hunk_start = hm.start()
+        hunk_end = hunk_matches[i + 1].start() if i + 1 < len(hunk_matches) else len(section)
 
         hunk_line = int(hm.group(1))
         hunk_lines = int(hm.group(2) or 1)
 
         if hunk_line <= line_no <= hunk_line + hunk_lines:
-            hunk_text = diff_text[hunk_start:hunk_end]
+            hunk_text = section[hunk_start:hunk_end]
             # Return first 500 chars of hunk
             return hunk_text[:500]
 
@@ -278,15 +296,15 @@ def _merge_pending(existing_path: Path, new_violation: dict, diff_baseline: str)
     existing = yaml.safe_load(existing_path.read_text(encoding="utf-8"))
 
     # Update occurrence tracking
-    existing["_occurrence_count"] = existing.get("_occurrence_count", 1) + 1
+    existing["occurrence_count"] = existing.get("occurrence_count", 1) + 1
     existing["detected_at"] = _now_iso()
 
     # Track new repo if not seen before
     new_repo = _get_repo_name()
-    repos = existing.get("_repos_seen", [])
+    repos = existing.get("repos_seen", [])
     if new_repo not in repos:
         repos.append(new_repo)
-        existing["_repos_seen"] = repos
+        existing["repos_seen"] = repos
 
     # If fingerprint is same but we have more evidence, keep the latest
     # (fingerprint already matches, so no need to update)
@@ -300,7 +318,9 @@ def _write_pending_yaml(path: Path, data: dict) -> None:
     # Remove internal tracking fields before writing
     to_write = {k: v for k, v in data.items() if not k.startswith("_")}
 
-    with open(path, "w", encoding="utf-8") as f:
+    # 原子写: 先写临时文件再替换，进程中断/磁盘满时不会截断已有 lesson
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
         yaml.safe_dump(
             to_write,
             f,
@@ -308,6 +328,7 @@ def _write_pending_yaml(path: Path, data: dict) -> None:
             allow_unicode=True,
             sort_keys=False,
         )
+    os.replace(tmp, path)
 
 
 def write_pending_from_violations(

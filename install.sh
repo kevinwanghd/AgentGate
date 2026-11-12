@@ -110,7 +110,7 @@ backup_if_exists() {
 write_file() {
   local rel="$1"; shift
   local abs="${TARGET_DIR}/${rel}"
-  mkdir -p "$(dirname "$abs")"
+  mkdir -p "${abs%/*}"  # 参数展开代替 dirname, Windows 上少一次 fork
   backup_if_exists "$abs"
   cat > "$abs"
   ok "写入 $rel"
@@ -169,7 +169,12 @@ fetch_or_local() {
 }
 
 sed_replacement_escape() {
-  printf '%s' "$1" | sed 's/[&|\\]/\\&/g'
+  # 纯 bash 转义 sed 替换串中的 \ & | (避免 Windows 上额外 fork sed)
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//&/\\&}"
+  s="${s//|/\\|}"
+  printf '%s' "$s"
 }
 
 is_public_image_ref() {
@@ -248,7 +253,11 @@ _detect_gitlab_project_id() {
     "${gitlab_url}/api/v4/projects?search=${repo_name}&per_page=10" 2>/dev/null || true)"
   [[ -z "$result" ]] && return
   remote_path="$(git -C "${TARGET_DIR}" remote get-url origin 2>/dev/null | sed 's|.*://[^/]*/||;s|\.git$||' || true)"
-  printf '%s' "$result" | python3 -c \
+  # Windows Git Bash 常只有 python: 与 enable-local.sh 保持同一优先级
+  local py
+  py="$(command -v python || command -v python3 || true)"
+  [[ -z "$py" ]] && return
+  printf '%s' "$result" | "$py" -c \
     "import sys,json; d=json.load(sys.stdin); r=sys.argv[1].lower(); [print(p['id']) or exit() for p in d if p.get('path_with_namespace','').lower()==r]" \
     "$remote_path" 2>/dev/null || true
 }
@@ -286,11 +295,13 @@ case "$PROFILE" in
   *) err "无效的 --profile 值: $PROFILE (可选: core/flutter-mobile/dotnet-monorepo/go-bazel)"; exit 1 ;;
 esac
 
+# 只能写入 CI 真实产出的 check 名 (见 ci/governance-ci.yml gate-decision 的 checks),
+# 否则 gate 永远 required_check_missing, 自动合并失效。
 case "$PROFILE" in
   core) PROFILE_REQUIRED_YAML='' ;;
-  flutter-mobile) PROFILE_REQUIRED_YAML=$'      - flutter-analyze\n      - flutter-test' ;;
+  flutter-mobile) PROFILE_REQUIRED_YAML='      - flutter-test' ;;
   dotnet-monorepo) PROFILE_REQUIRED_YAML='      - dotnet-test' ;;
-  go-bazel) PROFILE_REQUIRED_YAML='      - bazel-test' ;;
+  go-bazel) PROFILE_REQUIRED_YAML='      - go-test' ;;
 esac
 
 case "$MODE" in
@@ -647,6 +658,9 @@ fetch_or_local "scripts/record_test_run.py" | write_file "governance/scripts/rec
 fetch_or_local "scripts/check_tested.py"    | write_file "governance/scripts/check_tested.py"
 fetch_or_local "scripts/gate_decision.py"   | write_file "governance/scripts/gate_decision.py"
 fetch_or_local "scripts/validate_lessons.py" | write_file "governance/scripts/validate_lessons.py"
+fetch_or_local "scripts/pending_lessons_schema.py" | write_file "governance/scripts/pending_lessons_schema.py"
+fetch_or_local "scripts/validate_pending.py"  | write_file "governance/scripts/validate_pending.py"
+fetch_or_local "scripts/check_job.py"       | write_file "governance/scripts/check_job.py"
 fetch_or_local "scripts/scan_secrets.py" | write_file "governance/scripts/scan_secrets.py"
 fetch_or_local "scripts/gitlab_controller.py" | write_file "governance/scripts/gitlab_controller.py"
 fetch_or_local "scripts/gitlab_mr_compat.py" | write_file "governance/scripts/gitlab_mr_compat.py"
@@ -746,7 +760,7 @@ cat <<EOF
   2. 把 governance/ci-snippet.yml include 进 .gitlab-ci.yml:
        include:
          - local: '/governance/ci-snippet.yml'
-  3. 验证脚本可用 (需 python3 + pyyaml + git):
+  3. 验证脚本可用 (需 python(或 python3) + pyyaml + git):
        bash governance/scripts/selftest.sh
   4. 阅读规范: docs/governance/mr-spec.md
   5. v1 软模式将在 ${SOFT_DEADLINE} 到期, 届时未填字段会阻断合并。

@@ -79,6 +79,21 @@ else
 fi
 echo ""
 
+# ==================== 前置检查: 版本号一致 (仅 AgentGate 仓库自身) ====================
+if [[ -f "${REPO_ROOT}/install.sh" && -f "${REPO_ROOT}/pyproject.toml" ]]; then
+  echo "== 版本号一致性检查 =="
+  SH_VER="$(sed -n 's/^VERSION="v\{0,1\}\([^"]*\)"$/\1/p' "${REPO_ROOT}/install.sh" | head -1)"
+  PY_VER="$(sed -n 's/^version = "\([^"]*\)"$/\1/p' "${REPO_ROOT}/pyproject.toml" | head -1)"
+  if [[ -n "$SH_VER" && "$SH_VER" == "$PY_VER" ]]; then
+    echo "  ✓ install.sh 与 pyproject.toml 版本一致 ($PY_VER)"
+    PASS=$((PASS+1))
+  else
+    echo "  ✗ 版本不一致: install.sh=$SH_VER pyproject.toml=$PY_VER"
+    FAIL=$((FAIL+1))
+  fi
+  echo ""
+fi
+
 # ==================== 前置检查: lessons 必须有可执行硬约束 ====================
 echo "== Lessons 硬约束检查 =="
 VALIDATE_LESSONS="${SCRIPT_DIR}/validate_lessons.py"
@@ -105,14 +120,18 @@ git init -q
 git config user.email t@t; git config user.name t
 FALLBACK_PATH="${WORK}/fallback-bin"
 mkdir -p "$FALLBACK_PATH"
-if [[ "${MSYSTEM:-}" == "MINGW"* ]] || [[ "$(uname -s)" == MINGW* ]]; then
-  # Windows 的 ln -s 会退化成无扩展名的副本，CreateProcess 无法执行；
-  # 直接用 Git 安装目录作为隔离 PATH（该目录不含 gh/glab）。
-  FALLBACK_TEST_PATH="$(dirname "$(command -v git)")"
-else
-  ln -s "$(command -v git)" "${FALLBACK_PATH}/git"
-  FALLBACK_TEST_PATH="$FALLBACK_PATH"
-fi
+ln -s "$(command -v git)" "${FALLBACK_PATH}/git"
+# Windows (Git Bash): ln -s 实为复制且无 .exe 后缀, 原生 Python 找不到、git 也缺 DLL;
+# 改用 git 自身所在目录 (只要其中没有 gh/glab, 仍满足"无 CLI token 工具"的前提)。
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    GIT_BIN_DIR="$(dirname "$(command -v git)")"
+    if ! ls "$GIT_BIN_DIR"/gh "$GIT_BIN_DIR"/gh.exe "$GIT_BIN_DIR"/glab "$GIT_BIN_DIR"/glab.exe >/dev/null 2>&1; then
+      FALLBACK_PATH="$GIT_BIN_DIR"
+    fi
+    ;;
+esac
+FALLBACK_TEST_PATH="$FALLBACK_PATH"
 
 # 断言: 期望退出码
 expect() {
@@ -519,9 +538,16 @@ echo "public class BarTests { public void T(){} }" > tr_dir/tests/BarTests.cs
 ( cd tr_dir && git add -A && git commit -qm "feat: bar
 
 Tested: pass (5/5)" )
-# 无本地证据, 靠 commit trailer + 改了测试文件 -> 放行
+# 无本地证据, 靠 commit trailer + 改了测试文件 -> 放行 (需显式 opt-in; 默认拒绝)
+cat > tr_dir/optin.yml <<'CFG'
+testing:
+  enforcement: hard
+  accept_tested_trailer: true
+CFG
+( cd tr_dir && python3 "$CHECK" --diff-base HEAD~1 --evidence .governance/none.jsonl --config optin.yml ) >/dev/null 2>&1
+expect "Tested:pass trailer+改测试放行(opt-in)" 0 $?
 ( cd tr_dir && python3 "$CHECK" --diff-base HEAD~1 --evidence .governance/none.jsonl ) >/dev/null 2>&1
-expect "Tested:pass trailer+改测试放行" 0 $?
+expect "Tested:pass trailer默认拒绝" 1 $?
 
 # Tested: fail trailer -> 硬拦
 echo "public class Baz { public int Go()=>1; }" > tr_dir/src/Baz.cs
@@ -825,6 +851,7 @@ SQ="$(mktemp -d)"
 testing:
   enforcement: hard
   exclude_paths: []
+  accept_tested_trailer: true
 CFG
   git checkout -q -b feat
   echo 'class Mine { void Go(){} }' > mine.cs

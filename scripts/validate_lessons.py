@@ -23,10 +23,15 @@ def _read(root: Path, rel: str) -> str:
 
 
 def _read_first(root: Path, *rels: str) -> str:
+    return _read_first_with_rel(root, *rels)[1]
+
+
+def _read_first_with_rel(root: Path, *rels: str) -> tuple[str, str]:
+    """返回 (实际读取的相对路径, 内容), 让错误信息指向真正被检查的文件。"""
     for rel in rels:
         path = root / rel
         if path.exists():
-            return path.read_text(encoding="utf-8")
+            return rel, path.read_text(encoding="utf-8")
     raise FileNotFoundError(", ".join(rels))
 
 
@@ -35,16 +40,16 @@ def _fail(errors: list[str], message: str) -> None:
 
 
 def check_gitlab_job_timeout_unsupported(root: Path, errors: list[str]) -> None:
-    template = _read_first(root, "ci/governance-ci.yml", "governance/ci-snippet.yml")
+    rel, template = _read_first_with_rel(root, "ci/governance-ci.yml", "governance/ci-snippet.yml")
     if re.search(r"(?m)^\s+timeout:", template):
-        _fail(errors, "gitlab_legacy.job_timeout_unsupported: ci/governance-ci.yml contains job-level timeout")
+        _fail(errors, f"gitlab_legacy.job_timeout_unsupported: {rel} contains job-level timeout")
 
 
 def check_gitlab_modern_schema_unsupported(root: Path, errors: list[str]) -> None:
-    template = _read_first(root, "ci/governance-ci.yml", "governance/ci-snippet.yml")
+    rel, template = _read_first_with_rel(root, "ci/governance-ci.yml", "governance/ci-snippet.yml")
     for needle in ("rules:", "needs:", "dotenv:"):
         if needle in template:
-            _fail(errors, f"gitlab_legacy.modern_schema_unsupported: ci/governance-ci.yml contains {needle}")
+            _fail(errors, f"gitlab_legacy.modern_schema_unsupported: {rel} contains {needle}")
 
 
 def check_gitlab_optional_language_image_pull(root: Path, errors: list[str]) -> None:
@@ -250,6 +255,93 @@ def check_agentgate_test_jobs_do_not_install_runtime(root: Path, errors: list[st
                 )
 
 
+def check_audit_gate_policy_from_target_ref(root: Path, errors: list[str]) -> None:
+    """gate 必须从目标分支读策略: 任何 workflow 用 SOURCE_SHA 解析 policy 都是自授权绕过。"""
+    for rel in (".github/workflows/governance.yml", ".github/workflows/agentgate.yml"):
+        path = root / rel
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        if re.search(r'POLICY_SHA="[^"]*git rev-parse[^(]*\$\{?SOURCE_SHA\}?[^"]*"', text) or \
+                "rev-parse \"${SOURCE_SHA}:governance.config.yml\"" in text:
+            _fail(errors, f"audit_2026_11.gate_policy_from_target_ref: {rel} 从 PR head 解析策略")
+
+
+def check_audit_required_checks_not_path_filtered(root: Path, errors: list[str]) -> None:
+    """必查 job (risk-scan/secret-scan/yaml-validate) 不能被 path-filter 跳过。"""
+    path = root / ".github/workflows/governance.yml"
+    if not path.exists():
+        return
+    text = path.read_text(encoding="utf-8")
+    for job in ("run_risk_scan", "run_secret_scan", "run_yaml_validate"):
+        if f"needs.path-filter.outputs.{job} == 'true'" in text:
+            _fail(
+                errors,
+                f"audit_2026_11.required_checks_cannot_be_path_filtered: "
+                f"governance.yml 的必查 job 被 path-filter 门控 ({job})",
+            )
+
+
+def check_audit_diff_parser_plus_prefix(root: Path, errors: list[str]) -> None:
+    """diff 解析器不能用裸 not startswith(\"+++\") 过滤内容行。"""
+    for rel in ("scripts/scan_risks.py", "scripts/scan_secrets.py"):
+        path = root / rel
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        if re.search(r'not\s+\w+\.startswith\("\+\+\+"\)', text):
+            _fail(errors, f"audit_2026_11.diff_parser_plus_prefix: {rel} 用裸 +++ 前缀过滤内容行")
+
+
+def check_audit_evidence_semantics_covers_field(root: Path, errors: list[str]) -> None:
+    """check_job 的证据候选必须包含生产文件本身, 否则 covers 永远不命中。"""
+    path = root / "scripts/check_job.py"
+    if not path.exists():
+        return
+    text = path.read_text(encoding="utf-8")
+    if "os.path.isfile(c)] + [prod_file]" not in text:
+        _fail(
+            errors,
+            "audit_2026_11.evidence_semantics_covers_field: "
+            "check_job.py 证据候选未包含生产文件本身",
+        )
+
+
+def check_audit_needs_outputs_not_in_job_if(root: Path, errors: list[str]) -> None:
+    """job if 里不能引用 needs.*.outputs: always() 依赖完成前求值恒为空 (auto-merge 静默失效)。"""
+    import yaml as _yaml
+
+    for rel in (".github/workflows/governance.yml", ".github/workflows/agentgate.yml"):
+        path = root / rel
+        if not path.exists():
+            continue
+        try:
+            data = _yaml.safe_load(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            _fail(errors, f"audit_2026_11.needs_outputs_not_in_job_if: {rel} 无法解析: {exc}")
+            continue
+        jobs = data.get("jobs") or {}
+        # always() 依赖 job 完成前, 下游 if 里的 needs outputs 恒为空
+        always_jobs = {
+            jid for jid, job in jobs.items()
+            if isinstance(job, dict) and "always(" in str(job.get("if") or "")
+        }
+        import re as _re
+
+        for job_id, job in jobs.items():
+            if not isinstance(job, dict):
+                continue
+            cond = str(job.get("if") or "")
+            if "outputs" in cond and "needs." in cond:
+                for dep in _re.findall(r"needs\.([\w-]+)\.outputs", cond):
+                    if dep in always_jobs:
+                        _fail(
+                            errors,
+                            f"audit_2026_11.needs_outputs_not_in_job_if: {rel} job {job_id} 的 if "
+                            f"引用了 always() 依赖 {dep} 的 outputs (求值时恒为空)",
+                        )
+
+
 LESSON_CHECKS: dict[str, Callable[[Path, list[str]], None]] = {
     "gitlab_legacy.job_timeout_unsupported": check_gitlab_job_timeout_unsupported,
     "gitlab_legacy.modern_schema_unsupported": check_gitlab_modern_schema_unsupported,
@@ -260,6 +352,11 @@ LESSON_CHECKS: dict[str, Callable[[Path, list[str]], None]] = {
     "agent_instructions.preserve_repository_agents_md": check_agent_instructions_preserve_repository_agents_md,
     "agentgate_operations.sensitive_pr_requires_risk_rollback": check_agentgate_sensitive_pr_requires_risk_rollback,
     "agentgate_operations.test_jobs_no_runtime_install": check_agentgate_test_jobs_do_not_install_runtime,
+    "audit_2026_11.gate_policy_from_target_ref": check_audit_gate_policy_from_target_ref,
+    "audit_2026_11.required_checks_cannot_be_path_filtered": check_audit_required_checks_not_path_filtered,
+    "audit_2026_11.diff_parser_plus_prefix": check_audit_diff_parser_plus_prefix,
+    "audit_2026_11.evidence_semantics_covers_field": check_audit_evidence_semantics_covers_field,
+    "audit_2026_11.needs_outputs_not_in_job_if": check_audit_needs_outputs_not_in_job_if,
 }
 
 
@@ -276,7 +373,12 @@ def _lesson_files(root: Path, explicit: list[str]) -> list[Path]:
 
 
 def validate_file(path: Path, root: Path, errors: list[str]) -> int:
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    # 单个文件读不了 / 语法坏不能抛 traceback 中断, 否则其余 lessons 不会被校验
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        _fail(errors, f"{path}: cannot load lesson file: {exc}")
+        return 0
     if not isinstance(data, dict):
         _fail(errors, f"{path}: lesson file must be a mapping")
         return 0
@@ -310,7 +412,10 @@ def validate_file(path: Path, root: Path, errors: list[str]) -> int:
             if check is None:
                 _fail(errors, f"{path}: hard lesson {lesson_id} has no executable check")
             else:
-                check(root, errors)
+                try:
+                    check(root, errors)
+                except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+                    _fail(errors, f"{path}: {lesson_id} check could not read its target: {exc}")
     return count
 
 

@@ -34,14 +34,19 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
-import fnmatch
 import json
 import os
 import re
 import subprocess
 import sys
 
-from governance_common import ConfigError, load_config as load_shared_config, repository_state
+from governance_common import (
+    ConfigError,
+    load_config as load_shared_config,
+    path_matches_any,
+    reason_blacklist_hit,
+    repository_state,
+)
 
 try:
     import yaml  # type: ignore
@@ -56,7 +61,9 @@ DEFAULT_CONFIG = {
     "testing": {
         "enforcement": "hard",
         "soft_deadline": None,
-        "accept_tested_trailer": True,
+        # 默认 false (与 install.sh 生成值一致): trailer 是 commit message 自由文本,
+        # 伪造成本一行; 信任它等于门禁可被 agent 自助免检。仅显式开启时才接受。
+        "accept_tested_trailer": False,
         # 整目录/模式免测试检查 (P2-1 优化: 细化豁免模式, 降低误报)
         # 分类说明:
         #   - 生成代码: .Designer.cs, .generated.*, .pb.go, *.g.cs, *.gen.cs
@@ -154,9 +161,10 @@ PROD_EXTENSIONS = {
 # 测试文件判定: 路径或文件名带这些标志（收紧，避免误匹配 latest.py/contest.py）
 _TEST_PATH_RE = re.compile(
     r'(^|/)(tests?|spec|__tests__)/'  # test/, spec/, __tests__/ 目录下
-    r'|(\.tests?|\.spec|_test|test_)\.[a-z]+$'  # 文件名含测试标志
+    r'|(\.tests?|\.spec|_test)\.[a-z]+$'  # 文件名含测试标志
+    r'|(^|/)test_[^/]*$'  # test_foo.py
     r'|_tests?\.[a-z]+$'  # _test.py / _tests.py
-    r'|Tests?\.[a-z]+$',  # FooTest.cs / FooTests.cs
+    r'|(?-i:Tests?)\.[a-z]+$',  # FooTest.cs / FooTests.cs (区分大小写, 避免 latest.py 误判)
     re.IGNORECASE,
 )
 
@@ -185,7 +193,7 @@ def load_config(path: str | None) -> dict:
 def run_git(args: list[str]) -> str:
     try:
         return subprocess.run(
-            ["git", *args], check=True, capture_output=True, text=True,
+            ["git", "-c", "core.quotepath=off", *args], check=True, capture_output=True, text=True,
             encoding="utf-8", errors="replace",
         ).stdout
     except FileNotFoundError:
@@ -244,14 +252,7 @@ def is_test_file(path: str) -> bool:
     return bool(_TEST_PATH_RE.search(path))
 
 
-def _fnmatch_any(path: str, patterns: list[str]) -> bool:
-    for pat in patterns:
-        if pat.endswith("/"):
-            if path.startswith(pat) or fnmatch.fnmatch(path, pat + "**"):
-                return True
-        elif fnmatch.fnmatch(path, pat):
-            return True
-    return False
+_fnmatch_any = path_matches_any  # 与其他治理脚本共用同一路径 glob 语义
 
 
 # ============================================================
@@ -344,23 +345,28 @@ def _read_lines(path: str) -> list[str] | None:
 
 
 def has_untested_annotation(path: str, cfg: dict) -> tuple[bool, str]:
-    """整文件搜 risk:untested 注解, 校验字段。返回 (是否合法豁免, 说明)。"""
+    """整文件搜 risk:untested 注解, 任一注解合法即豁免; 否则返回第一条的失败原因。"""
     lines = _read_lines(path)
     if lines is None:
         return (False, "无法读取文件")
     text = "\n".join(lines)
-    m = _UNTESTED_INLINE_RE.search(text)
-    if not m:
-        return (False, "无 risk:untested 注解")
+    first_problem = None
+    for m in _UNTESTED_INLINE_RE.finditer(text):
+        ok, why = _validate_untested(m, cfg["testing"])
+        if ok:
+            return (True, why)
+        first_problem = first_problem or why
+    return (False, first_problem or "无 risk:untested 注解")
+
+
+def _validate_untested(m: re.Match, tc: dict) -> tuple[bool, str]:
     reason = m.group("reason")
     reviewed = m.group("reviewed")
-    tc = cfg["testing"]
     if len(reason.strip()) < MIN_REASON_LEN:
         return (False, f"untested reason 过短 (<{MIN_REASON_LEN}字)")
-    low = reason.lower()
-    for bad in tc.get("reason_blacklist", []):
-        if bad.lower() in low:
-            return (False, f'untested reason 含黑名单词 "{bad}"')
+    bad = reason_blacklist_hit(reason, tc.get("reason_blacklist", []))
+    if bad:
+        return (False, f'untested reason 含黑名单词 "{bad}"')
     try:
         rev = dt.date.fromisoformat(reviewed)
         age = (dt.date.today() - rev).days
@@ -499,7 +505,7 @@ def check(diff_text: str, evidence: list[dict], cfg: dict,
             continue
         # 未通过任何放行条件
         reason = []
-        if not green_runs and not trailer_pass and tc.get("accept_tested_trailer", True):
+        if not green_runs and not trailer_pass and tc.get("accept_tested_trailer", False):
             reason.append("无全绿测试记录/Tested:trailer (用 record_test_run.py 跑测试)")
         elif not touched_test_file:
             reason.append("本次 diff 未改动任何测试文件, 且未 --covers 声明")
@@ -569,24 +575,23 @@ def main() -> int:
             return 2
     # 本地无证据 (CI 场景) 时, 退回读 commit 的 Tested: trailer
     trailer = None
-    if not evidence and not args.diff_file and cfg["testing"].get("accept_tested_trailer", True):
+    if not evidence and not args.diff_file and cfg["testing"].get("accept_tested_trailer", False):
         trailer = read_tested_trailer(args.diff_base)
 
     # --ci-mode: 无 evidence 文件 且 无 Tested:pass trailer → 硬阻断
     # 这是防止"直接跑 dotnet test / pytest"绕过 record_test_run.py 的护城河。
     # CI 的语言测试 jobs (python-test / dotnet-test 等) 通过 record_test_run.py 记录证据，
     # 如果 evidence 文件为空/不存在，说明测试没走 record_test_run.py，即绕过了治理。
+    # 按过滤后的 evidence 判断: 文件非空但全是其他 git 状态的旧记录, 同样视为无证据。
     if args.ci_mode and not evidence and (not trailer or not trailer.startswith("pass")):
-        # 读取 evidence 文件看是否真的为空
-        if not os.path.isfile(args.evidence) or os.path.getsize(args.evidence) == 0:
-            print(
-                "[check-tested] FAIL (CI 模式) — test-evidence.jsonl 为空或不存在，"
-                "说明测试未通过 record_test_run.py 记录。\n"
-                "修复: 语言测试必须通过 record_test_run.py 包装，例如:\n"
-                "  python record_test_run.py -- pytest ...\n"
-                "  python record_test_run.py -- dotnet test ...\n"
-            )
-            return 1
+        print(
+            "[check-tested] FAIL (CI 模式) — test-evidence.jsonl 为空、不存在或没有当前代码状态的记录，"
+            "说明测试未通过 record_test_run.py 记录。\n"
+            "修复: 语言测试必须通过 record_test_run.py 包装，例如:\n"
+            "  python record_test_run.py -- pytest ...\n"
+            "  python record_test_run.py -- dotnet test ...\n"
+        )
+        return 1
 
     hard_errors, violations = check(diff_text, evidence, cfg, trailer,
                                     status_map=locals().get("status_map"))

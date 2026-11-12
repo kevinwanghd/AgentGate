@@ -37,13 +37,17 @@ evidence:
   raw_diff_fragment: string # The exact diff context (max 500 chars)
 regression: string       # Why this is a regression risk if not addressed
 status: string           # One of: pending | confirmed | rejected | promoted
-# --- fields below are set during/after review ---
-reviewer: string         # (optional) GitHub username who reviewed
-reviewed_at: string      # (optional) ISO 8601 datetime
-decision_reason: string  # (optional) Why confirmed/rejected
-classification: string   # (optional) One of: pattern | process | none
-enforcement: string     # (optional) One of: soft | hard (auto-soft for generated)
-promoted_to: string     # (optional) Path to the promoted lesson/pattern file
+# --- set by scripts/lessons_review.py during/after review ---
+review:                  # (optional) present once status != pending
+  reviewer: string       # who reviewed
+  reviewed_at: string    # ISO 8601 datetime
+  decision: string       # confirmed | rejected
+  reason: string         # (rejected) why dismissed
+  classification: string # (confirmed) code-pattern | process-lesson
+  target_path: string    # (confirmed) patterns/<lang>.yml or lessons/*.yml
+  enforcement: string    # (confirmed) soft | hard
+occurrence_count: integer # (optional) maintained by pending_writer on repeated detection
+repos_seen: [string]     # (optional) repositories where this fingerprint was seen
 ```
 
 ## Status Values

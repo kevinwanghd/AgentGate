@@ -52,7 +52,8 @@ ok "AgentGate 脚本就绪 ($AGENTGATE_HOME/scripts)"
 # --- 2. 安装提交 hook (复用 AgentGate 的 install-hooks.sh) ---
 # install-hooks.sh 默认假设脚本在 <repo>/governance/scripts; 中心化形态下脚本
 # 不在本仓库, 所以这里直接装一个指向缓存目录的 hook。
-HOOK_DIR="${REPO_ROOT}/.git/hooks"
+# 用 git 解析 hooks 目录: 兼容 worktree (.git 是文件) 与 core.hooksPath
+HOOK_DIR="$(git rev-parse --git-path hooks)"
 HOOK_FILE="${HOOK_DIR}/prepare-commit-msg"
 PREVIOUS_HOOK="${HOOK_FILE}.agentgate-previous"
 mkdir -p "$HOOK_DIR"
@@ -65,7 +66,8 @@ fi
 cat > "$HOOK_FILE" <<HOOK
 #!/bin/sh
 # agentgate:local — 提交时自动写 AI-Usage / Tested trailer (中心化缓存脚本)
-PATH="/usr/local/bin:/usr/bin:/bin:\$PATH"
+AGENTGATE_ORIGINAL_PATH="\${PATH:-}"
+PATH="/usr/local/bin:/usr/bin:/bin:\$AGENTGATE_ORIGINAL_PATH"
 export PATH
 
 COMMIT_MSG_FILE="\$1"; COMMIT_SOURCE="\${2:-}"
@@ -77,7 +79,8 @@ case "\$COMMIT_SOURCE" in merge|squash) exit 0 ;; esac
 AG="${AGENTGATE_HOME}/scripts"
 PY=""
 for CANDIDATE in python python3; do
-  CANDIDATE_PATH="\$(command -v "\$CANDIDATE" 2>/dev/null || true)"
+  # 在用户原始 PATH 中找 python, 避免 /usr/bin 前置后选中 MSYS python
+  CANDIDATE_PATH="\$(PATH="\$AGENTGATE_ORIGINAL_PATH" command -v "\$CANDIDATE" 2>/dev/null || true)"
   if [ -n "\$CANDIDATE_PATH" ] && "\$CANDIDATE_PATH" -c 'raise SystemExit(0)' >/dev/null 2>&1; then
     PY="\$CANDIDATE_PATH"
     break
@@ -90,18 +93,24 @@ if [ -f "\$AG/collect_ai_usage.py" ] && ! grep -qi '^AI-Usage:' "\$COMMIT_MSG_FI
 fi
 if [ -f "\$AG/check_tested.py" ] && ! grep -qi '^Tested:' "\$COMMIT_MSG_FILE"; then
   T="\$("\$PY" "\$AG/check_tested.py" --emit-trailer 2>/dev/null || true)"
-  [ -n "\$T" ] && printf '%s\n' "\$T" >> "\$COMMIT_MSG_FILE"
+  # 只写 pass/fail: 写 Tested: none 会在 rebase/squash 时覆盖原有的 Tested: pass
+  case "\$T" in
+    *pass*|*fail*) printf '%s\n' "\$T" >> "\$COMMIT_MSG_FILE" ;;
+  esac
 fi
 HOOK
 chmod +x "$HOOK_FILE"
 ok "已安装提交 hook: $HOOK_FILE"
 
 # --- 3. 把证据文件加入 .gitignore ---
+# 只忽略会话产物; .governance/pending-lessons/ 需要入库, 不能整目录忽略
 GI="${REPO_ROOT}/.gitignore"
-if ! grep -q "^\.governance/" "$GI" 2>/dev/null; then
-  { echo ""; echo "# AgentGate: 会话产物, 不入库"; echo ".governance/"; } >> "$GI"
-  ok "已把 .governance/ 加入 .gitignore"
-fi
+for ENTRY in ".governance/*.jsonl" ".governance/sessions/" ".governance/reports/"; do
+  if ! grep -qxF "$ENTRY" "$GI" 2>/dev/null; then
+    { echo ""; echo "# AgentGate: 会话产物, 不入库"; echo "$ENTRY"; } >> "$GI"
+    ok "已把 $ENTRY 加入 .gitignore"
+  fi
+done
 
 # --- 完成提示 ---
 cat <<EOF

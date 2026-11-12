@@ -139,8 +139,7 @@ governance:risk-scan:
       [ -f "$CONFIG_PATH" ] || CONFIG_PATH="governance/governance.config.yml"
       [ -f "$CONFIG_PATH" ] || { echo "[governance] policy file not found" >&2; exit 2; }
       CONFIG_ARG="--config $CONFIG_PATH"
-      python governance/scripts/scan_risks.py --diff-base "$BASE" $CONFIG_ARG
-      EXIT_CODE=$?
+      python governance/scripts/scan_risks.py --diff-base "$BASE" $CONFIG_ARG && EXIT_CODE=0 || EXIT_CODE=$?
       echo "{\"status\": \"$([ $EXIT_CODE -eq 0 ] && echo 'pass' || echo 'fail')\"}" \
         > governance-risk-scan-result.json
       exit $EXIT_CODE
@@ -169,8 +168,7 @@ governance:secret-scan:
       TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-${CI_DEFAULT_BRANCH:-master}}"
       git fetch -q origin "+refs/heads/${TB}:refs/remotes/origin/${TB}" || git fetch -q origin "$TB"
       BASE="origin/$TB"
-      python governance/scripts/scan_secrets.py --diff-base "$BASE"
-      EXIT_CODE=$?
+      python governance/scripts/scan_secrets.py --diff-base "$BASE" && EXIT_CODE=0 || EXIT_CODE=$?
       echo "{\"status\": \"$([ $EXIT_CODE -eq 0 ] && echo 'pass' || echo 'fail')\"}" \
         > governance-secret-scan-result.json
       exit $EXIT_CODE
@@ -205,8 +203,7 @@ governance:mr-validate:
       [ -f "$CONFIG_PATH" ] || { echo "[governance] policy file not found" >&2; exit 2; }
       CONFIG_ARG="--config $CONFIG_PATH"
       echo "$CI_MERGE_REQUEST_DESCRIPTION" \
-        | python governance/scripts/validate_mr.py --diff-base "$BASE" $CONFIG_ARG
-      EXIT_CODE=$?
+        | python governance/scripts/validate_mr.py --diff-base "$BASE" $CONFIG_ARG && EXIT_CODE=0 || EXIT_CODE=$?
       echo "{\"status\": \"$([ $EXIT_CODE -eq 0 ] && echo 'pass' || echo 'fail')\"}" \
         > governance-mr-validate-result.json
       exit $EXIT_CODE
@@ -220,6 +217,10 @@ governance:mr-validate:
 # 改动的生产代码是否做过测试。CI 看不到 .governance/ 证据 (gitignore),
 # 退回读 commit 的 Tested: trailer。
 # ── 4b. 测试绕过检测: 直接跑测试命令不走 record_test_run.py 时拦截 ──────────
+# 扫描 staged diff 中有对应测试的生产文件改动，检查是否有测试执行记录。
+# 若有测试但无记录 -> FAIL（防止 dotnet test / npm test 直接绕过）
+# 注: 本 job 只在 branch pipeline 运行 (only: branches), MR pipeline 走
+# governance:mr-validate; 两者互斥, artifact 同名不会冲突。
 governance:mr-validate-compat:
   stage: governance
   image: "$GOVERNANCE_PY_IMAGE"
@@ -284,8 +285,7 @@ governance:test-check:
         python governance/scripts/record_test_run.py \
           --evidence .governance/test-evidence.jsonl -- bash governance/scripts/selftest.sh
       fi
-      python governance/scripts/check_tested.py --diff-base "$BASE" $CONFIG_ARG
-      EXIT_CODE=$?
+      python governance/scripts/check_tested.py --diff-base "$BASE" $CONFIG_ARG && EXIT_CODE=0 || EXIT_CODE=$?
       echo "{\"status\": \"$([ $EXIT_CODE -eq 0 ] && echo 'pass' || echo 'fail')\"}" \
         > governance-test-check-result.json
       exit $EXIT_CODE
@@ -297,42 +297,38 @@ governance:test-check:
   allow_failure: false
 
 # ── 4b. 测试绕过检测: 检查是否有测试但无执行记录 ────────────────────────────
+# 防止直接运行测试命令（dotnet test / npm test）绕过 record_test_run.py
+# 放在 test stage (晚于 governance): GitLab 同 stage job 互相看不到 artifact,
+# 本 job 要读 governance:test-check 产出的 .governance/test-evidence.jsonl
 governance:test-bypass:
-  stage: governance
+  stage: test
   image: "$GOVERNANCE_PY_IMAGE"
+  dependencies:
+    - governance:test-check
   only:
     - branches
     - merge_requests
-  dependencies:
-    - governance:checkout
   variables:
-    GIT_DEPTH: "1"
+    GIT_DEPTH: "1000"
   before_script:
     - git --version
     - python --version
     - python -c "import yaml; print('pyyaml ok')"
   script:
     - |
-      # 只在有 staged 改动时运行（无 staged 改动时跳过整个检测）
-      STAGED_COUNT=$(git diff --cached --name-only | wc -l)
-      if [ "$STAGED_COUNT" -eq 0 ]; then
-        echo "[test-bypass] 无 staged 改动，跳过测试绕过检测。"
-        echo '{"status": "skip"}' > governance-test-bypass-result.json
-        exit 0
-      fi
+      # CI checkout 无 staged 改动: 按 MR diff 检查, 本地证据不入库时由 commit 的 Tested: trailer 兜底
       TB="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-${CI_DEFAULT_BRANCH:-master}}"
       git fetch -q origin "+refs/heads/${TB}:refs/remotes/origin/${TB}" || git fetch -q origin "$TB"
       BASE="origin/$TB"
       CONFIG_ARG=""
       CONFIG_PATH="${GOVERNANCE_CONFIG_PATH:-governance.config.yml}"
       [ -f "$CONFIG_PATH" ] || CONFIG_PATH="governance/governance.config.yml"
-      [ -f "$CONFIG_PATH" ] || CONFIG_PATH="governance/governance.config.yml"
       [ -f "$CONFIG_PATH" ] && CONFIG_ARG="--config $CONFIG_PATH"
       python governance/scripts/check_job.py \
+        --diff-base "$BASE" \
         --evidence .governance/test-evidence.jsonl \
-        $CONFIG_ARG
-      EXIT_CODE=$?
-      echo "{\"status\": \"$([ $EXIT_CODE -eq 0 ] && echo 'pass' || ([ $EXIT_CODE -eq 2 ] && echo 'skip' || echo 'fail'))\"}" \
+        $CONFIG_ARG && EXIT_CODE=0 || EXIT_CODE=$?
+      echo "{\"status\": \"$([ $EXIT_CODE -eq 0 ] && echo 'pass' || echo 'fail')\"}" \
         > governance-test-bypass-result.json
       exit $EXIT_CODE
   artifacts:
@@ -423,8 +419,7 @@ governance:go-test:
       BASE="origin/$TB"
       python governance/scripts/run_affected_tests.py \
         --diff-base "$BASE" \
-        --timeout "${GOVERNANCE_GO_TEST_TIMEOUT:-120}"
-      EXIT_CODE=$?
+        --timeout "${GOVERNANCE_GO_TEST_TIMEOUT:-120}" && EXIT_CODE=0 || EXIT_CODE=$?
       echo "{\"status\": \"$([ $EXIT_CODE -eq 0 ] && echo 'pass' || echo 'fail')\"}" \
         > governance-go-test-result.json
       exit $EXIT_CODE
@@ -663,8 +658,7 @@ governance:dotnet-test:
       fi
       if [ -n "$SLN" ]; then
         echo "[dotnet-test] 使用 solution: $SLN"
-        dotnet test "$SLN" --verbosity quiet
-        EXIT_CODE=$?
+        dotnet test "$SLN" --verbosity quiet && EXIT_CODE=0 || EXIT_CODE=$?
       else
         echo "[dotnet-test] 未找到 .sln，逐 .csproj 运行测试"
         OVERALL=0
@@ -715,8 +709,7 @@ governance:rust-test:
       fi
       if [ -n "$ROOT_CARGO" ]; then
         echo "[rust-test] 在根目录运行 cargo test（含 workspace 成员）"
-        cargo test --quiet 2>&1
-        EXIT_CODE=$?
+        cargo test --quiet 2>&1 && EXIT_CODE=0 || EXIT_CODE=$?
       else
         OVERALL=0
         for DIR in $DIRS; do
