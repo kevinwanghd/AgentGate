@@ -50,7 +50,13 @@ import urllib.parse
 import urllib.request
 import webbrowser
 
-from governance_common import ConfigError, load_config as load_shared_config, path_matches_any, repository_state
+from governance_common import (
+    ConfigError,
+    host_python,
+    load_config as load_shared_config,
+    path_matches_any,
+    repository_state,
+)
 
 
 EVIDENCE_PATH = ".governance/test-evidence.jsonl"
@@ -647,7 +653,7 @@ def _script_path(name: str) -> str:
 
 def run_risk_scan(args) -> int:
     cmd = [
-        sys.executable,
+        host_python(),
         _script_path("scan_risks.py"),
         "--diff-base",
         args.target_branch,
@@ -697,7 +703,7 @@ def run_preflight_tests(args, cfg: dict) -> int:
         sys.stderr.write(f"[create-mr] 测试命令解析失败: {exc}\n")
         return 2
     if cmd and cmd[0] in {"python", "python3"}:
-        cmd[0] = sys.executable
+        cmd[0] = host_python()
     elif cmd:
         # Windows 上 npm/yarn 等是 .cmd 包装, 不经 shell 时须按 PATHEXT 解析成完整路径
         resolved = shutil.which(cmd[0])

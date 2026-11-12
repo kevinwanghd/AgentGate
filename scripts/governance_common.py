@@ -16,6 +16,44 @@ for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         _stream.reconfigure(encoding="utf-8", errors="replace")
 
+
+def _in_msys() -> bool:
+    """当前进程是否运行在 MINGW/MSYS/CLANG 环境下。"""
+    if sys.platform != "win32":
+        return False
+    msystem = os.environ.get("MSYSTEM", "")
+    return any(msystem.startswith(p) for p in ("MINGW", "MSYS", "CLANG"))
+
+
+def msys_to_host(path: str) -> str:
+    """
+    在 MINGW/MSYS 环境下将 MSYS 路径 (/c/..., /tmp/...) 转为原生 Windows 路径，
+    避免传给 git/python 等原生子进程时找不到文件。其他环境原样返回。
+    """
+    if not _in_msys():
+        return path
+    try:
+        result = subprocess.run(
+            ["cygpath", "-w", path],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return path
+
+
+def host_python() -> str:
+    """
+    返回可在子 shell 中正常运行的 Python 解释器路径。
+
+    在 MINGW/MSYS 环境下，sys.executable 可能是 /c/... 这样的 MSYS 路径，
+    传给 git/node 等原生工具时会找不到文件，转为原生 Windows 路径。
+    """
+    return msys_to_host(sys.executable)
+
+
 try:
     import yaml  # type: ignore
 except ImportError:  # pragma: no cover
