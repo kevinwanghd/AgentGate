@@ -655,6 +655,46 @@ jobs:
 
   # Merge Bot：只在 GateResult 成功后启用平台自动合并。
   # 开发 agent、测试 runner 和 Gate Controller 均不直接获得该权限。
+  debug-if-result:
+    needs: [gate-decision]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "result==success: ${{ needs.gate-decision.result == 'success' }}"
+
+  debug-if-merge-action:
+    needs: [gate-decision]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "merge_action==AUTO_MERGE: ${{ needs.gate-decision.outputs.merge_action == 'AUTO_MERGE' }}"
+
+  debug-if-draft:
+    needs: [gate-decision]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "draft==false: ${{ github.event.pull_request.draft == false }}"
+
+  debug-if-headrepo:
+    needs: [gate-decision]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "headrepo==repo: ${{ github.event.pull_request.head.repo.full_name == github.repository }}"
+
+  debug-if-combined:
+    needs: [gate-decision]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "combined: ${{ needs.gate-decision.result == 'success' && needs.gate-decision.outputs.merge_action == 'AUTO_MERGE' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository }}
+
   auto-merge:
     needs: [gate-decision]
     # DEBUG: 真实 4 条件 if + 强制 AUTO_MERGE output, 验证 if 求值
