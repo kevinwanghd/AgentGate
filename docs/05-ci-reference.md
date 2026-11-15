@@ -392,9 +392,17 @@ auto_merge:
     - flutter-test            # 非 Flutter 仓库不触发此 job 也不阻断
   ci_workflows:               # 仓库自己的 CI workflow，等它在该 PR 提交上跑完
     - ci.yml
+  ai_review:                  # AI 审查：模型审查分支改动，有问题阻止自动合并
+    model: glm-5.3            # OpenAI 兼容 endpoint 的模型名
+    points: ops/review-points.md  # 目标分支上的审查要点（## 审查要点 段落）
+    internal:                 # 只改这些路径时免审
+      - "**/*.md"
+    # base_url: https://...   # 可选，默认阿里 token plan 兼容端点
 ```
 
 **`ci_workflows`**：配置后，gate-decision 会等待这些 workflow 的 `pull_request` 运行结束再判定。全部为 `success` / `neutral` / `skipped` 才算 `ci=pass`；失败、取消、超时按 `ci=fail`；30 分钟内没有任何运行也判 `ci=fail`。未配置时 evidence 记 `ci=skip`。要让 CI 真正阻断合并，还需把 `ci` 加进 `required_checks`（或 `required_checks_by_risk`）。`ci=fail` 时 gate 结果为 FAIL，PR 不会被 `auto-merge` 合并。读取 Actions 需要 `actions: read` 权限，caller workflow 的 `permissions` 也要放行。
+
+**`ai_review`**：配置后，`ai-review` job 把分支 diff（`base...head`，不含 base 侧合入的内容）连同审查要点发给模型，模型只返回 `{"findings":[...]}`。有 findings、diff 超过 20 万字符、或审查本身出错（含缺密钥）都记 `review=fail`（fail-closed）；只改 `internal` 路径或未配置记 `review=skip`。密钥放仓库 secret `AI_REVIEW_API_KEY`，caller 需用 `secrets: inherit` 传给复用工作流；审查模型和要点都从目标分支读，PR 改不了自己的门禁。把 `review` 加进 `required_checks` 才会阻断合并。审查跑在每个 PR 上，注意 token 成本。
 
 ---
 
