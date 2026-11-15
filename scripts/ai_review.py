@@ -88,6 +88,8 @@ def call_model(base_url: str, model: str, prompt: str, key: str, timeout: float)
             "model": model,
             "temperature": 0,
             "max_tokens": 4096,
+            # 端点支持时强制返回 JSON；不支持会退化为普通输出，由调用方再解析/重试。
+            "response_format": {"type": "json_object"},
             "messages": [{"role": "user", "content": prompt}],
         }
     ).encode("utf-8")
@@ -154,11 +156,32 @@ def main() -> int:
         return finish("fail", args.output, "缺少 AI_REVIEW_API_KEY，无法审查")
 
     prompt = PROMPT.format(points=points.group(1).strip()) + f"\n\nchanges.txt:\n{diff}"
-    try:
-        message = call_model(args.base_url, args.model, prompt, key, args.timeout)
-        findings = extract_findings(message)
-    except (urllib.error.URLError, TimeoutError, ValueError, KeyError, json.JSONDecodeError) as error:
-        return finish("fail", args.output, f"审查没有完成（fail-closed）：{error}")
+    last_error: Exception | None = None
+    last_message = ""
+    for attempt in range(2):
+        suffix = (
+            ""
+            if attempt == 0
+            else "\n\n上一次输出不是合法 JSON。这次只输出 JSON 对象本身，不要解释、不要代码围栏。"
+        )
+        try:
+            message = call_model(args.base_url, args.model, prompt + suffix, key, args.timeout)
+            last_message = message
+            findings = extract_findings(message)
+            break
+        except urllib.error.HTTPError as error:
+            if error.code in (401, 403):
+                return finish("fail", args.output, f"审查没有完成（fail-closed）：模型鉴权失败 {error.code}")
+            last_error = error
+        except (urllib.error.URLError, TimeoutError, ValueError, KeyError, json.JSONDecodeError) as error:
+            last_error = error
+    else:
+        snippet = " ".join(last_message.split())[:300]
+        return finish(
+            "fail",
+            args.output,
+            f"审查没有完成（fail-closed）：{last_error}；输出片段：{snippet or '（空）'}",
+        )
     if findings:
         for item in findings:
             print(f"::error file={item['title'].split(':')[0]}::{item['title']}——{item['text']}", flush=True)
