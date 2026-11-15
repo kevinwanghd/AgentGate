@@ -20,6 +20,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -83,6 +84,27 @@ def extract_findings(text: str) -> list[dict]:
     return findings
 
 
+def call_with_deadline(base_url: str, model: str, prompt: str, key: str, timeout: float) -> str:
+    """socket 超时只管"多久没收到字节"，服务端慢慢吐 token 时永远不触发。
+    这里加一道墙钟上限：超时就把这次尝试判失败，交给上层重试。"""
+    answer: dict = {}
+
+    def worker() -> None:
+        try:
+            answer["text"] = call_model(base_url, model, prompt, key, timeout)
+        except BaseException as error:  # 线程里任何异常都要带回主线程
+            answer["error"] = error
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    thread.join(timeout)
+    if thread.is_alive():
+        raise TimeoutError(f"超过墙钟上限 {timeout:.0f}s")
+    if "error" in answer:
+        raise answer["error"]
+    return answer["text"]
+
+
 def call_model(base_url: str, model: str, prompt: str, key: str, timeout: float) -> str:
     body = json.dumps(
         {
@@ -133,7 +155,7 @@ def main() -> int:
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="OpenAI 兼容 endpoint")
     parser.add_argument("--model", required=True)
     parser.add_argument("--diff-cap", type=int, default=200_000)
-    parser.add_argument("--timeout", type=float, default=240, help="单次请求超时（秒）")
+    parser.add_argument("--timeout", type=float, default=300, help="单次尝试的墙钟上限（秒）")
     parser.add_argument("--attempts", type=int, default=3, help="请求尝试次数（网络抖动/超时会退避重试）")
     parser.add_argument("--output", help="写入该文件（通常是 $GITHUB_OUTPUT）")
     args = parser.parse_args()
@@ -171,7 +193,7 @@ def main() -> int:
         if attempt:
             time.sleep(10 if attempt == 1 else 30)
         try:
-            message = call_model(args.base_url, args.model, prompt + retry_hint, key, args.timeout)
+            message = call_with_deadline(args.base_url, args.model, prompt + retry_hint, key, args.timeout)
             last_message = message
             findings = extract_findings(message)
             break

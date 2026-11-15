@@ -122,5 +122,27 @@ class RetryTests(unittest.TestCase):
         self.assertIn("review=fail", out)
 
 
+class DeadlineTests(unittest.TestCase):
+    """服务端慢慢吐 token 时 socket 超时不会触发，必须有墙钟上限。"""
+
+    def test_slow_call_is_abandoned(self):
+        def slow(*args, **kwargs):
+            import time as _t
+            _t.sleep(5)
+            return "too late"
+
+        with mock.patch.object(ai_review, "call_model", side_effect=slow):
+            with self.assertRaises(TimeoutError):
+                ai_review.call_with_deadline("u", "m", "p", "k", 0.05)
+
+    def test_worker_error_surfaces(self):
+        def boom(*args, **kwargs):
+            raise ValueError("bad json")
+
+        with mock.patch.object(ai_review, "call_model", side_effect=boom):
+            with self.assertRaises(ValueError):
+                ai_review.call_with_deadline("u", "m", "p", "k", 1)
+
+
 if __name__ == "__main__":
     unittest.main()
