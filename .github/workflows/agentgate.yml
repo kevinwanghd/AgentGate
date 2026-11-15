@@ -204,7 +204,8 @@ jobs:
             exit 0
           fi
           git fetch -q origin "$BASE_REF"
-          TARGET_SHA="$(git rev-parse "origin/$BASE_REF")"
+          # 本 job 按 head.sha 检出，origin/<base> 不一定存在；以 FETCH_HEAD 为准。
+          TARGET_SHA="$(git rev-parse FETCH_HEAD)"
           SOURCE_SHA="${{ github.event.pull_request.head.sha }}"
           # 与 gate 策略一致：审查配置和要点都来自目标分支，PR 改不了自己的门禁。
           MODEL=""; POINTS=""; INTERNAL=""; BASE_URL=""
