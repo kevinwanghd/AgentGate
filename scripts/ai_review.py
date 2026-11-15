@@ -87,7 +87,7 @@ def call_model(base_url: str, model: str, prompt: str, key: str, timeout: float)
         {
             "model": model,
             "temperature": 0,
-            "max_tokens": 4096,
+            "max_tokens": 16384,
             # 端点支持时强制返回 JSON；不支持会退化为普通输出，由调用方再解析/重试。
             "response_format": {"type": "json_object"},
             "messages": [{"role": "user", "content": prompt}],
@@ -105,7 +105,10 @@ def call_model(base_url: str, model: str, prompt: str, key: str, timeout: float)
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
         payload = json.load(response)
-    message = payload["choices"][0]["message"]["content"]
+    choice = payload["choices"][0]
+    if choice.get("finish_reason") == "length":
+        raise ValueError("输出被截断（finish_reason=length），推理占满了 max_tokens")
+    message = choice["message"]["content"]
     if not isinstance(message, str) or not message.strip():
         raise ValueError("模型没有返回内容")
     return message
