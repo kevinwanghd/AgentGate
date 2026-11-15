@@ -538,11 +538,72 @@ jobs:
       - name: run selftest
         run: bash scripts/selftest.sh
 
+  # AI 审查（与可复用工作流 agentgate.yml 的 ai-review 同语义）：
+  # 配置与要点来自目标分支，PR 改不了自己的门禁；有 findings 记 fail（fail-closed）。
+  ai-review:
+    if: ${{ github.event.pull_request.draft == false }}
+    runs-on: ubuntu-latest
+    outputs:
+      review: ${{ steps.review.outputs.review }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Verify preinstalled Python dependencies
+        run: python3 -c "import yaml; print('pyyaml ok')"
+      - name: Run AI review
+        id: review
+        env:
+          AI_REVIEW_API_KEY: ${{ secrets.AI_REVIEW_API_KEY }}
+        run: |
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          SOURCE_SHA="${{ github.event.pull_request.head.sha }}"
+          git fetch -q origin "$BASE_REF"
+          TARGET_SHA="$(git rev-parse FETCH_HEAD)"
+          MODEL=""; POINTS=""; INTERNAL=""; BASE_URL=""
+          if git cat-file -e "${TARGET_SHA}:governance.config.yml" 2>/dev/null; then
+            git show "${TARGET_SHA}:governance.config.yml" > "$RUNNER_TEMP/review-policy.yml"
+            eval "$(python3 - "$RUNNER_TEMP/review-policy.yml" <<'PY'
+          import shlex
+          import sys
+          import yaml
+
+          config = yaml.safe_load(open(sys.argv[1], encoding="utf-8")) or {}
+          review = (config.get("auto_merge") or {}).get("ai_review") or {}
+          values = {
+              "MODEL": review.get("model") or "",
+              "POINTS": review.get("points") or "",
+              "INTERNAL": ",".join(review.get("internal") or []),
+              "BASE_URL": review.get("base_url") or "",
+          }
+          print(" ".join(f"{key}={shlex.quote(str(value))}" for key, value in values.items()))
+          PY
+          )"
+          fi
+          if [ -z "$MODEL" ] || [ -z "$POINTS" ]; then
+            echo "review=skip" >> "$GITHUB_OUTPUT"
+            echo "目标分支未配置 auto_merge.ai_review，跳过 AI 审查"
+            exit 0
+          fi
+          if ! git cat-file -e "${TARGET_SHA}:${POINTS}" 2>/dev/null; then
+            echo "review=fail" >> "$GITHUB_OUTPUT"
+            echo "::error::目标分支上没有审查要点文件 ${POINTS}"
+            exit 1
+          fi
+          git show "${TARGET_SHA}:${POINTS}" > "$RUNNER_TEMP/review-points.md"
+          ARGS=(--base "$TARGET_SHA" --head "$SOURCE_SHA"
+                --points-file "$RUNNER_TEMP/review-points.md"
+                --model "$MODEL" --output "$GITHUB_OUTPUT")
+          [ -n "$INTERNAL" ] && ARGS+=(--internal "$INTERNAL")
+          [ -n "$BASE_URL" ] && ARGS+=(--base-url "$BASE_URL")
+          python3 scripts/ai_review.py "${ARGS[@]}"
+
   # GateResult 汇总器（只读阶段）。
   # 只有该 job 成功后，后续独立 Merge Bot 才能申请平台自动合并。
   # yaml-validate 是硬门禁，即使 path-filter 认为无需验证也必须跑（YAML 语法错误会导致其他扫描失效）。
   gate-decision:
-    needs: [yaml-validate, risk-scan, secret-scan, mr-validate, test-check, go-test, flutter-test, python-test, node-test, java-test, dotnet-test, rust-test, selftest]
+    needs: [yaml-validate, risk-scan, secret-scan, mr-validate, test-check, go-test, flutter-test, python-test, node-test, java-test, dotnet-test, rust-test, selftest, ai-review]
     if: ${{ always() && github.event.pull_request.draft == false }}
     outputs:
       merge_action: ${{ steps.compute.outputs.merge_action }}
@@ -576,6 +637,7 @@ jobs:
           DOTNET_TEST: ${{ needs.dotnet-test.result == 'success' && 'pass' || needs.dotnet-test.result == 'skipped' && 'skip' || 'fail' }}
           RUST_TEST: ${{ needs.rust-test.result == 'success' && 'pass' || needs.rust-test.result == 'skipped' && 'skip' || 'fail' }}
           SELFTEST: ${{ needs.selftest.result == 'success' && 'pass' || 'fail' }}
+          REVIEW: ${{ needs.ai-review.outputs.review || 'fail' }}
         run: |
           set -euo pipefail
           git fetch -q origin "$BASE_REF"
@@ -612,6 +674,7 @@ jobs:
               "dotnet-test": os.environ["DOTNET_TEST"],
               "rust-test": os.environ["RUST_TEST"],
               "selftest": os.environ["SELFTEST"],
+              "review": os.environ.get("REVIEW", "skip"),
           }
           print(json.dumps({
               "schema_version": "agentgate.io/ci-evidence/v1",
