@@ -85,6 +85,10 @@ auto_merge:
     # 共享工具: 篡改它们可间接操纵所有扫描/校验脚本的行为, 须走人工审批
     - scripts/governance_common.py
     - scripts/fingerprint.py
+    # 证据来源: 改它们等于改门禁的"事实"，必须人工审批（AI 审查实测提过这条）
+    - scripts/ai_review.py
+    - scripts/wait_ci.py
+    - scripts/count_approvals.py
   risk_paths:
     low:
       - docs/**
