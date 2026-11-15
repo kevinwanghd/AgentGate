@@ -395,7 +395,10 @@ auto_merge:
   ci_workflows:               # 仓库自己的 CI workflow，等它在该 PR 提交上跑完
     - ci.yml
   ai_review:                  # AI 审查：模型审查分支改动，有问题阻止自动合并
-    model: glm-5.3            # OpenAI 兼容 endpoint 的模型名
+    # 选模型的标准：能在门禁时限内稳定给出 JSON 结论。实测 glm-5.3 在较大 diff 上
+    # 会把 16384 的 max_tokens 全烧在推理上（finish_reason=length，正文为空），
+    # 导致审查 fail-closed；deepseek-v4-pro 同一 diff 约 1 分钟稳定输出。
+    model: deepseek-v4-pro     # OpenAI 兼容 endpoint 的模型名
     points: ops/review-points.md  # 目标分支上的审查要点（## 审查要点 段落）
     internal:                 # 只改这些路径时免审
       - "**/*.md"

@@ -42,6 +42,9 @@ def git(*args: str) -> str:
         ["git", "-c", "core.quotePath=false", *args],
         capture_output=True,
         text=True,
+        # 显式 utf-8：Windows 默认按 GBK 解码，中文 commit/文件名会抛 UnicodeDecodeError
+        encoding="utf-8",
+        errors="replace",
         check=True,
     )
     return result.stdout
