@@ -390,7 +390,11 @@ auto_merge:
   language_checks:            # 语言特定 job，missing/skip 均视为通过
     - go-test
     - flutter-test            # 非 Flutter 仓库不触发此 job 也不阻断
+  ci_workflows:               # 仓库自己的 CI workflow，等它在该 PR 提交上跑完
+    - ci.yml
 ```
+
+**`ci_workflows`**：配置后，gate-decision 会等待这些 workflow 的 `pull_request` 运行结束再判定。全部为 `success` / `neutral` / `skipped` 才算 `ci=pass`；失败、取消、超时按 `ci=fail`；30 分钟内没有任何运行也判 `ci=fail`。未配置时 evidence 记 `ci=skip`。要让 CI 真正阻断合并，还需把 `ci` 加进 `required_checks`（或 `required_checks_by_risk`）。`ci=fail` 时 gate 结果为 FAIL，PR 不会被 `auto-merge` 合并。读取 Actions 需要 `actions: read` 权限，caller workflow 的 `permissions` 也要放行。
 
 ---
 
