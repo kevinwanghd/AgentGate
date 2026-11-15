@@ -34,6 +34,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "require_up_to_date_branch": True,
         "require_all_required_checks": True,
         "required_checks": [],
+        # 这些检查只在适用时才有结论（如 review：纯文档改动免审，记 skip）：
+        # 记 skip 视为满足要求；仍要求 pass 的检查不写进来。
+        "skip_counts_as_pass": [],
         "required_checks_by_risk": {
             "low": ["risk-scan", "secret-scan", "mr-validate"],
             "medium": ["risk-scan", "secret-scan", "mr-validate", "test-check"],
@@ -193,8 +196,15 @@ def build_gate_result(
         reasons.append("protected_branch_direct_push")
 
     required = _required_checks_for_risk(auto, risk_level, checks)
+    skip_as_pass = {str(item) for item in auto.get("skip_counts_as_pass", [])}
     missing = [name for name in required if name not in checks]
-    failed = [name for name in required if name in checks and checks.get(name) != "pass"]
+    failed = [
+        name
+        for name in required
+        if name in checks
+        and checks.get(name) != "pass"
+        and not (checks.get(name) == "skip" and name in skip_as_pass)
+    ]
     if missing:
         reasons.append("required_check_missing")
     if failed:
