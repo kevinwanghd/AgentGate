@@ -390,6 +390,8 @@ jobs:
               "go-test": os.environ["GO_TEST"],
               "ci": os.environ.get("CI_CHECK", "skip"),
               "review": os.environ.get("REVIEW", "skip"),
+              # GitHub thin 模式没有 selftest job；记 skip 并由默认 skip_counts_as_pass 放行
+              "selftest": "skip",
           }
           print(json.dumps({
               "schema_version": "agentgate.io/ci-evidence/v1",
