@@ -36,7 +36,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "required_checks": [],
         # 这些检查只在适用时才有结论（如 review：纯文档改动免审，记 skip）：
         # 记 skip 视为满足要求；仍要求 pass 的检查不写进来。
-        "skip_counts_as_pass": [],
+        "skip_counts_as_pass": ["selftest"],  # GitHub thin 模式没有 selftest 作业
         "required_checks_by_risk": {
             "low": ["risk-scan", "secret-scan", "mr-validate"],
             "medium": ["risk-scan", "secret-scan", "mr-validate", "test-check"],
