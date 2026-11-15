@@ -390,6 +390,8 @@ auto_merge:
   language_checks:            # 语言特定 job，missing/skip 均视为通过
     - go-test
     - flutter-test            # 非 Flutter 仓库不触发此 job 也不阻断
+  skip_counts_as_pass:        # 只在这些检查不适用时记 skip 也算满足
+    - review                  # 如纯文档改动免审
   ci_workflows:               # 仓库自己的 CI workflow，等它在该 PR 提交上跑完
     - ci.yml
   ai_review:                  # AI 审查：模型审查分支改动，有问题阻止自动合并
@@ -403,6 +405,8 @@ auto_merge:
 **`ci_workflows`**：配置后，gate-decision 会等待这些 workflow 的 `pull_request` 运行结束再判定。全部为 `success` / `neutral` / `skipped` 才算 `ci=pass`；失败、取消、超时按 `ci=fail`；30 分钟内没有任何运行也判 `ci=fail`。未配置时 evidence 记 `ci=skip`。要让 CI 真正阻断合并，还需把 `ci` 加进 `required_checks`（或 `required_checks_by_risk`）。`ci=fail` 时 gate 结果为 FAIL，PR 不会被 `auto-merge` 合并。读取 Actions 需要 `actions: read` 权限，caller workflow 的 `permissions` 也要放行。
 
 **`ai_review`**：配置后，`ai-review` job 把分支 diff（`base...head`，不含 base 侧合入的内容）连同审查要点发给模型，模型只返回 `{"findings":[...]}`。有 findings、diff 超过 20 万字符、或审查本身出错（含缺密钥）都记 `review=fail`（fail-closed）；只改 `internal` 路径或未配置记 `review=skip`。密钥放仓库 secret `AI_REVIEW_API_KEY`，caller 需用 `secrets: inherit` 传给复用工作流；审查模型和要点都从目标分支读，PR 改不了自己的门禁。把 `review` 加进 `required_checks` 才会阻断合并。审查跑在每个 PR 上，注意 token 成本。
+
+**`skip_counts_as_pass`**：`required_checks` 里的检查默认必须字面 `pass`；对「只在适用时才有结论」的检查（典型是 `review`：纯文档改动免审记 `skip`），把它列进这里，`skip` 也算满足，`fail` 仍然阻断。`ci` 不建议列进来——`skip` 可能意味着 CI 根本没有启动。草稿 PR 不判定 gate（只要 `ai-review` 与 CI 等待都跳过），转正式后整轮重跑。
 
 ---
 
