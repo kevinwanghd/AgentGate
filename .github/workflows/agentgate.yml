@@ -442,9 +442,12 @@ jobs:
         run: |
           if [ "$GATE_STATUS" != "success" ] || [ "$MERGE_ACTION" != "AUTO_MERGE" ]; then
             echo "GateResult=$MERGE_ACTION (job=$GATE_STATUS), 不满足自动合并条件, 跳过。"
+            # 只记日志不做判定；真正的闸门在下一步的 if 上——
+            # 这里 exit 0 只能结束本 step，挡不住后面的 Enable auto merge（已实测漏过一次 FAIL 合并）。
             exit 0
           fi
       - name: Enable auto merge
+        if: ${{ needs.gate-decision.result == 'success' && needs.gate-decision.outputs.merge-action == 'AUTO_MERGE' }}
         env:
           GH_TOKEN: ${{ secrets.GOVERNANCE_MERGE_BOT_TOKEN || github.token }}
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
