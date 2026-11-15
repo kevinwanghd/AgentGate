@@ -43,10 +43,10 @@ TEMPLATE = """## 背景
 
 
 def git(*args: str) -> str:
-    run = subprocess.run(["git", *args], capture_output=True, text=True)
+    run = subprocess.run(["git", *args], capture_output=True, text=True, encoding="utf-8", errors="replace")
     if run.returncode != 0:
         raise SystemExit(f"git {args[0]} 失败：{run.stderr.strip()[-300:]}")
-    return run.stdout.strip()
+    return (run.stdout or "").strip()
 
 
 def has_ai_usage(message: str) -> bool:
@@ -104,10 +104,15 @@ def main() -> int:
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as handle:
         handle.write(body)
         body_path = Path(handle.name)
-    argv = ["gh", "pr", "create", "--base", args.base, "--head", branch, "--title", title, "--body-file", str(body_path)]
+    remote = git("remote", "get-url", "origin")
+    repo = remote.rstrip("/").removesuffix(".git").split(":")[-1].split("github.com/")[-1]
+    argv = [
+        "gh", "pr", "create", "--repo", repo, "--base", args.base,
+        "--head", branch, "--title", title, "--body-file", str(body_path),
+    ]
     if args.draft:
         argv.append("--draft")
-    run = subprocess.run(argv, capture_output=True, text=True)
+    run = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace")
     body_path.unlink(missing_ok=True)
     if run.returncode != 0:
         raise SystemExit(f"gh pr create 失败：{run.stderr.strip()[-500:]}")
