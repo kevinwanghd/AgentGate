@@ -399,6 +399,7 @@ auto_merge:
     # 会把 16384 的 max_tokens 全烧在推理上（finish_reason=length，正文为空），
     # 导致审查 fail-closed；deepseek-v4-pro 同一 diff 约 1 分钟稳定输出。
     model: deepseek-v4-pro     # OpenAI 兼容 endpoint 的模型名
+    fallback_model: qwen3.6-flash   # 首次尝试失败（截断/超时）后换用
     points: ops/review-points.md  # 目标分支上的审查要点（## 审查要点 段落）
     internal:                 # 只改这些路径时免审
       - "**/*.md"

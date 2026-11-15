@@ -15,6 +15,8 @@ auto_merge:
   # AI 审查：glm-5.3 按 docs/review-points.md 审分支 diff（不做文档免审）
   ai_review:
     model: deepseek-v4-pro
+    # 主力模型截断/超时后换用它（大 diff 上 glm 系会烧满 max_tokens）
+    fallback_model: qwen3.6-flash
     points: docs/review-points.md
   required_checks_by_risk:
     low:

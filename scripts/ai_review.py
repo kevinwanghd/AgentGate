@@ -159,6 +159,7 @@ def main() -> int:
     parser.add_argument("--model", required=True)
     parser.add_argument("--diff-cap", type=int, default=200_000)
     parser.add_argument("--timeout", type=float, default=300, help="单次尝试的墙钟上限（秒）")
+    parser.add_argument("--fallback-model", default="", help="首次尝试失败后换用的模型（大 diff 上主力模型可能截断）")
     parser.add_argument("--attempts", type=int, default=3, help="请求尝试次数（网络抖动/超时会退避重试）")
     parser.add_argument("--output", help="写入该文件（通常是 $GITHUB_OUTPUT）")
     args = parser.parse_args()
@@ -196,7 +197,8 @@ def main() -> int:
         if attempt:
             time.sleep(10 if attempt == 1 else 30)
         try:
-            message = call_with_deadline(args.base_url, args.model, prompt + retry_hint, key, args.timeout)
+            model = args.model if attempt == 0 or not args.fallback_model else args.fallback_model
+            message = call_with_deadline(args.base_url, model, prompt + retry_hint, key, args.timeout)
             last_message = message
             findings = extract_findings(message)
             break

@@ -89,7 +89,7 @@ class CallModelTests(unittest.TestCase):
 class RetryTests(unittest.TestCase):
     """端点偶发超时是真实故障（跨境链路 8 分钟后 timeout），必须退避重试而不是直接 fail-closed。"""
 
-    def _run_main(self, side_effect):
+    def _run_main(self, side_effect, extra=()):
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -100,7 +100,7 @@ class RetryTests(unittest.TestCase):
                 "ai_review.py", "--base", "origin/main", "--head", "HEAD",
                 "--points-file", str(points), "--model", "glm-5.3",
                 "--output", str(output), "--attempts", "3",
-            ]
+            ] + list(extra)
             with mock.patch.object(ai_review, "branch_diff", return_value=("diff", ["a.py"])), \
                  mock.patch.object(ai_review, "call_model", side_effect=side_effect) as model, \
                  mock.patch.object(ai_review.time, "sleep"), \
@@ -142,6 +142,34 @@ class DeadlineTests(unittest.TestCase):
         with mock.patch.object(ai_review, "call_model", side_effect=boom):
             with self.assertRaises(ValueError):
                 ai_review.call_with_deadline("u", "m", "p", "k", 1)
+
+
+class FallbackModelTests(unittest.TestCase):
+    """主力模型在大 diff 上会截断（finish_reason=length），第二次必须换备用模型。"""
+
+    def test_second_attempt_uses_fallback_model(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            points = Path(tmp) / "points.md"
+            points.write_text("## 审查要点\n- 空指针\n", encoding="utf-8")
+            argv = [
+                "ai_review.py", "--base", "origin/main", "--head", "HEAD",
+                "--points-file", str(points), "--model", "glm-5.3",
+                "--fallback-model", "deepseek-v4-pro", "--attempts", "2",
+            ]
+            seen = []
+
+            def fake_call(base_url, model, prompt, key, timeout):
+                seen.append(model)
+                if len(seen) == 1:
+                    raise ValueError("输出被截断（finish_reason=length）")
+                return '{"findings": []}'
+
+            with mock.patch.object(ai_review, "branch_diff", return_value=("diff", ["a.py"])),                  mock.patch.object(ai_review, "call_model", side_effect=fake_call),                  mock.patch.object(ai_review.time, "sleep"),                  mock.patch.object(sys, "argv", argv),                  mock.patch.dict("os.environ", {"AI_REVIEW_API_KEY": "k"}):
+                code = ai_review.main()
+        self.assertEqual(code, 0)
+        self.assertEqual(seen, ["glm-5.3", "deepseek-v4-pro"])
 
 
 if __name__ == "__main__":
