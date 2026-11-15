@@ -12,12 +12,17 @@ auto_merge:
   high_approvals: 0
   # 单人维护者模式：关闭，正常走审批流
   single_maintainer_mode: false
+  # AI 审查：glm-5.3 按 docs/review-points.md 审分支 diff（不做文档免审）
+  ai_review:
+    model: glm-5.3
+    points: docs/review-points.md
   required_checks_by_risk:
     low:
       - yaml-validate
       - risk-scan
       - secret-scan
       - mr-validate
+      - review
     medium:
       - yaml-validate
       - risk-scan
@@ -25,6 +30,7 @@ auto_merge:
       - mr-validate
       - test-check
       - python-test
+      - review
     high:
       - yaml-validate
       - risk-scan
@@ -33,6 +39,7 @@ auto_merge:
       - test-check
       - python-test
       - selftest
+      - review
     critical:
       - yaml-validate
       - risk-scan
@@ -41,12 +48,14 @@ auto_merge:
       - test-check
       - python-test
       - selftest
+      - review
   required_checks:
     - risk-scan
     - secret-scan
     - mr-validate
     - test-check
     - python-test
+    - review
     - selftest
     - yaml-validate
   # 保护分支: 只能通过 MR 合并，禁止直接推送

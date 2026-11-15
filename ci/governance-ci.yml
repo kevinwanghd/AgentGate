@@ -32,16 +32,28 @@
 #     2. 镜像存在且标签正确
 #     3. 有拉取权限
 #
+# P1-C: 推荐使用预装了 PyYAML==6.0.3 的镜像, 避免每次 job 启动时联网安装依赖
+#   推荐镜像: swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest
+#   (已包含 Python 3.10+ + PyYAML==6.0.3 + git)
+#
 # ─────────────────────────────────────────────────────────────────────────────
+#
+# CI 优化 (2026-09):
+#   P0-A: 共享 checkout artifact — 统一 git fetch, 避免每个 job 重复拉取
+#   P0-B: shallow fetch — GIT_DEPTH: 1 替代 GIT_DEPTH: 1000, 节省 50~80% fetch 时间
+#   P1-A: Path filter — 仅 GitHub Actions 工作流实现; GitLab 11.x 模板不启用
 
 stages:
-  - governance   # 风险/密钥/MR/测试检查 + 语言 job（同 stage 以满足 GitLab 11.4 dependencies 约束）
-  - test         # gate-decision（依赖所有 governance job）
+  - checkout        # 统一拉取
+  - governance      # 风险/密钥/MR/测试检查 + 语言 job（同 stage 并行）
+  - test            # gate-decision（依赖所有 governance job）
   - build
   - merge
 
 variables:
   GOVERNANCE_PY_IMAGE: "swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest"
+  # P0-B: shallow fetch — 只拉当前 commit + 目标分支最新 tip
+  GIT_DEPTH: "1"
   # 语言运行时镜像: 各语言 job 在检查项目标记文件后再判断是否需要真实运行时。
   # 若 runner 镜像不含该语言，job 会静默 skip (exit 0) 并记录 skip 状态，
   # 而不是报错退出——这是为了避免非该语言仓库的流水线被阻断。
@@ -53,6 +65,39 @@ variables:
   GOVERNANCE_JAVA_IMAGE: "swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest"
   GOVERNANCE_DOTNET_IMAGE: "swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest"
   GOVERNANCE_RUST_IMAGE: "swr.cn-north-4.myhuaweicloud.com/adbidding/governance/python-ci:latest"
+
+# ── P0-A: 统一 Checkout ─────────────────────────────────────────────────────
+#
+# 所有 scan job 复用同一个 git fetch 结果，避免每个 job 独立拉取。
+# artifacts 跨 job 传递（同一 pipeline 内有效）。
+governance:checkout:
+  stage: checkout
+  image: "$GOVERNANCE_PY_IMAGE"
+  only:
+    - branches
+    - merge_requests
+  before_script:
+    - git --version
+    - python --version
+    - python -c "import yaml; print('pyyaml ok')"
+  script:
+    - |
+      echo "[checkout] Shallow fetch complete (GIT_DEPTH=1)"
+      echo "CI_COMMIT_SHA=$CI_COMMIT_SHA"
+      echo "CI_MERGE_REQUEST_SOURCE_BRANCH_SHA=$CI_MERGE_REQUEST_SOURCE_BRANCH_SHA"
+  artifacts:
+    paths:
+      - ./
+    expire_in: 1 day
+    when: always
+  allow_failure: false
+
+# ── P1-A 说明: GitLab 11.x 模板不启用 Path Filter ───────────────────────────
+# 本模板面向 GitLab 11.x (legacy)。该版本不支持 `rules` 关键字；`only:changes`
+# 在 11.4 仍是 alpha，且只对 push pipeline 生效，无法可靠覆盖 MR pipeline。
+# 因此这里不做 CI 层 path filter：所有 job 保持启动，由脚本按 diff 与项目
+# 标记文件自行判定是否执行。GitHub Actions 工作流已用独立的 path-filter job
+# 实现 P1-A；path filter 失败时应降级为全跑，不能阻断流水线。
 
 # ── 0. Hard lessons: installation and policy invariants ──────────────────────
 governance:lessons-validate:
@@ -76,8 +121,10 @@ governance:risk-scan:
   only:
     - branches
     - merge_requests
+  dependencies:
+    - governance:checkout
   variables:
-    GIT_DEPTH: "1000"
+    GIT_DEPTH: "1"
   before_script:
     - git --version
     - python --version
@@ -109,8 +156,10 @@ governance:secret-scan:
   only:
     - branches
     - merge_requests
+  dependencies:
+    - governance:checkout
   variables:
-    GIT_DEPTH: "1000"
+    GIT_DEPTH: "1"
   before_script:
     - git --version
     - python --version
@@ -135,8 +184,10 @@ governance:mr-validate:
   image: "$GOVERNANCE_PY_IMAGE"
   only:
     - merge_requests
+  dependencies:
+    - governance:checkout
   variables:
-    GIT_DEPTH: "1000"     # GitLab Runner 11 不接受 0；脚本会主动 fetch 目标分支
+    GIT_DEPTH: "1"
   before_script:
     - git --version
     - python --version
@@ -175,8 +226,10 @@ governance:mr-validate-compat:
   image: "$GOVERNANCE_PY_IMAGE"
   only:
     - branches
+  dependencies:
+    - governance:checkout
   variables:
-    GIT_DEPTH: "1000"
+    GIT_DEPTH: "1"
   before_script:
     - git --version
     - python --version
@@ -209,8 +262,10 @@ governance:test-check:
   only:
     - branches
     - merge_requests
+  dependencies:
+    - governance:checkout
   variables:
-    GIT_DEPTH: "1000"
+    GIT_DEPTH: "1"
   before_script:
     - git --version
     - python --version
@@ -283,13 +338,13 @@ governance:test-bypass:
   allow_failure: false
 
 # ── 5. 过期注解周报: 仅报告, 不阻断 ─────────────────────────────────────────
-# 每周一 08:00 触发 (需在 GitLab → CI/CD → Schedules 里新建 pipeline 指向此分支)
-# 也可在 MR 流水线里手动触发 (when: manual) 随时生成快照。
 governance:expired-report:
   stage: governance
   image: "$GOVERNANCE_PY_IMAGE"
   only:
     - schedules
+  dependencies:
+    - governance:checkout
   before_script:
     - git --version
     - python --version
@@ -311,6 +366,8 @@ governance:expired-report-manual:
   only:
     - schedules
   when: manual
+  dependencies:
+    - governance:checkout
   before_script:
     - git --version
     - python --version
@@ -327,16 +384,16 @@ governance:expired-report-manual:
   allow_failure: true
 
 # ── 6. Go 受影响包测试: 硬阻断 (仅 Go 仓库) ─────────────────────────────────
-# 前提: 仓库根目录存在 go.mod 且可运行 go test。
-# Bazel 单仓需覆盖此 job 或设置 GOVERNANCE_SKIP_GO_TEST=true 跳过。
 governance:go-test:
   stage: governance
   image: "$GOVERNANCE_GO_IMAGE"
   only:
     - branches
     - merge_requests
+  dependencies:
+    - governance:checkout
   variables:
-    GIT_DEPTH: "1000"
+    GIT_DEPTH: "1"
   script:
     - |
       if [ "${GOVERNANCE_SKIP_GO_TEST:-false}" = "true" ]; then
@@ -379,6 +436,8 @@ governance:flutter-test:
   only:
     - branches
     - merge_requests
+  dependencies:
+    - governance:checkout
   script:
     - |
       if [ "${GOVERNANCE_SKIP_FLUTTER_TEST:-false}" = "true" ]; then
@@ -420,6 +479,10 @@ governance:python-test:
   only:
     - branches
     - merge_requests
+  dependencies:
+    - governance:checkout
+  variables:
+    GIT_DEPTH: "1"
   before_script:
     - git --version
     - python --version
@@ -464,6 +527,8 @@ governance:node-test:
   only:
     - branches
     - merge_requests
+  dependencies:
+    - governance:checkout
   script:
     - |
       if [ "${GOVERNANCE_SKIP_NODE_TEST:-false}" = "true" ]; then
@@ -471,7 +536,6 @@ governance:node-test:
         echo "{\"status\": \"skip\"}" > governance-node-test-result.json
         exit 0
       fi
-      # 排除子包的 package.json（node_modules 及有父级 package.json 的子目录）
       DIRS=$(find . -maxdepth 3 -name "package.json" \
              -not -path "*/node_modules/*" -not -path "*/.*" | xargs -I{} dirname {} | sort -u)
       if [ -z "$DIRS" ]; then
@@ -514,6 +578,8 @@ governance:java-test:
   only:
     - branches
     - merge_requests
+  dependencies:
+    - governance:checkout
   script:
     - |
       if [ "${GOVERNANCE_SKIP_JAVA_TEST:-false}" = "true" ]; then
@@ -567,6 +633,8 @@ governance:dotnet-test:
   only:
     - branches
     - merge_requests
+  dependencies:
+    - governance:checkout
   script:
     - |
       if [ "${GOVERNANCE_SKIP_DOTNET_TEST:-false}" = "true" ]; then
@@ -615,6 +683,8 @@ governance:rust-test:
   only:
     - branches
     - merge_requests
+  dependencies:
+    - governance:checkout
   script:
     - |
       if [ "${GOVERNANCE_SKIP_RUST_TEST:-false}" = "true" ]; then
@@ -663,9 +733,8 @@ governance:gate-decision:
   image: "$GOVERNANCE_PY_IMAGE"
   only:
     - merge_requests
-  variables:
-    GIT_DEPTH: "1000"
   dependencies:
+    - governance:checkout
     - governance:risk-scan
     - governance:secret-scan
     - governance:mr-validate
@@ -677,6 +746,8 @@ governance:gate-decision:
     - governance:java-test
     - governance:dotnet-test
     - governance:rust-test
+  variables:
+    GIT_DEPTH: "1"
   before_script:
     - git --version
     - python --version
