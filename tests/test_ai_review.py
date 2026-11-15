@@ -66,6 +66,7 @@ class CallModelTests(unittest.TestCase):
         self.assertEqual(captured["url"], "https://api.example/v1/chat/completions")
         self.assertEqual(captured["body"]["model"], "glm-5.3")
         self.assertEqual(captured["body"]["temperature"], 0)
+        self.assertEqual(captured["body"]["response_format"], {"type": "json_object"})
         self.assertEqual(captured["auth"], "Bearer key")
         self.assertTrue(text)
 
