@@ -21,6 +21,8 @@ import os
 import subprocess
 import sys
 
+from governance_common import host_python, msys_to_host
+
 # 与 governance_common 一致: 汇总含 emoji, 中文 Windows 重定向输出时默认 GBK 会崩溃
 for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
@@ -29,12 +31,20 @@ for _stream in (sys.stdout, sys.stderr):
 
 def run(name: str, cmd: list[str], cwd: str | None = None, stdin=None) -> tuple[int, str, str]:
     """运行子命令，返回 (exit_code, stdout, stderr)。"""
+    # 在 MINGW 下将所有看起来像文件路径的参数转为原生路径
+    fixed_cmd: list[str] = []
+    for arg in cmd:
+        # 绝对 MSYS 路径 (/c/... 或 /tmp/...) 需要转换；git ref 如 HEAD~1 不转
+        if isinstance(arg, str) and (arg.startswith("/") and len(arg) > 2 and arg[1] not in (".", "/")):
+            fixed_cmd.append(msys_to_host(arg))
+        else:
+            fixed_cmd.append(arg)
     print(f"\n{'='*60}")
-    print(f"[governance_scan_all] Running: {' '.join(cmd)}")
+    print(f"[governance_scan_all] Running: {' '.join(fixed_cmd)}")
     print(f"{'='*60}")
     try:
         result = subprocess.run(
-            cmd,
+            fixed_cmd,
             stdin=stdin,
             capture_output=True,
             text=True,
@@ -64,7 +74,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--config",
-        default=None,
+default=None,
         help="Path to governance.config.yml (omit to let each scan use its own default)",
     )
     parser.add_argument(
@@ -79,7 +89,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # ── 1. Risk scan ────────────────────────────────────────────────
     risk_cmd = [
-        sys.executable or "python3",
+        host_python(),
         os.path.join(scripts_dir, "scan_risks.py"),
         "--diff-base",
         args.diff_base,
@@ -101,7 +111,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # ── 2. Secret scan ─────────────────────────────────────────────
     secret_cmd = [
-        sys.executable or "python3",
+        host_python(),
         os.path.join(scripts_dir, "scan_secrets.py"),
         "--diff-base",
         args.diff_base,
@@ -120,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # ── 3. MR validation ───────────────────────────────────────────
     mr_cmd = [
-        sys.executable or "python3",
+        host_python(),
         os.path.join(scripts_dir, "validate_mr.py"),
         "--diff-base",
         args.diff_base,
