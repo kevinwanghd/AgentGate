@@ -86,5 +86,41 @@ class CallModelTests(unittest.TestCase):
                 ai_review.call_model("https://x", "m", "p", "k", 1)
 
 
+class RetryTests(unittest.TestCase):
+    """端点偶发超时是真实故障（跨境链路 8 分钟后 timeout），必须退避重试而不是直接 fail-closed。"""
+
+    def _run_main(self, side_effect):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            points = Path(tmp) / "points.md"
+            points.write_text("## 审查要点\n- 空指针\n", encoding="utf-8")
+            output = Path(tmp) / "out.txt"
+            argv = [
+                "ai_review.py", "--base", "origin/main", "--head", "HEAD",
+                "--points-file", str(points), "--model", "glm-5.3",
+                "--output", str(output), "--attempts", "3",
+            ]
+            with mock.patch.object(ai_review, "branch_diff", return_value=("diff", ["a.py"])), \
+                 mock.patch.object(ai_review, "call_model", side_effect=side_effect) as model, \
+                 mock.patch.object(ai_review.time, "sleep"), \
+                 mock.patch.object(sys, "argv", argv), \
+                 mock.patch.dict("os.environ", {"AI_REVIEW_API_KEY": "k"}):
+                code = ai_review.main()
+            return code, model.call_count, output.read_text(encoding="utf-8")
+
+    def test_timeout_then_success(self):
+        code, calls, out = self._run_main([TimeoutError("timed out"), '{"findings": []}'])
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, 2)
+        self.assertIn("review=pass", out)
+
+    def test_gives_up_after_attempts(self):
+        code, calls, out = self._run_main([TimeoutError("timed out")] * 3)
+        self.assertEqual(code, 1)
+        self.assertEqual(calls, 3)
+        self.assertIn("review=fail", out)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -66,6 +66,24 @@ class UntestedAnnotationTests(unittest.TestCase):
             ok, why = check_tested.has_untested_annotation(str(path), cfg)
         self.assertTrue(ok, why)
 
+    def test_future_date_is_rejected_with_utc_today(self) -> None:
+        # 本地时区比 UTC 早时容易写成"明天"，报错要点明 UTC 的今天，作者才能自己改对。
+        cfg = check_tested.load_config(None)
+        future = (check_tested.dt.datetime.now(check_tested.dt.timezone.utc).date()
+                  + check_tested.dt.timedelta(days=2)).isoformat()
+        today_utc = check_tested.dt.datetime.now(check_tested.dt.timezone.utc).date().isoformat()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "svc.py"
+            path.write_text(
+                '# risk:untested reason:"依赖真实支付网关, 由沙箱联调覆盖" owner:@b '
+                f'reviewed:{future}\n',
+                encoding="utf-8",
+            )
+            ok, why = check_tested.has_untested_annotation(str(path), cfg)
+        self.assertFalse(ok)
+        self.assertIn("在未来", why)
+        self.assertIn(today_utc, why)
+
 
 class TestPathClassificationTests(unittest.TestCase):
     def test_words_ending_in_test_are_production_code(self) -> None:
