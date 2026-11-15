@@ -14,7 +14,7 @@ auto_merge:
   single_maintainer_mode: false
   # AI 审查：glm-5.3 按 docs/review-points.md 审分支 diff（不做文档免审）
   ai_review:
-    model: glm-5.3
+    model: deepseek-v4-pro
     points: docs/review-points.md
   required_checks_by_risk:
     low:
