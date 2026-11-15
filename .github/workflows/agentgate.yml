@@ -256,7 +256,8 @@ jobs:
       - test-check
       - go-test
       - ai-review
-    if: ${{ always() }}
+    # 草稿不判定：审查与 CI 等待都跳过，判 FAIL 只会误导；转正式后重跑整轮。
+    if: ${{ always() && !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     outputs:
       merge-action: ${{ steps.gate.outputs.merge_action }}
