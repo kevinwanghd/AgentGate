@@ -26,6 +26,10 @@ class BodyTests(unittest.TestCase):
         for section in ("## 背景", "## 变更内容", "## 不包含的内容", "## 自测确认", "## 风险与回滚", "## 关联"):
             self.assertIn(section, body)
 
+    def test_unicode_does_not_break_template(self):
+        body = new_pr.build_body("中文背景", "- 中文变更", "", "", "", "-")
+        self.assertIn("中文背景", body)
+
     def test_defaults_fill(self):
         body = new_pr.build_body("", "", "", "", "", "-")
         self.assertIn("见变更内容", body)
