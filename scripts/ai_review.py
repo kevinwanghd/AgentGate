@@ -20,6 +20,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -132,7 +133,8 @@ def main() -> int:
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="OpenAI 兼容 endpoint")
     parser.add_argument("--model", required=True)
     parser.add_argument("--diff-cap", type=int, default=200_000)
-    parser.add_argument("--timeout", type=float, default=240)
+    parser.add_argument("--timeout", type=float, default=240, help="单次请求超时（秒）")
+    parser.add_argument("--attempts", type=int, default=3, help="请求尝试次数（网络抖动/超时会退避重试）")
     parser.add_argument("--output", help="写入该文件（通常是 $GITHUB_OUTPUT）")
     args = parser.parse_args()
 
@@ -163,14 +165,13 @@ def main() -> int:
     prompt = PROMPT.format(points=points.group(1).strip()) + f"\n\nchanges.txt:\n{diff}"
     last_error: Exception | None = None
     last_message = ""
-    for attempt in range(2):
-        suffix = (
-            ""
-            if attempt == 0
-            else "\n\n上一次输出不是合法 JSON。这次只输出 JSON 对象本身，不要解释、不要代码围栏。"
-        )
+    retry_hint = ""
+    for attempt in range(max(1, args.attempts)):
+        # 端点偶发超时（跨境链路）也走重试，退避 10s/30s；只有"输出不合法"才追加提示词。
+        if attempt:
+            time.sleep(10 if attempt == 1 else 30)
         try:
-            message = call_model(args.base_url, args.model, prompt + suffix, key, args.timeout)
+            message = call_model(args.base_url, args.model, prompt + retry_hint, key, args.timeout)
             last_message = message
             findings = extract_findings(message)
             break
@@ -180,6 +181,11 @@ def main() -> int:
             last_error = error
         except (urllib.error.URLError, TimeoutError, ValueError, KeyError, json.JSONDecodeError) as error:
             last_error = error
+            retry_hint = (
+                "\n\n上一次输出不是合法 JSON。这次只输出 JSON 对象本身，不要解释、不要代码围栏。"
+                if isinstance(error, (ValueError, KeyError, json.JSONDecodeError))
+                else ""
+            )
     else:
         snippet = " ".join(last_message.split())[:300]
         return finish(
