@@ -18,6 +18,10 @@ class InternalOnlyTests(unittest.TestCase):
         self.assertTrue(ai_review.is_internal_only(["docs/a.md"], ["**/*.md"]))
         self.assertFalse(ai_review.is_internal_only(["docs/a.md", "src/b.py"], ["**/*.md"]))
 
+    def test_multiple_patterns_allow_any(self):
+        self.assertTrue(ai_review.is_internal_only(["docs/a.md", "README.md"], ["docs/*.md", "README*.md"]))
+        self.assertFalse(ai_review.is_internal_only(["ops/review-points.md"], ["docs/*.md", "README*.md"]))
+
     def test_empty_never_internal(self):
         self.assertFalse(ai_review.is_internal_only([], ["**/*.md"]))
         self.assertFalse(ai_review.is_internal_only(["a.py"], []))

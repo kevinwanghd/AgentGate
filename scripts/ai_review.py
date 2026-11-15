@@ -144,7 +144,9 @@ def main() -> int:
         return finish("skip", args.output, "分支没有改动，无需审查")
     patterns = [item.strip() for item in args.internal.split(",") if item.strip()]
     if is_internal_only(files, patterns):
-        return finish("skip", args.output, "只改了 internal 路径，免审")
+        # 免审即视为满足：gate 的 required_checks 只认 pass。
+        # 记 skip 会逼调用方开 skip_counts_as_pass 旁路，反而放宽了别的检查。
+        return finish("pass", args.output, "只改了 internal 路径，免审通过")
 
     text = open(args.points_file, encoding="utf-8").read()
     points = re.search(r"^## 审查要点\r?\n([\s\S]*?)(?=^## |$(?![\s\S]))", text, re.M)
