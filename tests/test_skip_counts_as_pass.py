@@ -30,6 +30,12 @@ def decide(config_auto: dict, changed: list[str], checks: dict[str, str]) -> dic
 BASE_CHECKS = {"risk-scan": "pass", "secret-scan": "pass", "mr-validate": "pass"}
 
 
+class DefaultConfigTests(unittest.TestCase):
+    def test_selftest_skips_pass_by_default(self):
+        # GitHub thin 模式没有 selftest job，默认放行以免首次接入被 ERROR 卡死
+        self.assertIn("selftest", gate_decision.DEFAULT_CONFIG["auto_merge"]["skip_counts_as_pass"])
+
+
 class SkipCountsAsPassTests(unittest.TestCase):
     def test_skip_fails_when_not_configured(self):
         result = decide(
