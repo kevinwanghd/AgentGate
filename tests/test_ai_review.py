@@ -67,6 +67,8 @@ class CallModelTests(unittest.TestCase):
         self.assertEqual(captured["body"]["model"], "glm-5.3")
         self.assertEqual(captured["body"]["temperature"], 0)
         self.assertEqual(captured["body"]["response_format"], {"type": "json_object"})
+        # 推理型模型的 reasoning 也吃 max_tokens，太小会把正文截断
+        self.assertGreaterEqual(captured["body"]["max_tokens"], 16384)
         self.assertEqual(captured["auth"], "Bearer key")
         self.assertTrue(text)
 
