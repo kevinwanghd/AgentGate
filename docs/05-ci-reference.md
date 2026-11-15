@@ -408,6 +408,8 @@ auto_merge:
 
 **`skip_counts_as_pass`**：`required_checks` 里的检查默认必须字面 `pass`；对「只在适用时才有结论」的检查（典型是 `review`：纯文档改动免审记 `skip`），把它列进这里，`skip` 也算满足，`fail` 仍然阻断。`ci` 不建议列进来——`skip` 可能意味着 CI 根本没有启动。草稿 PR 不判定 gate（只要 `ai-review` 与 CI 等待都跳过），转正式后整轮重跑。
 
+**人工审批（critical）**：gate-decision 会统计 PR 上的有效 approve（`scripts/count_approvals.py`）传给 `--valid-approvals`。有效 = 每个提交人的**最新**一条 review 为 `APPROVED`、提交人不是 bot、且时间不早于当前 head 提交。达到 `critical_approvals` 且其余检查全绿时，`WAITING_APPROVAL` 转 `AUTO_MERGE`。caller 需同时订阅 `pull_request_review: [submitted]`，approve 后才会重新判定。
+
 ---
 
 ## 排查速查表

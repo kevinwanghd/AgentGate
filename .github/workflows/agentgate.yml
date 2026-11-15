@@ -175,7 +175,8 @@ jobs:
 
   ai-review:
     # 草稿尚未送审：不花 AI 审查的钱；转正式后由 synchronize/ready_for_review 重新触发整轮。
-    if: ${{ github.event_name == 'pull_request' && !github.event.pull_request.draft }}
+    # review 提交（approve）后重跑，让 critical 审批能推动 gate 重新判定。
+    if: ${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     outputs:
       review: ${{ steps.review.outputs.review }}
@@ -276,6 +277,19 @@ jobs:
           path: .agentgate
       - name: Verify preinstalled Python dependencies
         run: python3 -c "import yaml; print('pyyaml ok')"
+      - name: Count approvals
+        id: approvals
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          NUMBER="${{ github.event.pull_request.number }}"
+          if [ -z "$NUMBER" ]; then
+            echo "approvals=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          COUNT="$(python3 .agentgate/scripts/count_approvals.py --repo "$GITHUB_REPOSITORY" --pr "$NUMBER")"
+          echo "有效 approve：$COUNT"
+          echo "approvals=$COUNT" >> "$GITHUB_OUTPUT"
       - name: Wait for repository CI
         id: ci
         env:
@@ -392,6 +406,7 @@ jobs:
             --target-sha "$TARGET_SHA" \
             --policy-sha "$POLICY_SHA" \
             --diff-base "origin/$BASE_REF" \
+            --valid-approvals "$APPROVALS" \
             "${POLICY_ARGS[@]}" \
             --output gate-result.json
           DECISION_EXIT=$?
@@ -423,6 +438,7 @@ jobs:
           GO_TEST: ${{ needs.go-test.result == 'success' && 'pass' || needs.go-test.result == 'skipped' && 'skip' || 'fail' }}
           CI_CHECK: ${{ steps.ci.outputs.ci }}
           REVIEW: ${{ github.event.pull_request.draft && 'skip' || needs.ai-review.outputs.review || 'fail' }}
+          APPROVALS: ${{ steps.approvals.outputs.approvals || 0 }}
       - name: Upload gate result
         uses: actions/upload-artifact@v4
         with:
