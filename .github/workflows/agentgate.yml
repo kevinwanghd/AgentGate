@@ -174,7 +174,8 @@ jobs:
             --timeout "${GOVERNANCE_GO_TEST_TIMEOUT:-120}"
 
   ai-review:
-    if: ${{ github.event_name == 'pull_request' }}
+    # 草稿尚未送审：不花 AI 审查的钱；转正式后由 synchronize/ready_for_review 重新触发整轮。
+    if: ${{ github.event_name == 'pull_request' && !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     outputs:
       review: ${{ steps.review.outputs.review }}
@@ -283,8 +284,14 @@ jobs:
           MR_VALIDATE: ${{ needs.mr-validate.result }}
           TEST_CHECK: ${{ needs.test-check.result }}
           GO_TEST: ${{ needs.go-test.result }}
-          REVIEW: ${{ needs.ai-review.outputs.review || 'fail' }}
+          REVIEW: ${{ github.event.pull_request.draft && 'skip' || needs.ai-review.outputs.review || 'fail' }}
         run: |
+          # 草稿还没送审：不占用 CI 等待时间；转正式后整轮重跑。
+          if [ "${{ github.event.pull_request.draft }}" = "true" ]; then
+            echo "ci=skip" >> "$GITHUB_OUTPUT"
+            echo "草稿 PR，跳过 CI 等待"
+            exit 0
+          fi
           # 前置检查已失败时不必再等 CI；跳过会让 evidence 记为 skip，由 required_checks 决定是否阻断。
           ALL_OK=true
           for RESULT in "$RISK_SCAN" "$SECRET_SCAN" "$MR_VALIDATE" "$TEST_CHECK" "$GO_TEST" "$REVIEW"; do
@@ -413,7 +420,7 @@ jobs:
           TEST_CHECK: ${{ needs.test-check.result == 'success' && 'pass' || needs.test-check.result == 'skipped' && 'skip' || 'fail' }}
           GO_TEST: ${{ needs.go-test.result == 'success' && 'pass' || needs.go-test.result == 'skipped' && 'skip' || 'fail' }}
           CI_CHECK: ${{ steps.ci.outputs.ci }}
-          REVIEW: ${{ needs.ai-review.outputs.review || 'fail' }}
+          REVIEW: ${{ github.event.pull_request.draft && 'skip' || needs.ai-review.outputs.review || 'fail' }}
       - name: Upload gate result
         uses: actions/upload-artifact@v4
         with:
