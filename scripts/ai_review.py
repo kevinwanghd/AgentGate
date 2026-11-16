@@ -90,14 +90,15 @@ def extract_findings(text: str) -> list[dict]:
     return findings
 
 
-def call_with_deadline(base_url: str, model: str, prompt: str, key: str, timeout: float) -> str:
+def call_with_deadline(base_url: str, model: str, prompt: str, key: str, timeout: float,
+                       max_tokens: int = 16384) -> str:
     """socket 超时只管"多久没收到字节"，服务端慢慢吐 token 时永远不触发。
     这里加一道墙钟上限：超时就把这次尝试判失败，交给上层重试。"""
     answer: dict = {}
 
     def worker() -> None:
         try:
-            answer["text"] = call_model(base_url, model, prompt, key, timeout)
+            answer["text"] = call_model(base_url, model, prompt, key, timeout, max_tokens)
         except BaseException as error:  # 线程里任何异常都要带回主线程
             answer["error"] = error
 
@@ -111,12 +112,13 @@ def call_with_deadline(base_url: str, model: str, prompt: str, key: str, timeout
     return answer["text"]
 
 
-def call_model(base_url: str, model: str, prompt: str, key: str, timeout: float) -> str:
+def call_model(base_url: str, model: str, prompt: str, key: str, timeout: float,
+               max_tokens: int = 16384) -> str:
     body = json.dumps(
         {
             "model": model,
             "temperature": 0,
-            "max_tokens": 16384,
+            "max_tokens": max_tokens,
             # 端点支持时强制返回 JSON；不支持会退化为普通输出，由调用方再解析/重试。
             "response_format": {"type": "json_object"},
             "messages": [{"role": "user", "content": prompt}],
@@ -163,6 +165,8 @@ def main() -> int:
     parser.add_argument("--diff-cap", type=int, default=200_000)
     parser.add_argument("--timeout", type=float, default=300, help="单次尝试的墙钟上限（秒）")
     parser.add_argument("--fallback-model", default=DEFAULT_FALLBACK_MODEL, help="首次尝试失败后换用的模型（大 diff 上主力模型可能截断）")
+    parser.add_argument("--max-tokens", type=int, default=16384,
+                        help="单次请求输出上限；推理型模型的 reasoning 也计入，模型烧穿预算时会截断（可经 config ai_review.max_tokens 调大）")
     parser.add_argument("--attempts", type=int, default=3, help="请求尝试次数（网络抖动/超时会退避重试）")
     parser.add_argument("--output", help="写入该文件（通常是 $GITHUB_OUTPUT）")
     args = parser.parse_args()
@@ -201,7 +205,8 @@ def main() -> int:
             time.sleep(10 if attempt == 1 else 30)
         try:
             model = args.model if attempt == 0 or not args.fallback_model else args.fallback_model
-            message = call_with_deadline(args.base_url, model, prompt + retry_hint, key, args.timeout)
+            message = call_with_deadline(args.base_url, model, prompt + retry_hint, key,
+                                          args.timeout, args.max_tokens)
             last_message = message
             findings = extract_findings(message)
             break
