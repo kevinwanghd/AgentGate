@@ -76,6 +76,28 @@ class CallModelTests(unittest.TestCase):
         self.assertEqual(captured["auth"], "Bearer key")
         self.assertTrue(text)
 
+    def test_max_tokens_override_is_honoured(self):
+        """--max-tokens / config ai_review.max_tokens 要真正透传进请求体。"""
+        captured = {}
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return json.dumps({"choices": [{"message": {"content": '{"findings": []}'}}]})
+
+        def urlopen(request, timeout=None):
+            captured["body"] = json.loads(request.data)
+            return Response()
+
+        with mock.patch.object(ai_review.urllib.request, "urlopen", urlopen):
+            ai_review.call_model("https://api.example/v1/", "m", "p", "k", 10, 32768)
+        self.assertEqual(captured["body"]["max_tokens"], 32768)
+
     def test_bad_choice_shape_raises(self):
         with mock.patch.object(
             ai_review.urllib.request,
@@ -84,6 +106,108 @@ class CallModelTests(unittest.TestCase):
         ):
             with self.assertRaises(ai_review.urllib.error.URLError):
                 ai_review.call_model("https://x", "m", "p", "k", 1)
+
+
+class GitDecodeTests(unittest.TestCase):
+    def test_git_decodes_as_utf8(self):
+        """Windows 默认 GBK 解码，中文 commit/文件名会直接崩；必须显式 utf-8。"""
+        import types
+
+        with mock.patch.object(
+            ai_review.subprocess, "run",
+            return_value=types.SimpleNamespace(stdout="中文 diff"),
+        ) as run:
+            out = ai_review.git("log", "-1")
+        kwargs = run.call_args.kwargs
+        self.assertEqual(kwargs.get("encoding"), "utf-8")
+        self.assertEqual(kwargs.get("errors"), "replace")
+        self.assertEqual(out, "中文 diff")
+
+
+class RetryTests(unittest.TestCase):
+    """端点偶发超时是真实故障（跨境链路 8 分钟后 timeout），必须退避重试而不是直接 fail-closed。"""
+
+    def _run_main(self, side_effect, extra=()):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            points = Path(tmp) / "points.md"
+            points.write_text("## 审查要点\n- 空指针\n", encoding="utf-8")
+            output = Path(tmp) / "out.txt"
+            argv = [
+                "ai_review.py", "--base", "origin/main", "--head", "HEAD",
+                "--points-file", str(points), "--model", "glm-5.3",
+                "--output", str(output), "--attempts", "3",
+            ] + list(extra)
+            with mock.patch.object(ai_review, "branch_diff", return_value=("diff", ["a.py"])), \
+                 mock.patch.object(ai_review, "call_model", side_effect=side_effect) as model, \
+                 mock.patch.object(ai_review.time, "sleep"), \
+                 mock.patch.object(sys, "argv", argv), \
+                 mock.patch.dict("os.environ", {"AI_REVIEW_API_KEY": "k"}):
+                code = ai_review.main()
+            return code, model.call_count, output.read_text(encoding="utf-8")
+
+    def test_timeout_then_success(self):
+        code, calls, out = self._run_main([TimeoutError("timed out"), '{"findings": []}'])
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, 2)
+        self.assertIn("review=pass", out)
+
+    def test_gives_up_after_attempts(self):
+        code, calls, out = self._run_main([TimeoutError("timed out")] * 3)
+        self.assertEqual(code, 1)
+        self.assertEqual(calls, 3)
+        self.assertIn("review=fail", out)
+
+
+class DeadlineTests(unittest.TestCase):
+    """服务端慢慢吐 token 时 socket 超时不会触发，必须有墙钟上限。"""
+
+    def test_slow_call_is_abandoned(self):
+        def slow(*args, **kwargs):
+            import time as _t
+            _t.sleep(5)
+            return "too late"
+
+        with mock.patch.object(ai_review, "call_model", side_effect=slow):
+            with self.assertRaises(TimeoutError):
+                ai_review.call_with_deadline("u", "m", "p", "k", 0.05)
+
+    def test_worker_error_surfaces(self):
+        def boom(*args, **kwargs):
+            raise ValueError("bad json")
+
+        with mock.patch.object(ai_review, "call_model", side_effect=boom):
+            with self.assertRaises(ValueError):
+                ai_review.call_with_deadline("u", "m", "p", "k", 1)
+
+
+class FallbackModelTests(unittest.TestCase):
+    """主力模型在大 diff 上会截断（finish_reason=length），第二次必须换备用模型。"""
+
+    def test_second_attempt_uses_fallback_model(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            points = Path(tmp) / "points.md"
+            points.write_text("## 审查要点\n- 空指针\n", encoding="utf-8")
+            argv = [
+                "ai_review.py", "--base", "origin/main", "--head", "HEAD",
+                "--points-file", str(points), "--model", "glm-5.3",
+                "--fallback-model", "deepseek-v4-pro", "--attempts", "2",
+            ]
+            seen = []
+
+            def fake_call(base_url, model, prompt, key, timeout, max_tokens=16384):
+                seen.append(model)
+                if len(seen) == 1:
+                    raise ValueError("输出被截断（finish_reason=length）")
+                return '{"findings": []}'
+
+            with mock.patch.object(ai_review, "branch_diff", return_value=("diff", ["a.py"])),                  mock.patch.object(ai_review, "call_model", side_effect=fake_call),                  mock.patch.object(ai_review.time, "sleep"),                  mock.patch.object(sys, "argv", argv),                  mock.patch.dict("os.environ", {"AI_REVIEW_API_KEY": "k"}):
+                code = ai_review.main()
+        self.assertEqual(code, 0)
+        self.assertEqual(seen, ["glm-5.3", "deepseek-v4-pro"])
 
 
 if __name__ == "__main__":

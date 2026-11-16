@@ -209,7 +209,7 @@ jobs:
           TARGET_SHA="$(git rev-parse FETCH_HEAD)"
           SOURCE_SHA="${{ github.event.pull_request.head.sha }}"
           # 与 gate 策略一致：审查配置和要点都来自目标分支，PR 改不了自己的门禁。
-          MODEL=""; POINTS=""; INTERNAL=""; BASE_URL=""
+          MODEL=""; FALLBACK=""; POINTS=""; INTERNAL=""; BASE_URL=""; MAX_TOKENS=""
           if git cat-file -e "${TARGET_SHA}:${CONFIG_PATH}" 2>/dev/null; then
             git show "${TARGET_SHA}:${CONFIG_PATH}" > "$RUNNER_TEMP/review-policy.yml"
             eval "$(python3 - "$RUNNER_TEMP/review-policy.yml" <<'PY'
@@ -221,9 +221,11 @@ jobs:
           review = (config.get("auto_merge") or {}).get("ai_review") or {}
           values = {
               "MODEL": review.get("model") or "",
+              "FALLBACK": review.get("fallback_model") or "",
               "POINTS": review.get("points") or "",
               "INTERNAL": ",".join(review.get("internal") or []),
               "BASE_URL": review.get("base_url") or "",
+              "MAX_TOKENS": review.get("max_tokens") or "",
           }
           print(" ".join(f"{key}={shlex.quote(str(value))}" for key, value in values.items()))
           PY
@@ -247,6 +249,8 @@ jobs:
                 --model "$MODEL" --output "$GITHUB_OUTPUT")
           [ -n "$INTERNAL" ] && ARGS+=(--internal "$INTERNAL")
           [ -n "$BASE_URL" ] && ARGS+=(--base-url "$BASE_URL")
+          [ -n "$FALLBACK" ] && ARGS+=(--fallback-model "$FALLBACK")
+          [ -n "$MAX_TOKENS" ] && ARGS+=(--max-tokens "$MAX_TOKENS")
           python3 .agentgate/scripts/ai_review.py "${ARGS[@]}"
           exit $?
 

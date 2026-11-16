@@ -729,16 +729,21 @@ jobs:
       contents: write
       pull-requests: write
     steps:
+      # 判定与合并分两步，但真正的闸门是下一步的 step 级 if：
+      # step 内 exit 0 只结束本 step，挡不住后面的 step。#101 在复用工作流里
+      # 修过这一条，自身工作流只留了日志判断——#134 实证：gate 判 FAIL 后
+      # 12 秒仍被 gh pr merge 合并。
       - name: gate on GateResult
         env:
           MERGE_ACTION: ${{ needs.gate-decision.outputs.merge_action }}
           GATE_STATUS: ${{ needs.gate-decision.result }}
         run: |
           if [ "$GATE_STATUS" != "success" ] || [ "$MERGE_ACTION" != "AUTO_MERGE" ]; then
-            echo "GateResult=$MERGE_ACTION (job=$GATE_STATUS), 不满足自动合并条件, 跳过。"
+            echo "GateResult=$MERGE_ACTION (job=$GATE_STATUS), 不满足自动合并条件。"
             exit 0
           fi
       - name: enable squash auto-merge
+        if: ${{ needs.gate-decision.result == 'success' && needs.gate-decision.outputs.merge_action == 'AUTO_MERGE' }}
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
