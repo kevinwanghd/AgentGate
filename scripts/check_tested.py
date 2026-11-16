@@ -374,7 +374,8 @@ def _validate_untested(m: re.Match, tc: dict) -> tuple[bool, str]:
         if age > max_age:
             return (False, f"untested 注解已过期 ({age}天>{max_age}天)")
         if age < 0:
-            return (False, "untested reviewed 在未来")
+            # 本地时区比 UTC 早时容易写成"明天"，把可用的今天日期直接告诉作者。
+            return (False, f"untested reviewed 在未来（CI 按 UTC 判定，今天是 {dt.datetime.now(dt.timezone.utc).date()}）")
     except ValueError:
         return (False, f'untested reviewed 格式非法 "{reviewed}"')
     return (True, "合法 risk:untested 豁免")
