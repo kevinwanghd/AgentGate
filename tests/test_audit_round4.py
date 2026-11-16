@@ -268,6 +268,14 @@ class WorkflowIfOutputsTests(unittest.TestCase):
                 any("MERGE_ACTION" in t for t in run_texts),
                 f"{rel} auto-merge 必须在 step 内判定 GateResult",
             )
+            # 只写日志的 step 挡不住后续 step（#134 实证：gate 判 FAIL 后被合并）。
+            # 真正闸门必须是"合并那一步"的 step 级 if，且判的是 GateResult。
+            merge_step = steps[-1]
+            self.assertIn("run", merge_step)
+            self.assertIn("gh pr merge", str(merge_step["run"]))
+            gate_if = str(merge_step.get("if") or "")
+            self.assertIn("merge-action", gate_if.replace("merge_action", "merge-action"),
+                          f"{rel} 开启自动合并的 step 必须带 GateResult 的 if 闸门")
 
 
 class MetricsNonMappingRootTests(unittest.TestCase):
