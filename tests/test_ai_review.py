@@ -76,6 +76,28 @@ class CallModelTests(unittest.TestCase):
         self.assertEqual(captured["auth"], "Bearer key")
         self.assertTrue(text)
 
+    def test_max_tokens_override_is_honoured(self):
+        """--max-tokens / config ai_review.max_tokens 要真正透传进请求体。"""
+        captured = {}
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return json.dumps({"choices": [{"message": {"content": '{"findings": []}'}}]})
+
+        def urlopen(request, timeout=None):
+            captured["body"] = json.loads(request.data)
+            return Response()
+
+        with mock.patch.object(ai_review.urllib.request, "urlopen", urlopen):
+            ai_review.call_model("https://api.example/v1/", "m", "p", "k", 10, 32768)
+        self.assertEqual(captured["body"]["max_tokens"], 32768)
+
     def test_bad_choice_shape_raises(self):
         with mock.patch.object(
             ai_review.urllib.request,
@@ -84,6 +106,22 @@ class CallModelTests(unittest.TestCase):
         ):
             with self.assertRaises(ai_review.urllib.error.URLError):
                 ai_review.call_model("https://x", "m", "p", "k", 1)
+
+
+class GitDecodeTests(unittest.TestCase):
+    def test_git_decodes_as_utf8(self):
+        """Windows 默认 GBK 解码，中文 commit/文件名会直接崩；必须显式 utf-8。"""
+        import types
+
+        with mock.patch.object(
+            ai_review.subprocess, "run",
+            return_value=types.SimpleNamespace(stdout="中文 diff"),
+        ) as run:
+            out = ai_review.git("log", "-1")
+        kwargs = run.call_args.kwargs
+        self.assertEqual(kwargs.get("encoding"), "utf-8")
+        self.assertEqual(kwargs.get("errors"), "replace")
+        self.assertEqual(out, "中文 diff")
 
 
 class RetryTests(unittest.TestCase):
