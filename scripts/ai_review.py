@@ -145,6 +145,16 @@ def call_model(base_url: str, model: str, prompt: str, key: str, timeout: float,
     return message
 
 
+def use_utf8_stdio() -> None:
+    """Windows 控制台默认 GBK：打印含特殊字符的 findings 会 UnicodeEncodeError 崩掉。
+    CI 是 Linux 不受影响，但本地复现时必须在打印前修好编码。"""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def finish(result: str, output: str | None, message: str) -> int:
     print(message, flush=True)
     print(f"review={result}", flush=True)
@@ -155,6 +165,7 @@ def finish(result: str, output: str | None, message: str) -> int:
 
 
 def main() -> int:
+    use_utf8_stdio()
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", required=True, help="基线（如 origin/main）")
     parser.add_argument("--head", required=True, help="PR head 提交")

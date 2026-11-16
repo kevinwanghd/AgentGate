@@ -210,5 +210,31 @@ class FallbackModelTests(unittest.TestCase):
         self.assertEqual(seen, ["glm-5.3", "deepseek-v4-pro"])
 
 
+class Utf8StdioTests(unittest.TestCase):
+    """Windows 控制台默认 GBK，打印含特殊字符的 findings 会崩：main() 必须先把输出切成 UTF-8。"""
+
+    def test_reconfigures_both_streams(self):
+        calls = []
+
+        class Fake:
+            def reconfigure(self, **kwargs):
+                calls.append(kwargs)
+
+        with mock.patch.object(ai_review.sys, "stdout", Fake()),              mock.patch.object(ai_review.sys, "stderr", Fake()):
+            ai_review.use_utf8_stdio()
+        self.assertEqual(len(calls), 2)
+        for kwargs in calls:
+            self.assertEqual(kwargs["encoding"], "utf-8")
+            self.assertEqual(kwargs["errors"], "replace")
+
+    def test_stream_without_reconfigure_is_tolerated(self):
+        # 被重定向到不支持 reconfigure 的流时不应抛异常
+        class Bare:
+            pass
+
+        with mock.patch.object(ai_review.sys, "stdout", Bare()),              mock.patch.object(ai_review.sys, "stderr", Bare()):
+            ai_review.use_utf8_stdio()
+
+
 if __name__ == "__main__":
     unittest.main()
